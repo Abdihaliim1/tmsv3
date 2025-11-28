@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Management - ATS FREIGHT LLC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .bg-navy {
+            background-color: #1f2937;
+        }
+
+        .text-navy {
+            color: #1f2937;
+        }
+
+        .gradient-bg {
+            background-color: #1f2937;
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .metric-card {
+            transition: transform 0.2s ease-in-out;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .status-available {
+            background-color: #10b981;
+        }
+
+        .status-dispatched {
+            background-color: #f59e0b;
+        }
+
+        .status-in-transit {
+            background-color: #3b82f6;
+        }
+
+        .status-delivered {
+            background-color: #6b7280;
+        }
+
+        .status-cancelled {
+            background-color: #ef4444;
+        }
+
+        .status-maintenance {
+            background-color: #dc2626;
+        }
+
+        .status-repair {
+            background-color: #f59e0b;
+        }
+
+        .nav-item {
+            transition: all 0.2s ease;
+        }
+
+        .nav-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-item.active {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar {
+            width: 250px;
+            background-color: #1f2937;
+        }
+
+        .sidebar-item {
+            transition: all 0.2s ease;
+        }
+
+        .sidebar-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar-item.active {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-left: 4px solid #ffffff;
+        }
+
+        .main-content {
+            margin-left: 250px;
+        }
+
+        .company-logo {
+            width: 60px;
+            height: 60px;
+            background: #ffffff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #1f2937;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50">
+    <!-- Sidebar Navigation -->
+    <div class="sidebar fixed left-0 top-0 h-full text-white z-50">
+        <div class="p-6">
+            <div class="flex items-center space-x-3 mb-8">
+                <div class="company-logo" id="companyLogo">ST</div>
+                <div>
+                    <h2 class="text-xl font-bold" id="companyName">ATS FREIGHT LLC</h2>
+                    <p class="text-sm opacity-75">TMS</p>
+                </div>
+            </div>
+
+            <nav class="space-y-2">
+                <a href="index.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-tachometer-alt mr-3 w-5"></i>
+                    Dashboard
+                </a>
+                <a href="loads.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-truck mr-3 w-5"></i>
+                    Loads
+                </a>
+                <a href="drivers.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-users mr-3 w-5"></i>
+                    Drivers
+                </a>
+                <a href="fleet.html"
+                    class="sidebar-item active flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-truck-monster mr-3 w-5"></i>
+                    Fleet
+                </a>
+                <a href="customers.html"
+                    class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-building mr-3 w-5"></i>
+                    Customers
+                </a>
+                <a href="expenses.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-receipt mr-3 w-5"></i>
+                    Expenses
+                </a>
+                <a href="invoices.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-file-invoice mr-3 w-5"></i>
+                    Invoices
+                </a>
+                <a href="settlements.html"
+                    class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-calculator mr-3 w-5"></i>
+                    Settlements
+                </a>
+                <a href="reports.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-chart-bar mr-3 w-5"></i>
+                    Reports
+                </a>
+                <a href="import.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium">
+                    <i class="fas fa-upload mr-3 w-5"></i>
+                    Import
+                </a>
+            </nav>
+        </div>
+
+        <div class="absolute bottom-6 left-6 right-6">
+            <button onclick="CompanySettings.openModal()"
+                class="w-full flex items-center px-4 py-3 rounded-lg text-sm font-medium bg-white bg-opacity-10 hover:bg-opacity-20 transition-all">
+                <i class="fas fa-cog mr-3 w-5"></i>
+                Company Settings
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Header -->
+        <div class="bg-white shadow-sm border-b">
+            <div class="px-6 py-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Fleet Management</h1>
+                        <p class="text-gray-600">Manage your trucks and maintenance schedules</p>
+                    </div>
+                    <button onclick="FleetManager.openAddTruckModal()"
+                        class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                        <i class="fas fa-plus mr-2"></i>
+                        Add Truck
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Fleet Overview Cards -->
+        <div class="p-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                <div class="bg-white rounded-lg p-6 card-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Total Trucks</p>
+                            <p class="text-2xl font-bold text-gray-900" id="totalTrucks">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-truck text-blue-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg p-6 card-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Available</p>
+                            <p class="text-2xl font-bold text-green-600" id="availableTrucks">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-check text-green-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg p-6 card-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">In Transit</p>
+                            <p class="text-2xl font-bold text-blue-600" id="inTransitTrucks">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-truck text-blue-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg p-6 card-shadow">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Maintenance</p>
+                            <p class="text-2xl font-bold text-red-600" id="maintenanceTrucks">0</p>
+                        </div>
+                        <div class="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-wrench text-red-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Truck Profitability Section -->
+            <div class="bg-white rounded-lg card-shadow mb-6">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-lg font-semibold text-gray-900">Truck Profitability</h2>
+                        <div class="flex space-x-3 items-center">
+                            <label for="profitDateFrom" class="sr-only">Profit Date From</label>
+                            <input type="date" id="profitDateFrom" aria-label="Profit Date From"
+                                class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <span class="self-center text-gray-500">to</span>
+                            <label for="profitDateTo" class="sr-only">Profit Date To</label>
+                            <input type="date" id="profitDateTo" aria-label="Profit Date To"
+                                class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button onclick="FleetManager.calculateTruckProfitability()"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
+                                Calculate Profit
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <div id="truckProfitabilityTable" class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Truck
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Revenue
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expenses
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Profit
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Miles
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                        Profit/Mile</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ROI %
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="truckProfitabilityBody" class="bg-white divide-y divide-gray-200">
+                                <tr>
+                                    <td colspan="7" class="px-4 py-8 text-center text-gray-500">
+                                        Select date range and click "Calculate Profit" to see truck profitability
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fleet Table -->
+            <div class="bg-white rounded-lg card-shadow">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-lg font-semibold text-gray-900">Fleet Inventory</h2>
+                        <div class="flex space-x-3">
+                            <input type="text" id="truckSearch" placeholder="Search trucks..."
+                                class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <select id="statusFilter" aria-label="Filter by Truck Status"
+                                class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">All Status</option>
+                                <option value="available">Available</option>
+                                <option value="in_transit">In Transit</option>
+                                <option value="maintenance">Maintenance</option>
+                                <option value="repair">Repair</option>
+                                <option value="out_of_service">Out of Service</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Truck</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Ownership</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Status</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Driver</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Mileage</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Last Service</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleetTableBody" class="bg-white divide-y divide-gray-200">
+                            <!-- Fleet data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Truck Modal -->
+    <div id="truckModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg p-6 w-full max-w-2xl mx-4 max-h-screen overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="truckModalTitle" class="text-xl font-semibold">Add New Vehicle</h3>
+                <button onclick="FleetManager.closeTruckModal()" class="text-gray-500 hover:text-gray-700"
+                    aria-label="Close Modal">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+
+            <form id="truckForm" class="space-y-4">
+                <input type="hidden" id="truckId">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="truckNumber" class="block text-sm font-medium text-gray-700 mb-1">Truck
+                            Number</label>
+                        <input type="text" id="truckNumber" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="licensePlate" class="block text-sm font-medium text-gray-700 mb-1">License
+                            Plate</label>
+                        <input type="text" id="licensePlate" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="truckMake" class="block text-sm font-medium text-gray-700 mb-1">Make</label>
+                        <select id="truckMake" required aria-label="Select Truck Make"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Select Make</option>
+                            <option value="Freightliner">Freightliner</option>
+                            <option value="Peterbilt">Peterbilt</option>
+                            <option value="Kenworth">Kenworth</option>
+                            <option value="Volvo">Volvo</option>
+                            <option value="Mack">Mack</option>
+                            <option value="International">International</option>
+                            <option value="Western Star">Western Star</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="truckModel" class="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                        <input type="text" id="truckModel" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="truckYear" class="block text-sm font-medium text-gray-700 mb-1">Year</label>
+                        <input type="number" id="truckYear" min="1990" max="2030" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="truckVin" class="block text-sm font-medium text-gray-700 mb-1">VIN</label>
+                        <input type="text" id="truckVin" maxlength="17" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="truckStatus" class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                        <select id="truckStatus" required aria-label="Select Truck Status"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="available">Available</option>
+                            <option value="in_transit">In Transit</option>
+                            <option value="maintenance">Maintenance</option>
+                            <option value="repair">Repair</option>
+                            <option value="out_of_service">Out of Service</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="truckOwnership" class="block text-sm font-medium text-gray-700 mb-1">Ownership Type
+                            <span class="text-red-500">*</span></label>
+                        <select id="truckOwnership" required onchange="toggleOwnershipFields()"
+                            aria-label="Select Ownership Type"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Select Ownership</option>
+                            <option value="owned">Owned (Fully Paid)</option>
+                            <option value="leased">Leased</option>
+                            <option value="financed">Financed (Loan)</option>
+                            <option value="owner_operator">Owner Operator</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">
+                            <strong>Owned:</strong> Fully paid, company owns title<br>
+                            <strong>Leased:</strong> Monthly lease payment, return at end<br>
+                            <strong>Financed:</strong> Monthly loan payment, company owns eventually<br>
+                            <strong>Owner Operator:</strong> O/O truck, not included in company P&L
+                        </p>
+                    </div>
+                    <div>
+                        <label for="currentMileage" class="block text-sm font-medium text-gray-700 mb-1">Current
+                            Mileage</label>
+                        <input type="number" id="currentMileage" min="0"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="assignedDriver" class="block text-sm font-medium text-gray-700 mb-1">Assigned
+                            Driver</label>
+                        <select id="assignedDriver" aria-label="Select Assigned Driver"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Unassigned</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="lastServiceDate" class="block text-sm font-medium text-gray-700 mb-1">Last Service
+                            Date</label>
+                        <input type="date" id="lastServiceDate"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                </div>
+
+                <!-- Insurance Configuration -->
+                <div class="border-t pt-4 mt-4">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4">Insurance Configuration</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="insurancePaidBy" class="block text-sm font-medium text-gray-700 mb-1">Insurance
+                                Paid By <span class="text-red-500">*</span></label>
+                            <select id="insurancePaidBy" required onchange="toggleInsuranceFields()"
+                                aria-label="Select who pays for insurance"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select</option>
+                                <option value="company">Company</option>
+                                <option value="owner_operator">Owner Operator</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                <strong>Company:</strong> Monthly recurring expense, allocated to truck<br>
+                                <strong>Owner Operator:</strong> O/O provides proof, track expiration
+                            </p>
+                        </div>
+                        <!-- Company Insurance Fields -->
+                        <div id="companyInsuranceFields" class="hidden">
+                            <label for="monthlyInsuranceCost"
+                                class="block text-sm font-medium text-gray-700 mb-1">Monthly Insurance Cost</label>
+                            <input type="number" id="monthlyInsuranceCost" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="500.00">
+                            <p class="text-xs text-gray-500 mt-1">Monthly insurance premium (e.g., $500/month)</p>
+                        </div>
+                        <!-- Owner Operator Insurance Fields -->
+                        <div id="ownerOperatorInsuranceFields" class="hidden">
+                            <label for="insuranceExpirationDate"
+                                class="block text-sm font-medium text-gray-700 mb-1">Insurance Expiration Date</label>
+                            <input type="date" id="insuranceExpirationDate"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 mt-1">O/O insurance certificate expiration</p>
+                        </div>
+                    </div>
+                    <!-- Insurance Certificate Upload (O/O only) -->
+                    <div id="insuranceCertificateSection" class="hidden mt-4">
+                        <label for="insuranceCertificate" class="block text-sm font-medium text-gray-700 mb-1">Insurance
+                            Certificate</label>
+                        <input type="file" id="insuranceCertificate" accept=".pdf,.jpg,.jpeg,.png"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <p class="text-xs text-gray-500 mt-1">Upload O/O insurance certificate (PDF, JPG, PNG)</p>
+                        <div id="insuranceCertificateDisplay" class="mt-2 hidden">
+                            <a id="insuranceCertificateLink" href="#" target="_blank"
+                                class="text-blue-600 hover:underline text-sm"
+                                aria-label="View Current Insurance Certificate">
+                                <i class="fas fa-file-pdf mr-1"></i>View Current Certificate
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Financial Information (for owned/leased/financed trucks) -->
+                <div id="financialInfoSection" class="border-t pt-4 mt-4">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4">Financial Information</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Monthly Payment (for leased/financed) -->
+                        <div id="monthlyPaymentField" class="hidden">
+                            <label for="monthlyPayment" class="block text-sm font-medium text-gray-700 mb-1">Monthly
+                                Payment <span class="text-red-500">*</span></label>
+                            <input type="number" id="monthlyPayment" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="0.00">
+                            <p class="text-xs text-gray-500 mt-1">Monthly lease or loan payment</p>
+                        </div>
+                        <!-- Purchase Price (for owned/financed) -->
+                        <div id="purchasePriceField" class="hidden">
+                            <label for="purchasePrice" class="block text-sm font-medium text-gray-700 mb-1">Purchase
+                                Price</label>
+                            <input type="number" id="purchasePrice" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="0.00">
+                            <p class="text-xs text-gray-500 mt-1">Original purchase price (for ROI/depreciation)</p>
+                        </div>
+                        <!-- Lease End Date (for leased) -->
+                        <div id="leaseEndDateField" class="hidden">
+                            <label for="leaseEndDate" class="block text-sm font-medium text-gray-700 mb-1">Lease End
+                                Date</label>
+                            <input type="date" id="leaseEndDate"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 mt-1">When lease expires (return or buy out)</p>
+                        </div>
+                        <!-- Payoff Amount (for financed) -->
+                        <div id="payoffAmountField" class="hidden">
+                            <label for="payoffAmount" class="block text-sm font-medium text-gray-700 mb-1">Remaining
+                                Payoff Amount</label>
+                            <input type="number" id="payoffAmount" step="0.01" min="0"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="0.00">
+                            <p class="text-xs text-gray-500 mt-1">Current remaining loan balance</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Owner Operator Link (for O/O trucks) -->
+                <div id="ownerOperatorSection" class="border-t pt-4 mt-4 hidden">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4">Owner Operator Information</h4>
+                    <div>
+                        <label for="ownerOperatorDriver" class="block text-sm font-medium text-gray-700 mb-1">Owner
+                            Operator Driver</label>
+                        <select id="ownerOperatorDriver" aria-label="Select Owner Operator Driver"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Select O/O Driver</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Link this truck to an Owner Operator driver</p>
+                    </div>
+                </div>
+
+                <!-- Compliance & Expiration Dates -->
+                <div class="border-t pt-4 mt-4">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4">Compliance & Expiration Dates</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label for="registrationExpiry"
+                                class="block text-sm font-medium text-gray-700 mb-1">Registration Expiry</label>
+                            <input type="date" id="registrationExpiry" required
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 mt-1">Vehicle registration expiration</p>
+                        </div>
+                        <div>
+                            <label for="inspectionDueDate" class="block text-sm font-medium text-gray-700 mb-1">Annual
+                                Inspection Due</label>
+                            <input type="date" id="inspectionDueDate" required
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 mt-1">Next annual inspection date</p>
+                        </div>
+                        <div>
+                            <label for="cabCardRenewalDate" class="block text-sm font-medium text-gray-700 mb-1">Cab
+                                Card (IRP) Renewal</label>
+                            <input type="date" id="cabCardRenewalDate"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <p class="text-xs text-gray-500 mt-1">IRP cab card renewal date</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="truckNotes" class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                    <textarea id="truckNotes" rows="3"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                </div>
+
+                <div class="flex justify-end space-x-3 pt-4">
+                    <button type="button" onclick="FleetManager.closeTruckModal()"
+                        class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">
+                        Cancel
+                    </button>
+                    <button type="submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">
+                        Save Truck
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
+    <script src="data-stability.js"></script>
+    <script src="main.js"></script>
+    <script src="populate-mock-data.js"></script>
+    <script>
+        // Fleet Management Module
+        const FleetManager = {
+            // Initialize fleet management
+            init: async () => {
+                // Auth.init() and DataManager.init() are called in main.js but we ensure they are ready
+                if (!DataManager.initialized) {
+                    await DataManager.init();
+                }
+
+                // Expose render function globally for main.js to call on updates
+                window.renderFleet = () => {
+                    FleetManager.renderFleetTable();
+                    FleetManager.updateOverviewCards();
+                };
+
+                FleetManager.renderFleetTable();
+                FleetManager.updateOverviewCards();
+                FleetManager.loadDrivers();
+                loadOwnerOperatorDrivers(); // Load O/O drivers for truck assignment
+                FleetManager.setupEventListeners();
+
+                // Set default date range (current month)
+                const today = new Date();
+                const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+                const profitDateFrom = document.getElementById('profitDateFrom');
+                const profitDateTo = document.getElementById('profitDateTo');
+                if (profitDateFrom) profitDateFrom.value = firstDay.toISOString().split('T')[0];
+                if (profitDateTo) profitDateTo.value = today.toISOString().split('T')[0];
+            },
+
+            // Load drivers for dropdown
+            loadDrivers: () => {
+                const drivers = DataManager.drivers || [];
+                const driverSelect = document.getElementById('assignedDriver');
+
+                // Keep the first "Unassigned" option
+                driverSelect.innerHTML = '<option value="">Unassigned</option>';
+
+                drivers.forEach(driver => {
+                    if (driver.status === 'active') {
+                        const option = document.createElement('option');
+                        option.value = driver.id;
+                        option.textContent = `${driver.firstName} ${driver.lastName}`;
+                        driverSelect.appendChild(option);
+                    }
+                });
+            },
+
+            // Render fleet table
+            renderFleetTable: () => {
+                const tbody = document.getElementById('fleetTableBody');
+                tbody.innerHTML = '';
+
+                const trucks = DataManager.trucks || [];
+
+                if (trucks.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-4 text-center text-gray-500">No trucks found. Add a new truck to get started.</td></tr>';
+                    return;
+                }
+
+                trucks.forEach(truck => {
+                    // Find driver who has this truck as their currentTruckId
+                    const driver = DataManager.drivers.find(d => d.currentTruckId === truck.id);
+                    const driverName = driver ? `${driver.firstName} ${driver.lastName}` : 'Unassigned';
+
+                    const ownershipLabel = {
+                        'owned': 'Company Owned',
+                        'leased': 'Company Leased',
+                        'financed': 'Financed (Loan)',
+                        'owner_operator': 'Owner Operator'
+                    }[truck.ownership] || 'Unknown';
+
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">${truck.number}</div>
+                            <div class="text-sm text-gray-500">${truck.make} ${truck.model}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="text-sm text-gray-900">${ownershipLabel}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full ${FleetManager.getStatusColor(truck.status)}">
+                                ${truck.status.replace('_', ' ').toUpperCase()}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            ${driverName}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            ${(truck.currentMileage || 0).toLocaleString()} mi
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            ${truck.lastServiceDate ? new Date(truck.lastServiceDate).toLocaleDateString() : '-'}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button onclick="FleetManager.editTruck('${truck.id}')" 
+                                    class="text-blue-600 hover:text-blue-900 mr-3">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="FleetManager.deleteTruck('${truck.id}')" 
+                                    class="text-red-600 hover:text-red-900">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            },
+
+            // Get status color class
+            getStatusColor: (status) => {
+                const colors = {
+                    'available': 'bg-green-100 text-green-800',
+                    'in_transit': 'bg-blue-100 text-blue-800',
+                    'maintenance': 'bg-red-100 text-red-800',
+                    'repair': 'bg-yellow-100 text-yellow-800',
+                    'out_of_service': 'bg-gray-100 text-gray-800'
+                };
+                return colors[status] || 'bg-gray-100 text-gray-800';
+            },
+
+            // Update overview cards
+            updateOverviewCards: () => {
+                const trucks = DataManager.trucks || [];
+                const total = trucks.length;
+                const available = trucks.filter(t => t.status === 'available').length;
+                const inTransit = trucks.filter(t => t.status === 'in_transit').length;
+                const maintenance = trucks.filter(t => t.status === 'maintenance' || t.status === 'repair').length;
+
+                document.getElementById('totalTrucks').textContent = total;
+                document.getElementById('availableTrucks').textContent = available;
+                document.getElementById('inTransitTrucks').textContent = inTransit;
+                document.getElementById('maintenanceTrucks').textContent = maintenance;
+            },
+
+            // Open add truck modal
+            openAddTruckModal: () => {
+                document.getElementById('truckModalTitle').textContent = 'Add New Truck';
+                document.getElementById('truckForm').reset();
+                document.getElementById('truckId').value = ''; // Clear hidden ID
+
+                // Reset ownership fields visibility
+                document.getElementById('financialInfoSection').classList.add('hidden');
+                document.getElementById('ownerOperatorSection').classList.add('hidden');
+                document.getElementById('monthlyPaymentField').classList.add('hidden');
+                document.getElementById('purchasePriceField').classList.add('hidden');
+                document.getElementById('leaseEndDateField').classList.add('hidden');
+                document.getElementById('payoffAmountField').classList.add('hidden');
+
+                // Reload drivers to ensure list is fresh
+                FleetManager.loadDrivers();
+                loadOwnerOperatorDrivers(); // Load O/O drivers
+
+                document.getElementById('truckModal').classList.remove('hidden');
+            },
+
+            // Close truck modal
+            closeTruckModal: () => {
+                document.getElementById('truckModal').classList.add('hidden');
+                document.getElementById('truckForm').reset();
+            },
+
+            // Edit truck
+            editTruck: (truckId) => {
+                const truck = DataManager.getTruck(truckId);
+                if (!truck) return;
+
+                document.getElementById('truckModalTitle').textContent = `Edit Truck ${truck.number}`;
+                document.getElementById('truckId').value = truckId; // Set hidden ID
+
+                // Reload drivers
+                FleetManager.loadDrivers();
+
+                // Populate form
+                document.getElementById('truckNumber').value = truck.number;
+                document.getElementById('licensePlate').value = truck.licensePlate;
+                document.getElementById('truckMake').value = truck.make;
+                document.getElementById('truckModel').value = truck.model;
+                document.getElementById('truckYear').value = truck.year;
+                document.getElementById('truckVin').value = truck.vin;
+                document.getElementById('truckStatus').value = truck.status;
+                document.getElementById('truckOwnership').value = truck.ownership || '';
+                toggleOwnershipFields(); // Show/hide fields based on ownership
+                document.getElementById('currentMileage').value = truck.currentMileage;
+                document.getElementById('assignedDriver').value = truck.assignedDriver || '';
+                document.getElementById('lastServiceDate').value = truck.lastServiceDate || '';
+                document.getElementById('registrationExpiry').value = truck.registrationExpiry || '';
+                document.getElementById('inspectionDueDate').value = truck.inspectionDueDate || '';
+                document.getElementById('cabCardRenewalDate').value = truck.cabCardRenewalDate || '';
+                // Financial fields (populate if applicable)
+                if (truck.monthlyPayment) document.getElementById('monthlyPayment').value = truck.monthlyPayment;
+                if (truck.purchasePrice) document.getElementById('purchasePrice').value = truck.purchasePrice;
+                if (truck.leaseEndDate) document.getElementById('leaseEndDate').value = truck.leaseEndDate;
+                if (truck.payoffAmount) document.getElementById('payoffAmount').value = truck.payoffAmount;
+                if (truck.ownerOperatorDriverId) document.getElementById('ownerOperatorDriver').value = truck.ownerOperatorDriverId;
+                document.getElementById('truckNotes').value = truck.notes || '';
+
+                // Populate insurance fields
+                document.getElementById('insurancePaidBy').value = truck.insurancePaidBy || '';
+                toggleInsuranceFields();
+                if (truck.insurancePaidBy === 'company') {
+                    document.getElementById('monthlyInsuranceCost').value = truck.monthlyInsuranceCost || '';
+                } else if (truck.insurancePaidBy === 'owner_operator') {
+                    document.getElementById('insuranceExpirationDate').value = truck.insuranceExpirationDate || '';
+                    if (truck.insuranceCertificateUrl) {
+                        document.getElementById('insuranceCertificateDisplay').classList.remove('hidden');
+                        document.getElementById('insuranceCertificateLink').href = truck.insuranceCertificateUrl;
+                    }
+                }
+
+                document.getElementById('truckModal').classList.remove('hidden');
+            },
+
+            // Delete truck
+            deleteTruck: async (truckId) => {
+                await DataManager.deleteTruck(truckId);
+                // Render handled by listener
+            },
+
+            // Calculate truck profitability
+            calculateTruckProfitability: () => {
+                const dateFrom = document.getElementById('profitDateFrom').value;
+                const dateTo = document.getElementById('profitDateTo').value;
+
+                if (!dateFrom || !dateTo) {
+                    Utils.showNotification('Please select both start and end dates', 'warning');
+                    return;
+                }
+
+                const startDate = new Date(dateFrom);
+                const endDate = new Date(dateTo);
+                endDate.setHours(23, 59, 59, 999);
+
+                // Filter only company-owned, leased, or financed trucks (skip O/O trucks)
+                const companyTrucks = DataManager.trucks.filter(t =>
+                    t.ownership === 'owned' || t.ownership === 'leased' || t.ownership === 'financed'
+                );
+
+                if (companyTrucks.length === 0) {
+                    Utils.showNotification('No company-owned or leased trucks found', 'info');
+                    return;
+                }
+
+                const tbody = document.getElementById('truckProfitabilityBody');
+                tbody.innerHTML = '';
+
+                companyTrucks.forEach(truck => {
+                    // Get all loads for this truck in date range
+                    const truckLoads = DataManager.loads.filter(load => {
+                        if (String(load.truckId) !== String(truck.id)) return false;
+
+                        const loadDate = new Date(load.delivery?.date || load.deliveredAt || load.createdAt);
+                        return loadDate >= startDate && loadDate <= endDate;
+                    });
+
+                    // Calculate Revenue: Sum of full load amounts (100%)
+                    const revenue = truckLoads.reduce((sum, load) => {
+                        return sum + (parseFloat(load.rate?.total) || 0);
+                    }, 0);
+
+                    // Calculate Expenses
+                    let expenses = 0;
+                    let driverPay = 0;
+                    let fuelExpenses = 0;
+                    let insuranceExpenses = 0;
+                    let maintenanceExpenses = 0;
+                    let leasePayment = 0;
+
+                    // 1. Driver Pay (if company driver assigned)
+                    truckLoads.forEach(load => {
+                        if (load.driverId) {
+                            const driver = DataManager.drivers.find(d => d.id === load.driverId);
+                            if (driver && (driver.driverType === 'company' || driver.driverType === 'owner')) {
+                                // Calculate driver pay for this load
+                                const loadAmount = parseFloat(load.rate?.total) || 0;
+                                if (driver.payment?.type === 'percentage') {
+                                    const percentage = parseFloat(driver.payment.percentage || driver.payPercentage || 0);
+                                    const driverPercent = percentage > 1 ? percentage / 100 : percentage;
+                                    driverPay += loadAmount * driverPercent;
+                                } else if (driver.payment?.type === 'per_mile') {
+                                    const miles = parseFloat(load.mileage?.total) || 0;
+                                    const ratePerMile = parseFloat(driver.payment.perMileRate) || 0;
+                                    driverPay += miles * ratePerMile;
+                                }
+                            }
+                        }
+                    });
+
+                    // 2. Fuel Expenses (linked to this truck)
+                    const truckFuelExpenses = DataManager.expenses.filter(exp => {
+                        if (String(exp.truckId) !== String(truck.id)) return false;
+                        if (exp.paidBy === 'owner_operator') return false; // Skip O/O-paid expenses
+                        const expType = (exp.type || '').toLowerCase();
+                        if (!expType.includes('fuel')) return false;
+                        const expDate = new Date(exp.date || exp.createdAt);
+                        return expDate >= startDate && expDate <= endDate;
+                    });
+                    fuelExpenses = truckFuelExpenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+
+                    // 3. Insurance Expenses (monthly allocation)
+                    if (truck.insurancePaidBy === 'company' && truck.monthlyInsuranceCost) {
+                        // Calculate number of months in date range
+                        const monthsDiff = (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+                            (endDate.getMonth() - startDate.getMonth()) + 1;
+                        insuranceExpenses = truck.monthlyInsuranceCost * monthsDiff;
+                    }
+
+                    // 4. Maintenance Expenses (linked to this truck)
+                    const truckMaintenanceExpenses = DataManager.expenses.filter(exp => {
+                        if (String(exp.truckId) !== String(truck.id)) return false;
+                        if (exp.paidBy === 'owner_operator') return false; // Skip O/O-paid expenses
+                        const expType = (exp.type || '').toLowerCase();
+                        if (!expType.includes('maintenance') && !expType.includes('repair')) return false;
+                        const expDate = new Date(exp.date || exp.createdAt);
+                        return expDate >= startDate && expDate <= endDate;
+                    });
+                    maintenanceExpenses = truckMaintenanceExpenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+
+                    // 5. Lease/Loan Payment (for leased or financed trucks)
+                    if ((truck.ownership === 'leased' || truck.ownership === 'financed') && truck.monthlyPayment) {
+                        // Calculate number of months in date range
+                        const monthsDiff = (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+                            (endDate.getMonth() - startDate.getMonth()) + 1;
+                        leasePayment = truck.monthlyPayment * monthsDiff;
+                    }
+
+                    expenses = driverPay + fuelExpenses + insuranceExpenses + maintenanceExpenses + leasePayment;
+
+                    // Calculate Profit
+                    const profit = revenue - expenses;
+
+                    // Calculate Total Miles
+                    const totalMiles = truckLoads.reduce((sum, load) => {
+                        return sum + (parseFloat(load.mileage?.total) || 0);
+                    }, 0);
+
+                    // Calculate Profit per Mile
+                    const profitPerMile = totalMiles > 0 ? profit / totalMiles : 0;
+
+                    // Calculate ROI (if purchase price available)
+                    let roi = null;
+                    if (truck.purchasePrice && truck.purchasePrice > 0) {
+                        roi = ((profit / truck.purchasePrice) * 100).toFixed(2);
+                    }
+
+                    // Create table row
+                    const row = document.createElement('tr');
+                    row.className = profit >= 0 ? 'hover:bg-green-50' : 'hover:bg-red-50';
+                    row.innerHTML = `
+                        <td class="px-4 py-3 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">${truck.number}</div>
+                            <div class="text-xs text-gray-500">${truck.make} ${truck.model}</div>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                            ${Utils.formatCurrency(revenue)}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-red-600">
+                            ${Utils.formatCurrency(expenses)}
+                            <div class="text-xs text-gray-500 mt-1">
+                                Driver: ${Utils.formatCurrency(driverPay)}<br>
+                                Fuel: ${Utils.formatCurrency(fuelExpenses)}<br>
+                                Insurance: ${Utils.formatCurrency(insuranceExpenses)}<br>
+                                Maintenance: ${Utils.formatCurrency(maintenanceExpenses)}<br>
+                                Lease: ${Utils.formatCurrency(leasePayment)}
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-semibold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}">
+                            ${Utils.formatCurrency(profit)}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                            ${totalMiles.toLocaleString()}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm ${profitPerMile >= 0 ? 'text-green-600' : 'text-red-600'}">
+                            ${Utils.formatCurrency(profitPerMile)}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm ${roi && parseFloat(roi) >= 0 ? 'text-green-600' : 'text-red-600'}">
+                            ${roi ? roi + '%' : 'N/A'}
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                // Set default dates if not set
+                if (!dateFrom) {
+                    const defaultFrom = new Date();
+                    defaultFrom.setDate(1); // First day of current month
+                    document.getElementById('profitDateFrom').value = defaultFrom.toISOString().split('T')[0];
+                }
+                if (!dateTo) {
+                    document.getElementById('profitDateTo').value = new Date().toISOString().split('T')[0];
+                }
+
+                Utils.showNotification(`Profitability calculated for ${companyTrucks.length} truck(s)`, 'success');
+            },
+
+            // Setup event listeners
+            setupEventListeners: () => {
+                // Search functionality
+                document.getElementById('truckSearch').addEventListener('input', (e) => {
+                    const searchTerm = e.target.value.toLowerCase();
+                    const rows = document.querySelectorAll('#fleetTableBody tr');
+
+                    rows.forEach(row => {
+                        const text = row.textContent.toLowerCase();
+                        row.style.display = text.includes(searchTerm) ? '' : 'none';
+                    });
+                });
+
+                // Status filter
+                document.getElementById('statusFilter').addEventListener('change', (e) => {
+                    const status = e.target.value;
+                    const rows = document.querySelectorAll('#fleetTableBody tr');
+
+                    rows.forEach(row => {
+                        if (!status) {
+                            row.style.display = '';
+                        } else {
+                            const rowStatus = row.querySelector('span').textContent.toLowerCase().replace(' ', '_');
+                            row.style.display = rowStatus === status ? '' : 'none';
+                        }
+                    });
+                });
+
+                // Form submission
+                document.getElementById('truckForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+
+                    const submitBtn = document.querySelector('#truckForm button[type="submit"]');
+                    const originalText = submitBtn.textContent;
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Saving...';
+
+                    try {
+                        const insurancePaidBy = document.getElementById('insurancePaidBy').value;
+                        const ownership = document.getElementById('truckOwnership').value; // Get ownership value first
+                        const truckData = {
+                            number: document.getElementById('truckNumber').value,
+                            licensePlate: document.getElementById('licensePlate').value,
+                            make: document.getElementById('truckMake').value,
+                            model: document.getElementById('truckModel').value,
+                            year: parseInt(document.getElementById('truckYear').value),
+                            vin: document.getElementById('truckVin').value,
+                            status: document.getElementById('truckStatus').value,
+                            ownership: ownership, // Use the variable
+                            currentMileage: parseInt(document.getElementById('currentMileage').value) || 0,
+                            assignedDriver: document.getElementById('assignedDriver').value,
+                            lastServiceDate: document.getElementById('lastServiceDate').value,
+                            registrationExpiry: document.getElementById('registrationExpiry').value || null,
+                            inspectionDueDate: document.getElementById('inspectionDueDate').value || null,
+                            cabCardRenewalDate: document.getElementById('cabCardRenewalDate').value || null,
+                            // Financial fields (conditional based on ownership)
+                            monthlyPayment: (ownership === 'leased' || ownership === 'financed')
+                                ? parseFloat(document.getElementById('monthlyPayment').value) || 0
+                                : null,
+                            purchasePrice: (ownership === 'owned' || ownership === 'financed')
+                                ? parseFloat(document.getElementById('purchasePrice').value) || 0
+                                : null,
+                            leaseEndDate: ownership === 'leased'
+                                ? document.getElementById('leaseEndDate').value || null
+                                : null,
+                            payoffAmount: ownership === 'financed'
+                                ? parseFloat(document.getElementById('payoffAmount').value) || 0
+                                : null,
+                            // Owner Operator link
+                            ownerOperatorDriverId: ownership === 'owner_operator'
+                                ? document.getElementById('ownerOperatorDriver').value || null
+                                : null,
+                            // Insurance fields
+                            insurancePaidBy: insurancePaidBy,
+                            monthlyInsuranceCost: insurancePaidBy === 'company' ? parseFloat(document.getElementById('monthlyInsuranceCost').value) || 0 : null,
+                            insuranceExpirationDate: insurancePaidBy === 'owner_operator' ? document.getElementById('insuranceExpirationDate').value || null : null,
+                            insuranceCertificateUrl: null, // Will be set after file upload
+                            notes: document.getElementById('truckNotes').value
+                        };
+
+                        const truckId = document.getElementById('truckId').value;
+                        let savedTruckId = truckId;
+
+                        if (truckId) {
+                            await DataManager.updateTruck(truckId, truckData);
+                        } else {
+                            savedTruckId = await DataManager.addTruck(truckData);
+                        }
+
+                        // ==========================================================================
+                        // AUTO-CREATE INSURANCE EXPENSE IF COMPANY PAYS
+                        // This ensures insurance costs flow to the expenses system for settlement deductions
+                        // ==========================================================================
+                        if (insurancePaidBy === 'company' && truckData.monthlyInsuranceCost > 0) {
+                            await createOrUpdateInsuranceExpense(savedTruckId, truckData);
+                        }
+
+                        FleetManager.closeTruckModal();
+                    } catch (error) {
+                        console.error('Error saving truck:', error);
+                        alert('Failed to save truck: ' + error.message);
+                    } finally {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = originalText;
+                    }
+                });
+            }
+        };
+
+        // Toggle ownership-related fields
+        function toggleOwnershipFields() {
+            const ownership = document.getElementById('truckOwnership').value;
+            const financialSection = document.getElementById('financialInfoSection');
+            const ownerOperatorSection = document.getElementById('ownerOperatorSection');
+            const monthlyPaymentField = document.getElementById('monthlyPaymentField');
+            const purchasePriceField = document.getElementById('purchasePriceField');
+            const leaseEndDateField = document.getElementById('leaseEndDateField');
+            const payoffAmountField = document.getElementById('payoffAmountField');
+
+            // Reset all fields
+            monthlyPaymentField.classList.add('hidden');
+            purchasePriceField.classList.add('hidden');
+            leaseEndDateField.classList.add('hidden');
+            payoffAmountField.classList.add('hidden');
+            ownerOperatorSection.classList.add('hidden');
+
+            // Remove required attributes
+            document.getElementById('monthlyPayment')?.removeAttribute('required');
+            document.getElementById('leaseEndDate')?.removeAttribute('required');
+            document.getElementById('payoffAmount')?.removeAttribute('required');
+
+            if (ownership === 'owned') {
+                financialSection.classList.remove('hidden');
+                purchasePriceField.classList.remove('hidden');
+                ownerOperatorSection.classList.add('hidden');
+            } else if (ownership === 'leased') {
+                financialSection.classList.remove('hidden');
+                monthlyPaymentField.classList.remove('hidden');
+                leaseEndDateField.classList.remove('hidden');
+                document.getElementById('monthlyPayment').setAttribute('required', 'required');
+                ownerOperatorSection.classList.add('hidden');
+            } else if (ownership === 'financed') {
+                financialSection.classList.remove('hidden');
+                monthlyPaymentField.classList.remove('hidden');
+                purchasePriceField.classList.remove('hidden');
+                payoffAmountField.classList.remove('hidden');
+                document.getElementById('monthlyPayment').setAttribute('required', 'required');
+                ownerOperatorSection.classList.add('hidden');
+            } else if (ownership === 'owner_operator') {
+                financialSection.classList.add('hidden');
+                ownerOperatorSection.classList.remove('hidden');
+                // Load O/O drivers for selection
+                loadOwnerOperatorDrivers();
+            } else {
+                financialSection.classList.add('hidden');
+                ownerOperatorSection.classList.add('hidden');
+            }
+        }
+
+        // Load Owner Operator drivers for truck assignment
+        function loadOwnerOperatorDrivers() {
+            const select = document.getElementById('ownerOperatorDriver');
+            if (!select) return;
+
+            select.innerHTML = '<option value="">Select O/O Driver</option>';
+            const ooDrivers = DataManager.drivers.filter(d => d.driverType === 'owner_operator');
+
+            ooDrivers.forEach(driver => {
+                const option = document.createElement('option');
+                option.value = driver.id;
+                option.textContent = `${driver.firstName} ${driver.lastName} (${driver.driverNumber})`;
+                select.appendChild(option);
+            });
+        }
+
+        // ==========================================================================
+        // AUTO-CREATE/UPDATE INSURANCE EXPENSE FOR COMPANY-PAID TRUCKS
+        // This connects Fleet insurance settings to the Expenses system
+        // ==========================================================================
+        async function createOrUpdateInsuranceExpense(truckId, truckData) {
+            try {
+                // Find the driver assigned to this truck
+                const driverId = truckData.assignedDriver || truckData.ownerOperatorDriverId;
+                if (!driverId) {
+                    console.log('[Fleet] No driver assigned to truck, skipping insurance expense creation');
+                    return;
+                }
+
+                const driver = DataManager.drivers.find(d => d.id === driverId);
+                if (!driver) {
+                    console.log('[Fleet] Driver not found, skipping insurance expense creation');
+                    return;
+                }
+
+                // Check if an active insurance expense already exists for this truck
+                const existingExpense = DataManager.expenses.find(exp => 
+                    exp.truckId === truckId && 
+                    exp.type === 'insurance' &&
+                    exp.isRecurring === true &&
+                    (!exp.expenseLedger || exp.expenseLedger.remainingBalance > 0)
+                );
+
+                const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+                
+                if (existingExpense) {
+                    // Update existing expense if amount changed
+                    if (existingExpense.amount !== truckData.monthlyInsuranceCost) {
+                        await DataManager.updateExpense(existingExpense.id, {
+                            amount: truckData.monthlyInsuranceCost,
+                            description: `Monthly Insurance - Truck ${truckData.number} (${currentMonth})`,
+                            updatedAt: new Date().toISOString()
+                        });
+                        console.log(`[Fleet] Updated insurance expense for truck ${truckData.number}: $${truckData.monthlyInsuranceCost}`);
+                        Utils.showNotification(`Insurance expense updated: $${truckData.monthlyInsuranceCost}/month`, 'info');
+                    }
+                } else {
+                    // Create new monthly insurance expense
+                    const expenseData = {
+                        type: 'insurance',
+                        category: 'insurance',
+                        amount: truckData.monthlyInsuranceCost,
+                        description: `Monthly Insurance - Truck ${truckData.number} (${currentMonth})`,
+                        driverId: driverId,
+                        driverName: `${driver.firstName} ${driver.lastName}`,
+                        truckId: truckId,
+                        truckNumber: truckData.number,
+                        loadId: null, // Not linked to specific load - deducted from any load
+                        vendor: 'Insurance Provider',
+                        paidBy: 'company', // Company pays, deducted from driver settlements
+                        status: 'approved',
+                        isRecurring: true, // Flag for monthly recurring expense
+                        recurringDay: new Date().getDate(), // Day of month to renew
+                        date: new Date().toISOString(),
+                        createdAt: new Date().toISOString(),
+                        // Initialize expense ledger for tracking deductions
+                        expenseLedger: {
+                            totalAmount: truckData.monthlyInsuranceCost,
+                            amountDeducted: 0,
+                            remainingBalance: truckData.monthlyInsuranceCost,
+                            deductions: [],
+                            status: 'pending',
+                            createdAt: new Date().toISOString()
+                        }
+                    };
+
+                    await DataManager.addExpense(expenseData);
+                    console.log(`[Fleet] Created insurance expense for truck ${truckData.number}: $${truckData.monthlyInsuranceCost}/month`);
+                    Utils.showNotification(`Insurance expense created: $${truckData.monthlyInsuranceCost}/month will be deducted from driver settlements`, 'success');
+                }
+            } catch (error) {
+                console.error('[Fleet] Error creating insurance expense:', error);
+                Utils.showNotification('Failed to create insurance expense: ' + error.message, 'warning');
+            }
+        }
+
+        // Expose function globally
+        window.createOrUpdateInsuranceExpense = createOrUpdateInsuranceExpense;
+
+        // Toggle insurance fields based on who pays
+        function toggleInsuranceFields() {
+            const insurancePaidBy = document.getElementById('insurancePaidBy').value;
+            const companyFields = document.getElementById('companyInsuranceFields');
+            const ooFields = document.getElementById('ownerOperatorInsuranceFields');
+            const certificateSection = document.getElementById('insuranceCertificateSection');
+
+            if (insurancePaidBy === 'company') {
+                companyFields.classList.remove('hidden');
+                ooFields.classList.add('hidden');
+                certificateSection.classList.add('hidden');
+                document.getElementById('monthlyInsuranceCost').setAttribute('required', 'required');
+                document.getElementById('insuranceExpirationDate').removeAttribute('required');
+            } else if (insurancePaidBy === 'owner_operator') {
+                companyFields.classList.add('hidden');
+                ooFields.classList.remove('hidden');
+                certificateSection.classList.remove('hidden');
+                document.getElementById('monthlyInsuranceCost').removeAttribute('required');
+                document.getElementById('insuranceExpirationDate').setAttribute('required', 'required');
+            } else {
+                companyFields.classList.add('hidden');
+                ooFields.classList.add('hidden');
+                certificateSection.classList.add('hidden');
+            }
+        }
+
+        // Expose to global scope
+        window.toggleInsuranceFields = toggleInsuranceFields;
+        window.toggleOwnershipFields = toggleOwnershipFields;
+        window.loadOwnerOperatorDrivers = loadOwnerOperatorDrivers;
+
+        // ==========================================================================
+        // CHECK AND CREATE MONTHLY RECURRING INSURANCE EXPENSES
+        // Runs on page load to ensure all trucks with company-paid insurance have
+        // current month's expense created
+        // ==========================================================================
+        async function checkAndCreateMonthlyInsuranceExpenses() {
+            try {
+                const trucks = DataManager.trucks || [];
+                const currentMonth = new Date().getMonth();
+                const currentYear = new Date().getFullYear();
+                let created = 0;
+
+                for (const truck of trucks) {
+                    // Only process trucks where company pays insurance
+                    if (truck.insurancePaidBy !== 'company' || !truck.monthlyInsuranceCost) {
+                        continue;
+                    }
+
+                    // Check if expense for current month already exists
+                    const existingExpense = DataManager.expenses.find(exp => {
+                        if (exp.truckId !== truck.id || exp.type !== 'insurance') return false;
+                        const expDate = new Date(exp.date || exp.createdAt);
+                        return expDate.getMonth() === currentMonth && expDate.getFullYear() === currentYear;
+                    });
+
+                    if (!existingExpense) {
+                        // Find driver for this truck
+                        const driverId = truck.assignedDriver || truck.ownerOperatorDriverId;
+                        if (!driverId) continue;
+
+                        const driver = DataManager.drivers.find(d => d.id === driverId);
+                        if (!driver) continue;
+
+                        const monthName = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+                        
+                        // Create new expense for this month
+                        const expenseData = {
+                            type: 'insurance',
+                            category: 'insurance',
+                            amount: truck.monthlyInsuranceCost,
+                            description: `Monthly Insurance - Truck ${truck.number} (${monthName})`,
+                            driverId: driverId,
+                            driverName: `${driver.firstName} ${driver.lastName}`,
+                            truckId: truck.id,
+                            truckNumber: truck.number,
+                            loadId: null,
+                            vendor: 'Insurance Provider',
+                            paidBy: 'company',
+                            status: 'approved',
+                            isRecurring: true,
+                            date: new Date().toISOString(),
+                            createdAt: new Date().toISOString(),
+                            expenseLedger: {
+                                totalAmount: truck.monthlyInsuranceCost,
+                                amountDeducted: 0,
+                                remainingBalance: truck.monthlyInsuranceCost,
+                                deductions: [],
+                                status: 'pending',
+                                createdAt: new Date().toISOString()
+                            }
+                        };
+
+                        await DataManager.addExpense(expenseData);
+                        created++;
+                        console.log(`[Fleet] Created monthly insurance expense for truck ${truck.number}: $${truck.monthlyInsuranceCost}`);
+                    }
+                }
+
+                if (created > 0) {
+                    Utils.showNotification(`Created ${created} monthly insurance expense(s)`, 'info');
+                }
+            } catch (error) {
+                console.error('[Fleet] Error checking monthly insurance expenses:', error);
+            }
+        }
+
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', async () => {
+            Auth.init(); // Ensure Auth is initialized
+            await FleetManager.init();
+            
+            // Check and create monthly insurance expenses after data is loaded
+            // Wait a bit for DataManager to fully populate
+            setTimeout(() => {
+                checkAndCreateMonthlyInsuranceExpenses();
+            }, 2000);
+        });
+    </script>
+</body>
+
+</html>

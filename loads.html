@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loads - ATS FREIGHT LLC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="design-system.css">
+</head>
+<body class="flex h-screen overflow-hidden bg-slate-50">
+
+    <!-- Sidebar (Copy from index.html or use a component approach if possible in plain JS) -->
+     <aside class="w-64 bg-slate-900 text-white hidden md:flex flex-col transition-all duration-300 fixed h-full z-20">
+        <div class="h-16 flex items-center px-6 border-b border-slate-800">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0 mr-3">
+                <span class="font-bold text-lg">AT</span>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight">ATS Freight</h1>
+                <p class="text-xs text-slate-400">TMS Pro</p>
+            </div>
+        </div>
+        <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+            <a href="index.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-th-large w-6"></i> <span class="font-medium">Dashboard</span>
+            </a>
+            <a href="loads.html" class="sidebar-link active flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-truck w-6"></i> <span class="font-medium">Loads</span>
+            </a>
+            <a href="drivers.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-users w-6"></i> <span class="font-medium">Drivers</span>
+            </a>
+            <a href="settlements.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-calculator w-6"></i> <span class="font-medium">Settlements</span>
+            </a>
+             <a href="invoices.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-file-invoice-dollar w-6"></i> <span class="font-medium">Invoices</span>
+            </a>
+            <a href="expenses.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-receipt w-6"></i> <span class="font-medium">Expenses</span>
+            </a>
+            <a href="reports.html" class="sidebar-link flex items-center px-3 py-3 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">
+                <i class="fas fa-chart-line w-6"></i> <span class="font-medium">Reports</span>
+            </a>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col md:ml-64 transition-all duration-300">
+        <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 sticky top-0 z-10">
+            <h2 class="text-xl font-bold text-slate-800">Load Management</h2>
+            <div class="flex gap-3">
+                 <button onclick="document.getElementById('addLoadModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-sm shadow-blue-200 transition-colors flex items-center gap-2">
+                    <i class="fas fa-plus"></i> <span>New Load</span>
+                </button>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-8">
+            <!-- Filters -->
+            <div class="flex gap-4 mb-6">
+                <input type="text" id="searchLoad" placeholder="Search loads..." class="w-64 px-4 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+            </div>
+
+            <!-- Load List -->
+            <div id="loadsList" class="grid grid-cols-1 gap-4">
+                <!-- Loads will be injected here by main.js with the new Card layout -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Add Load Modal -->
+    <div id="addLoadModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm hidden">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+                <h2 class="text-lg font-semibold text-slate-900">Create New Load</h2>
+                <button onclick="document.getElementById('addLoadModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="overflow-y-auto p-6">
+                <form id="loadForm" onsubmit="loadForm_handler(event)" class="space-y-6">
+                    
+                     <!-- File Upload (Rate Con) -->
+                    <div class="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-6">
+                         <div class="flex items-center justify-between mb-2">
+                            <label class="text-sm font-medium text-blue-900 flex items-center">
+                                <i class="fas fa-file-upload mr-2"></i> Upload Rate Confirmation
+                            </label>
+                        </div>
+                        <input type="file" id="confirmationUpload" accept=".pdf,.png,.jpg" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="text-xs font-medium text-slate-600">Load Number</label>
+                            <input type="text" id="loadNumber" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" required>
+                        </div>
+                         <div class="space-y-2">
+                            <label class="text-xs font-medium text-slate-600">Status</label>
+                            <select id="loadStatus" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                                <option value="available">Available</option>
+                                <option value="dispatched">Dispatched</option>
+                                <option value="in_transit">In Transit</option>
+                                <option value="delivered">Delivered</option>
+                                <option value="completed">Completed</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                         <label class="text-xs font-medium text-slate-600">Customer</label>
+                         <select id="customer" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></select>
+                    </div>
+
+                    <!-- Route -->
+                    <div class="space-y-4 border-t border-slate-100 pt-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-medium text-slate-900">Route Details</h3>
+                            <button type="button" onclick="calculateMileage()" class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1 font-medium">
+                                <i class="fas fa-calculator"></i> Calculate Miles
+                            </button>
+                        </div>
+                         <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">Origin City</label>
+                                <input type="text" id="pickupCity" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none" placeholder="City">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">State</label>
+                                <input type="text" id="pickupState" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none" placeholder="ST" maxlength="2">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">Dest City</label>
+                                <input type="text" id="deliveryCity" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none" placeholder="City">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">State</label>
+                                <input type="text" id="deliveryState" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none" placeholder="ST" maxlength="2">
+                            </div>
+                        </div>
+                    </div>
+
+                     <!-- Financials -->
+                    <div class="space-y-4 border-t border-slate-100 pt-4">
+                        <h3 class="text-sm font-medium text-slate-900">Financials</h3>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">Rate ($)</label>
+                                <input type="number" id="totalRate" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none" required>
+                            </div>
+                             <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">Miles</label>
+                                <input type="number" id="totalMiles" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none">
+                            </div>
+                             <div class="space-y-2">
+                                <label class="text-xs font-medium text-slate-600">RPM</label>
+                                <input type="text" id="ratePerMile" class="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed" disabled>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Driver -->
+                    <div class="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                        <div class="space-y-2">
+                             <label class="text-xs font-medium text-slate-600">Assign Driver</label>
+                             <select id="driver" onchange="autoFillTruckFromDriver(this.value)" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none"></select>
+                        </div>
+                         <div class="space-y-2">
+                             <label class="text-xs font-medium text-slate-600">Truck</label>
+                             <select id="truck" class="w-full px-3 py-2 border border-slate-300 rounded-lg outline-none"></select>
+                        </div>
+                    </div>
+                    
+                     <!-- Hidden fields required by logic -->
+                    <input type="hidden" id="pickupAddress">
+                    <input type="hidden" id="pickupZip">
+                    <input type="hidden" id="pickupDate">
+                    <input type="hidden" id="deliveryAddress">
+                    <input type="hidden" id="deliveryZip">
+                    <input type="hidden" id="deliveryDate">
+                    <input type="hidden" id="advanceAmount" value="0">
+                    <input type="hidden" id="detentionPay" value="0">
+                    <input type="hidden" id="lumperFees" value="0">
+
+                    <div class="flex justify-end gap-3 pt-4">
+                        <button type="button" onclick="document.getElementById('addLoadModal').classList.add('hidden')" class="px-4 py-2 text-slate-700 hover:bg-slate-50 rounded-lg">Cancel</button>
+                        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm shadow-blue-200">Create Load</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="main.js"></script>
+    <script>
+         document.addEventListener('DOMContentLoaded', async () => {
+            await DataManager.init();
+            renderLoads(); // This needs to be updated in main.js or overridden here
+            populateSelects(); // Re-use existing logic
+        });
+    </script>
+</body>
+</html>
+    

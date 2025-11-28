@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Import - ATS FREIGHT LLC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .bg-navy { background-color: #1f2937; }
+        .gradient-bg { background-color: #1f2937; }
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); }
+        .nav-item { transition: all 0.2s ease; }
+        .nav-item:hover { background-color: rgba(255,255,255,0.1); }
+        .nav-item.active { background-color: rgba(255,255,255,0.1); }
+        .sidebar { width: 250px; background-color: #1f2937; }
+        .sidebar-item:hover { background-color: rgba(255,255,255,0.1); }
+        .sidebar-item.active { background-color: rgba(255,255,255,0.1); border-left: 4px solid #ffffff; }
+        .main-content { margin-left: 250px; }
+        .upload-area { border: 2px dashed #d1d5db; transition: all 0.3s ease; }
+        .upload-area.dragover { border-color: #3b82f6; background-color: #eff6ff; }
+        .progress-bar { transition: width 0.3s ease; }
+        .preview-table { max-height: 400px; overflow-y: auto; }
+        .field-mapping-row { transition: background-color 0.2s; }
+        .field-mapping-row:hover { background-color: #f9fafb; }
+    </style>
+</head>
+
+<body class="bg-gray-50">
+    <!-- Sidebar -->
+    <div class="sidebar fixed left-0 top-0 h-full text-white z-50">
+        <div class="p-6">
+            <div class="flex items-center space-x-3 mb-8">
+                <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center text-2xl font-bold text-navy">ATS</div>
+                <div>
+                    <h2 class="text-xl font-bold">ATS FREIGHT LLC</h2>
+                    <p class="text-sm opacity-75">TMS</p>
+                </div>
+            </div>
+            <nav class="space-y-2">
+                <a href="index.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-tachometer-alt mr-3 w-5"></i>Dashboard</a>
+                <a href="loads.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-truck mr-3 w-5"></i>Loads</a>
+                <a href="drivers.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-users mr-3 w-5"></i>Drivers</a>
+                <a href="settlements.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-calculator mr-3 w-5"></i>Settlements</a>
+                <a href="reports.html" class="sidebar-item flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-chart-bar mr-3 w-5"></i>Reports</a>
+                <a href="import.html" class="sidebar-item active flex items-center px-4 py-3 rounded-lg text-sm font-medium"><i class="fas fa-upload mr-3 w-5"></i>Import</a>
+            </nav>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content p-6">
+        <div class="bg-white shadow-sm border-b mb-6">
+            <div class="px-6 py-4 flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">Data Import</h1>
+                    <p class="text-gray-600">Import data from files or external sources</p>
+                </div>
+                <div class="flex space-x-3">
+                    <button onclick="ImportManager.downloadTemplate()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                        <i class="fas fa-download mr-2"></i>Download Template
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- File Import -->
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <h3 class="text-lg font-semibold mb-4">File Import</h3>
+                <div id="fileUploadArea" class="upload-area rounded-lg p-8 text-center cursor-pointer mb-4">
+                    <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-4"></i>
+                    <p class="text-lg font-medium text-gray-700 mb-2">Drop files here or click to browse</p>
+                    <p class="text-sm text-gray-500">CSV, Excel (.xlsx, .xls) up to 50MB</p>
+                    <input type="file" id="fileInput" class="hidden" accept=".csv,.xlsx,.xls" multiple>
+                </div>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Data Type</label>
+                        <select id="dataTypeSelect" class="w-full px-3 py-2 border rounded-md">
+                            <option value="loads">Loads</option>
+                            <option value="drivers">Drivers</option>
+                            <option value="customers">Customers</option>
+                            <option value="expenses">Expenses</option>
+                            <option value="fleet">Fleet</option>
+                        </select>
+                    </div>
+                    <label class="flex items-center"><input type="checkbox" id="skipDuplicates" class="mr-2"> Skip duplicates</label>
+                    <label class="flex items-center"><input type="checkbox" id="validateData" class="mr-2" checked> Validate data before import</label>
+                    <button onclick="ImportManager.startFileImport()" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+                        <i class="fas fa-upload mr-2"></i>Start Import
+                    </button>
+                </div>
+            </div>
+
+            <!-- DAT Integration -->
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <h3 class="text-lg font-semibold mb-4">DAT Load Board</h3>
+                <div class="flex justify-between items-center mb-3">
+                    <span class="font-medium">Status</span>
+                    <span id="datStatus" class="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">Not Configured</span>
+                </div>
+                <button onclick="ImportManager.syncDAT()" class="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 mb-2">
+                    <i class="fas fa-sync mr-2"></i>Sync Loads Now
+                </button>
+                <button onclick="ImportManager.showDATConfigModal()" class="w-full text-sm text-blue-600 hover:underline">
+                    <i class="fas fa-cog mr-1"></i>Configure API Key
+                </button>
+            </div>
+
+            <!-- Import Stats -->
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <h3 class="text-lg font-semibold mb-4">Import Statistics</h3>
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-600">Total Imports</span>
+                        <span id="totalImports" class="text-2xl font-bold text-blue-600">0</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-600">Successful</span>
+                        <span id="successfulImports" class="text-2xl font-bold text-green-600">0</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-600">Failed</span>
+                        <span id="failedImports" class="text-2xl font-bold text-red-600">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Field Mapping Modal -->
+        <div id="fieldMappingModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-6 w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold">Map Fields</h3>
+                    <button onclick="ImportManager.closeFieldMapping()" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p class="text-sm text-gray-600 mb-4">Map your file columns to system fields</p>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">File Column</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">System Field</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sample Value</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fieldMappingBody"></tbody>
+                    </table>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button onclick="ImportManager.closeFieldMapping()" class="px-4 py-2 border rounded-md">Cancel</button>
+                    <button onclick="ImportManager.applyFieldMapping()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                        Apply Mapping
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preview Modal -->
+        <div id="previewModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+            <div class="bg-white rounded-lg p-6 w-full max-w-6xl mx-4 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold">Preview Data</h3>
+                    <button onclick="ImportManager.closePreview()" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p class="text-sm text-gray-600 mb-4">Review your data before importing (showing first 10 rows)</p>
+                <div class="preview-table border rounded-lg overflow-hidden">
+                    <table class="min-w-full">
+                        <thead id="previewHeader" class="bg-gray-50 sticky top-0"></thead>
+                        <tbody id="previewBody"></tbody>
+                    </table>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button onclick="ImportManager.closePreview()" class="px-4 py-2 border rounded-md">Cancel</button>
+                    <button onclick="ImportManager.confirmImport()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                        <i class="fas fa-check mr-2"></i>Confirm Import
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="importProgress" class="mt-8 bg-white rounded-lg p-6 card-shadow hidden">
+            <div class="flex justify-between mb-4">
+                <h3 class="text-lg font-semibold">Import Progress</h3>
+                <button onclick="ImportManager.cancelImport()" class="text-red-600"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span id="importStatus">Processing...</span>
+                        <span id="importPercentage">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-3">
+                        <div id="importProgressBar" class="bg-blue-600 h-3 rounded-full w-0"></div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-4 gap-4 text-center text-sm">
+                    <div><div class="text-2xl font-bold text-blue-600" id="totalRecords">0</div><div>Total</div></div>
+                    <div><div class="text-2xl font-bold text-green-600" id="successfulRecords">0</div><div>Success</div></div>
+                    <div><div class="text-2xl font-bold text-yellow-600" id="warningRecords">0</div><div>Warnings</div></div>
+                    <div><div class="text-2xl font-bold text-red-600" id="errorRecords">0</div><div>Errors</div></div>
+                </div>
+                <div id="importErrors" class="mt-4 max-h-40 overflow-y-auto hidden">
+                    <h4 class="font-semibold text-red-600 mb-2">Errors:</h4>
+                    <ul id="importErrorsList" class="text-sm text-red-600 space-y-1"></ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Imports -->
+        <div class="mt-8 bg-white rounded-lg card-shadow overflow-hidden">
+            <div class="px-6 py-4 border-b"><h3 class="text-lg font-semibold">Recent Imports</h3></div>
+            <table class="min-w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Records</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="importHistoryTable" class="divide-y divide-gray-200"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="main.js"></script>
+
+    <script>
+        const ImportManager = {
+            selectedFiles: [],
+            parsedData: null,
+            fieldMapping: {},
+            currentDataType: null,
+
+            init() {
+                this.setupEventListeners();
+                this.loadImportHistory();
+                this.updateDATStatus();
+                this.updateStats();
+            },
+
+            setupEventListeners() {
+                const area = document.getElementById('fileUploadArea');
+                const input = document.getElementById('fileInput');
+
+                area.addEventListener('click', () => input.click());
+                area.addEventListener('dragover', e => { e.preventDefault(); area.classList.add('dragover'); });
+                area.addEventListener('dragleave', () => area.classList.remove('dragover'));
+                area.addEventListener('drop', e => {
+                    e.preventDefault();
+                    area.classList.remove('dragover');
+                    this.handleFiles(e.dataTransfer.files);
+                });
+                input.addEventListener('change', e => this.handleFiles(e.target.files));
+            },
+
+            handleFiles(files) {
+                this.selectedFiles = Array.from(files);
+                const names = this.selectedFiles.map(f => f.name).join(', ');
+                Utils.showNotification(`Selected: ${names}`, 'info');
+            },
+
+            async startFileImport() {
+                if (this.selectedFiles.length === 0) {
+                    Utils.showNotification('Select a file first', 'error');
+                    return;
+                }
+
+                const type = document.getElementById('dataTypeSelect').value;
+                const validateData = document.getElementById('validateData').checked;
+                this.currentDataType = type;
+
+                try {
+                    // Parse first file
+                    const file = this.selectedFiles[0];
+                    const data = await this.parseFile(file);
+                    
+                    if (!data || data.length === 0) {
+                        Utils.showNotification('No data found in file', 'error');
+                        return;
+                    }
+
+                    // Auto-detect field mapping
+                    this.fieldMapping = this.autoDetectMapping(data[0], type);
+                    
+                    // Show field mapping if validation enabled
+                    if (validateData) {
+                        this.showFieldMapping(data);
+                    } else {
+                        // Show preview
+                        this.showPreview(data);
+                    }
+                } catch (error) {
+                    Utils.showNotification('Error parsing file: ' + error.message, 'error');
+                }
+            },
+
+            async parseFile(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            if (file.name.endsWith('.csv')) {
+                                Papa.parse(e.target.result, {
+                                    header: true,
+                                    skipEmptyLines: true,
+                                    complete: (results) => {
+                                        if (results.errors.length > 0) {
+                                            console.warn('CSV parsing warnings:', results.errors);
+                                        }
+                                        resolve(results.data);
+                                    },
+                                    error: reject
+                                });
+                            } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+                                const workbook = XLSX.read(e.target.result, { type: 'binary' });
+                                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                                const data = XLSX.utils.sheet_to_json(firstSheet);
+                                resolve(data);
+                            } else {
+                                reject(new Error('Unsupported file format'));
+                            }
+                        } catch (error) {
+                            reject(error);
+                        }
+                    };
+                    reader.onerror = reject;
+                    if (file.name.endsWith('.csv')) {
+                        reader.readAsText(file);
+                    } else {
+                        reader.readAsBinaryString(file);
+                    }
+                });
+            },
+
+            autoDetectMapping(firstRow, dataType) {
+                const mapping = {};
+                const fileColumns = Object.keys(firstRow);
+                const systemFields = this.getSystemFields(dataType);
+
+                // Try to match columns automatically
+                fileColumns.forEach(col => {
+                    const normalizedCol = col.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                    for (const [sysField, aliases] of Object.entries(systemFields)) {
+                        if (aliases.some(alias => normalizedCol.includes(alias) || alias.includes(normalizedCol))) {
+                            mapping[col] = sysField;
+                            break;
+                        }
+                    }
+                });
+
+                return mapping;
+            },
+
+            getSystemFields(dataType) {
+                const fields = {
+                    loads: {
+                        loadNumber: ['loadnumber', 'load', 'pro', 'pronumber'],
+                        originCity: ['origincity', 'origin', 'pickupcity', 'fromcity'],
+                        originState: ['originstate', 'pickupstate', 'fromstate'],
+                        destCity: ['destcity', 'destinationcity', 'deliverycity', 'tocity'],
+                        destState: ['deststate', 'destinationstate', 'deliverystate', 'tostate'],
+                        rate: ['rate', 'price', 'amount', 'revenue'],
+                        miles: ['miles', 'mileage', 'distance']
+                    },
+                    drivers: {
+                        firstName: ['firstname', 'first', 'fname'],
+                        lastName: ['lastname', 'last', 'lname'],
+                        phone: ['phone', 'phonenumber', 'mobile', 'cell'],
+                        email: ['email', 'emailaddress'],
+                        driverType: ['drivertype', 'type', 'classification']
+                    },
+                    customers: {
+                        name: ['name', 'company', 'companyname', 'customer'],
+                        contact: ['contact', 'contactperson', 'contactname'],
+                        phone: ['phone', 'phonenumber'],
+                        email: ['email', 'emailaddress']
+                    },
+                    expenses: {
+                        type: ['type', 'category', 'expensetype'],
+                        amount: ['amount', 'cost', 'price'],
+                        date: ['date', 'expensedate', 'transactiondate'],
+                        description: ['description', 'desc', 'notes', 'memo']
+                    },
+                    fleet: {
+                        truckNumber: ['trucknumber', 'unitnumber', 'truck'],
+                        make: ['make', 'manufacturer'],
+                        model: ['model'],
+                        year: ['year', 'modelyear']
+                    }
+                };
+                return fields[dataType] || {};
+            },
+
+            showFieldMapping(data) {
+                const modal = document.getElementById('fieldMappingModal');
+                const tbody = document.getElementById('fieldMappingBody');
+                tbody.innerHTML = '';
+
+                const fileColumns = Object.keys(data[0]);
+                const systemFields = this.getSystemFields(this.currentDataType);
+
+                fileColumns.forEach(col => {
+                    const row = document.createElement('tr');
+                    row.className = 'field-mapping-row';
+                    const sampleValue = data[0][col] || '';
+                    const currentMapping = this.fieldMapping[col] || '';
+                    
+                    row.innerHTML = `
+                        <td class="px-4 py-2 text-sm font-medium">${col}</td>
+                        <td class="px-4 py-2">
+                            <select class="w-full px-2 py-1 border rounded" data-column="${col}">
+                                <option value="">-- Skip --</option>
+                                ${Object.keys(systemFields).map(field => 
+                                    `<option value="${field}" ${currentMapping === field ? 'selected' : ''}>${field}</option>`
+                                ).join('')}
+                            </select>
+                        </td>
+                        <td class="px-4 py-2 text-sm text-gray-600">${String(sampleValue).substring(0, 30)}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                modal.classList.remove('hidden');
+            },
+
+            applyFieldMapping() {
+                const selects = document.querySelectorAll('#fieldMappingBody select');
+                this.fieldMapping = {};
+                selects.forEach(select => {
+                    const column = select.dataset.column;
+                    const field = select.value;
+                    if (field) {
+                        this.fieldMapping[column] = field;
+                    }
+                });
+                this.closeFieldMapping();
+                this.showPreview(this.parsedData || []);
+            },
+
+            closeFieldMapping() {
+                document.getElementById('fieldMappingModal').classList.add('hidden');
+            },
+
+            showPreview(data) {
+                this.parsedData = data;
+                const modal = document.getElementById('previewModal');
+                const header = document.getElementById('previewHeader');
+                const body = document.getElementById('previewBody');
+                
+                // Transform data using field mapping
+                const transformed = this.transformData(data.slice(0, 10));
+                
+                if (transformed.length === 0) {
+                    Utils.showNotification('No data to preview after mapping', 'warning');
+                    return;
+                }
+
+                // Build header
+                const columns = Object.keys(transformed[0]);
+                header.innerHTML = '<tr>' + columns.map(col => 
+                    `<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">${col}</th>`
+                ).join('') + '</tr>';
+
+                // Build body
+                body.innerHTML = transformed.map(row => 
+                    '<tr class="border-t">' + columns.map(col => 
+                        `<td class="px-4 py-2 text-sm">${String(row[col] || '').substring(0, 50)}</td>`
+                    ).join('') + '</tr>'
+                ).join('');
+
+                modal.classList.remove('hidden');
+            },
+
+            closePreview() {
+                document.getElementById('previewModal').classList.add('hidden');
+            },
+
+            transformData(data) {
+                return data.map(row => {
+                    const transformed = {};
+                    Object.entries(this.fieldMapping).forEach(([fileCol, sysField]) => {
+                        transformed[sysField] = row[fileCol];
+                    });
+                    return transformed;
+                });
+            },
+
+            async confirmImport() {
+                this.closePreview();
+                const skipDup = document.getElementById('skipDuplicates').checked;
+                document.getElementById('importProgress').classList.remove('hidden');
+
+                let total = 0, success = 0, warnings = 0, errors = 0;
+                const errorList = [];
+
+                for (const file of this.selectedFiles) {
+                    const data = await this.parseFile(file);
+                    const transformed = this.transformData(data);
+                    total += transformed.length;
+
+                    for (let i = 0; i < transformed.length; i++) {
+                        const row = transformed[i];
+                        try {
+                            const result = await this.importRow(this.currentDataType, row, skipDup);
+                            if (result === 'success') success++;
+                            else if (result === 'warning') warnings++;
+                            else {
+                                errors++;
+                                errorList.push(`Row ${i + 1}: ${result}`);
+                            }
+                        } catch (err) {
+                            errors++;
+                            errorList.push(`Row ${i + 1}: ${err.message}`);
+                        }
+
+                        const progress = ((success + warnings + errors) / total) * 100;
+                        document.getElementById('importProgressBar').style.width = progress + '%';
+                        document.getElementById('importPercentage').textContent = Math.round(progress) + '%';
+                        document.getElementById('totalRecords').textContent = total;
+                        document.getElementById('successfulRecords').textContent = success;
+                        document.getElementById('warningRecords').textContent = warnings;
+                        document.getElementById('errorRecords').textContent = errors;
+
+                        if (errorList.length > 0) {
+                            document.getElementById('importErrors').classList.remove('hidden');
+                            document.getElementById('importErrorsList').innerHTML = 
+                                errorList.slice(-10).map(e => `<li>${e}</li>`).join('');
+                        }
+                    }
+                }
+
+                await this.logImportHistory({
+                    type: this.currentDataType.charAt(0).toUpperCase() + this.currentDataType.slice(1),
+                    source: this.selectedFiles.map(f => f.name).join(', '),
+                    total, success, warnings, errors
+                });
+
+                Utils.showNotification(`Import complete! ${success} added, ${warnings} warnings, ${errors} errors`, 
+                    errors > 0 ? 'warning' : 'success');
+                
+                setTimeout(() => {
+                    document.getElementById('importProgress').classList.add('hidden');
+                    this.loadImportHistory();
+                    this.updateStats();
+                }, 5000);
+                
+                this.selectedFiles = [];
+            },
+
+            async importRow(type, row, skipDup) {
+                try {
+                    if (type === 'loads') {
+                        const loadNumber = row.loadNumber || `L${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                        if (skipDup && DataManager.loads.find(l => l.loadNumber === loadNumber)) {
+                            return 'warning';
+                        }
+
+                        await DataManager.addLoad({
+                            loadNumber,
+                            status: 'available',
+                            pickup: {
+                                city: row.originCity || '',
+                                state: row.originState || ''
+                            },
+                            delivery: {
+                                city: row.destCity || '',
+                                state: row.destState || ''
+                            },
+                            rate: { total: parseFloat(row.rate || 0) },
+                            mileage: { total: parseFloat(row.miles || 0) },
+                            importedAt: new Date().toISOString()
+                        });
+                        return 'success';
+                    } else if (type === 'drivers') {
+                        if (!row.firstName || !row.lastName) {
+                            return 'Missing required fields: firstName, lastName';
+                        }
+                        if (skipDup && DataManager.drivers.find(d => 
+                            d.firstName === row.firstName && d.lastName === row.lastName)) {
+                            return 'warning';
+                        }
+                        await DataManager.addDriver({
+                            firstName: row.firstName,
+                            lastName: row.lastName,
+                            personalInfo: {
+                                phone: row.phone || '',
+                                email: row.email || ''
+                            },
+                            driverType: row.driverType || 'company',
+                            importedAt: new Date().toISOString()
+                        });
+                        return 'success';
+                    } else if (type === 'customers') {
+                        if (!row.name) {
+                            return 'Missing required field: name';
+                        }
+                        if (skipDup && DataManager.customers.find(c => c.name === row.name)) {
+                            return 'warning';
+                        }
+                        await DataManager.addCustomer({
+                            name: row.name,
+                            contact: row.contact || '',
+                            phone: row.phone || '',
+                            email: row.email || '',
+                            importedAt: new Date().toISOString()
+                        });
+                        return 'success';
+                    } else if (type === 'expenses') {
+                        if (!row.amount || !row.type) {
+                            return 'Missing required fields: amount, type';
+                        }
+                        await DataManager.addExpense({
+                            type: row.type,
+                            amount: parseFloat(row.amount || 0),
+                            date: row.date || new Date().toISOString(),
+                            description: row.description || '',
+                            importedAt: new Date().toISOString()
+                        });
+                        return 'success';
+                    }
+                    return 'success';
+                } catch (err) {
+                    console.error('Import error:', err);
+                    return err.message || 'Unknown error';
+                }
+            },
+
+            downloadTemplate() {
+                const type = document.getElementById('dataTypeSelect').value;
+                const templates = {
+                    loads: [["Load Number", "Origin City", "Origin State", "Destination City", "Destination State", "Rate", "Miles"]],
+                    drivers: [["First Name", "Last Name", "Phone", "Email", "Driver Type"]],
+                    customers: [["Name", "Contact", "Phone", "Email"]],
+                    expenses: [["Type", "Amount", "Date", "Description"]],
+                    fleet: [["Truck Number", "Make", "Model", "Year"]]
+                };
+                const data = templates[type] || templates.loads;
+                const ws = XLSX.utils.aoa_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, type.charAt(0).toUpperCase() + type.slice(1));
+                XLSX.writeFile(wb, `ATS_${type}_Import_Template.xlsx`);
+            },
+
+            async syncDAT() {
+                const apiKey = localStorage.getItem('datApiKey');
+                if (!apiKey) return this.showDATConfigModal();
+                Utils.showNotification('Syncing with DAT...', 'info');
+                // Implementation would go here
+            },
+
+            showDATConfigModal() {
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                modal.innerHTML = `
+                    <div class="bg-white rounded-lg p-6 w-96">
+                        <h3 class="text-xl font-bold mb-4">DAT API Key</h3>
+                        <input id="datKeyInput" type="password" class="w-full px-3 py-2 border rounded-md mb-4" placeholder="Enter your DAT API key">
+                        <div class="flex justify-end space-x-3">
+                            <button onclick="this.closest('.fixed').remove()" class="px-4 py-2 border rounded-md">Cancel</button>
+                            <button onclick="ImportManager.saveDATKey()" class="px-4 py-2 bg-blue-600 text-white rounded-md">Save</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(modal);
+            },
+
+            saveDATKey() {
+                const key = document.getElementById('datKeyInput').value.trim();
+                if (key) {
+                    localStorage.setItem('datApiKey', key);
+                    this.updateDATStatus();
+                    document.querySelector('.fixed').remove();
+                }
+            },
+
+            updateDATStatus() {
+                const el = document.getElementById('datStatus');
+                if (localStorage.getItem('datApiKey')) {
+                    el.className = 'px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800';
+                    el.textContent = 'Connected';
+                }
+            },
+
+            async logImportHistory(entry) {
+                const doc = {
+                    dateTime: new Date().toISOString(),
+                    type: entry.type,
+                    source: entry.source,
+                    total: entry.total,
+                    success: entry.success,
+                    warnings: entry.warnings,
+                    errors: entry.errors
+                };
+                await db.collection('importHistory').add(doc);
+                this.loadImportHistory();
+            },
+
+            async loadImportHistory() {
+                try {
+                    const snap = await db.collection('importHistory').orderBy('dateTime', 'desc').limit(20).get();
+                    const tbody = document.getElementById('importHistoryTable');
+                    tbody.innerHTML = '';
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td class="px-6 py-4 text-sm">${new Date(d.dateTime).toLocaleString()}</td>
+                            <td class="px-6 py-4 text-sm">${d.type}</td>
+                            <td class="px-6 py-4 text-sm">${d.source}</td>
+                            <td class="px-6 py-4 text-sm">${d.total}</td>
+                            <td class="px-6 py-4 text-sm">
+                                <span class="px-2 py-1 text-xs rounded-full ${d.errors > 0 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
+                                    ${d.errors > 0 ? 'Failed' : 'Success'}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm">
+                                <button onclick="ImportManager.viewDetails('${doc.id}')" class="text-blue-600 hover:text-blue-900">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </td>`;
+                        tbody.appendChild(row);
+                    });
+                } catch (error) {
+                    console.error('Error loading import history:', error);
+                }
+            },
+
+            viewDetails(id) {
+                Utils.showNotification('Import details feature coming soon', 'info');
+            },
+
+            updateStats() {
+                // Calculate stats from import history
+                // This would query Firebase for actual stats
+                document.getElementById('totalImports').textContent = '0';
+                document.getElementById('successfulImports').textContent = '0';
+                document.getElementById('failedImports').textContent = '0';
+            },
+
+            cancelImport() {
+                document.getElementById('importProgress').classList.add('hidden');
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => ImportManager.init());
+    </script>
+</body>
+</html>

@@ -1,0 +1,1606 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver Settlements - ATS FREIGHT LLC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <!-- Mobile Responsiveness -->
+    <link rel="stylesheet" href="mobile-fixes.css">
+    <script src="mobile-nav.js" defer></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .bg-navy {
+            background-color: #1f2937;
+        }
+
+        .text-navy {
+            color: #1f2937;
+        }
+
+        .gradient-bg {
+            background-color: #1f2937;
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .status-paid {
+            background-color: #10b981;
+        }
+
+        .status-pending {
+            background-color: #f59e0b;
+        }
+
+        .status-processed {
+            background-color: #3b82f6;
+        }
+
+        .nav-item {
+            transition: all 0.2s ease;
+        }
+
+        .nav-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-item.active {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-4">
+                    <img src="resources/ats-freight-logo.png" alt="ATS FREIGHT LLC" class="h-12 w-12 object-contain"
+                        onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden'); this.nextElementSibling.classList.add('flex');">
+                    <div
+                        class="company-logo hidden w-12 h-12 bg-white rounded-lg items-center justify-center font-bold text-gray-800">
+                        ATS</div>
+                    <div>
+                        <h1 class="text-xl font-bold">ATS FREIGHT LLC</h1>
+                        <p class="text-sm opacity-90">Transportation Management System</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-6">
+                    <a href="index.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-tachometer-alt mr-2"></i>Dashboard
+                    </a>
+                    <a href="loads.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-truck mr-2"></i>Loads
+                    </a>
+                    <a href="drivers.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-users mr-2"></i>Drivers
+                    </a>
+                    <span class="nav-item active px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-calculator mr-2"></i>Settlements
+                    </span>
+                    <span class="text-sm">Welcome, Liban Ali</span>
+                    <button class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Page Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h2 class="text-3xl font-bold text-gray-900">Driver Settlements</h2>
+                <p class="text-gray-600 mt-2">Manage driver payments and settlements</p>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button onclick="openGenerateSettlementModal()"
+                    class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+                    <i class="fas fa-plus"></i>
+                    Generate Settlement
+                </button>
+            </div>
+        </div>
+
+        <!-- Settlement Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-dollar-sign text-green-600"></i>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">This Week</dt>
+                            <dd id="thisWeekTotal" class="text-2xl font-semibold text-gray-900">$0</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-users text-blue-600"></i>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Settlements</dt>
+                            <dd id="totalSettlements" class="text-2xl font-semibold text-gray-900">0</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-yellow-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-clock text-yellow-600"></i>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Pending</dt>
+                            <dd id="pendingSettlements" class="text-2xl font-semibold text-gray-900">0</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-calculator text-purple-600"></i>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Avg Settlement</dt>
+                            <dd id="avgSettlement" class="text-2xl font-semibold text-gray-900">$0</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settlement Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Weekly Settlement Trends</h3>
+                <div id="settlementChart" class="h-64"></div>
+            </div>
+
+            <div class="bg-white rounded-lg p-6 card-shadow">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Payment Status Distribution</h3>
+                <div id="paymentStatusChart" class="h-64"></div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="bg-white rounded-lg p-6 card-shadow mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                    <label for="driverFilter" class="block text-sm font-medium text-gray-700 mb-2">Driver</label>
+                    <select id="driverFilter" aria-label="Filter by Driver"
+                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="">All Drivers</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="statusFilter" class="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                    <select id="statusFilter" aria-label="Filter by Status"
+                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="processed">Processed</option>
+                        <option value="paid">Paid</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="weekFilter" class="block text-sm font-medium text-gray-700 mb-2">Week</label>
+                    <input type="week" id="weekFilter"
+                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+                <div class="flex items-end">
+                    <button onclick="applyFilters()"
+                        class="w-full bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors">
+                        <i class="fas fa-search mr-2"></i>Filter
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settlements Table -->
+        <div class="bg-white rounded-lg card-shadow">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-semibold text-gray-900">Driver Settlements</h3>
+                    <div class="flex items-center space-x-4">
+                        <button class="text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-download mr-2"></i>Export
+                        </button>
+                        <button onclick="printAllSettlements()" class="text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-print mr-2"></i>Print All
+                        </button>
+                        <button onclick="refreshSettlements()" class="text-green-600 hover:text-green-800 ml-2">
+                            <i class="fas fa-sync-alt mr-2"></i>Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto table-responsive table-scroll-hint">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Settlement #</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Driver</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Period</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Miles</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Gross Pay</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Deductions</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Net Pay</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="settlementsTableBody" class="bg-white divide-y divide-gray-200">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Settlement Modal -->
+    <div id="createSettlementModal" class="modal">
+        <div class="modal-content">
+            <div class="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xl font-semibold">Generate Driver Settlement</h3>
+                    <button onclick="closeCreateModal()" class="text-white hover:text-gray-200"
+                        aria-label="Close Modal">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="p-6">
+                <form id="settlementForm" class="space-y-6">
+                    <!-- Settlement Period Selection -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <h4 class="text-sm font-semibold text-blue-900 mb-3">
+                            <i class="fas fa-calendar-week mr-2"></i>Settlement Period
+                        </h4>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-blue-800 mb-1">Select Week</label>
+                                <input type="week" id="settlementWeek"
+                                    class="w-full border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    onchange="updatePeriodDisplay()">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-blue-800 mb-1">Period</label>
+                                <div id="periodDisplay"
+                                    class="text-sm text-blue-700 py-2 px-3 bg-white rounded border border-blue-200">
+                                    Select a week to see the period
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-6">
+                        <div>
+                            <div class="flex justify-between items-center mb-2">
+                                <label for="driverSelect" class="block text-sm font-medium text-gray-700">Select
+                                    Driver</label>
+                                <button type="button" onclick="refreshDriversList()"
+                                    class="text-xs text-blue-600 hover:text-blue-800 underline">
+                                    <i class="fas fa-refresh mr-1"></i>Refresh
+                                </button>
+                            </div>
+                            <select id="driverSelect" aria-label="Select Driver" onchange="loadDriverLoads()"
+                                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="">Select a driver...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="settlementLoadsSection" class="hidden">
+                        <h4 class="text-lg font-semibold text-gray-900 mb-4">Available Loads</h4>
+                        <div class="overflow-x-auto border rounded-lg mb-6">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                                            <input type="checkbox" id="selectAllLoads" onchange="toggleAllLoads(this)">
+                                        </th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Load
+                                            #</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date
+                                        </th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                                            Route</th>
+                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">
+                                            Pay Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="driverLoadsBody" class="bg-white divide-y divide-gray-200">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Deductions Section -->
+                        <div class="bg-gray-50 p-4 rounded-lg mb-4">
+                            <h5 class="font-medium text-gray-700 mb-3">Deductions</h5>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Fuel</label>
+                                    <input type="number" id="fuelDeduction" value="0" min="0" step="0.01"
+                                        class="w-full border rounded px-3 py-2" onchange="calculateSettlementTotals()">
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">Other</label>
+                                    <input type="number" id="otherDeduction" value="0" min="0" step="0.01"
+                                        class="w-full border rounded px-3 py-2" onchange="calculateSettlementTotals()">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-gray-50 p-6 rounded-xl border border-gray-200">
+                            <div class="border-t border-gray-200 pt-4 space-y-2">
+                                <div class="flex justify-between text-gray-600">
+                                    <span>Gross Pay:</span>
+                                    <span id="grossPay" class="font-medium">$0.00</span>
+                                </div>
+                                <div class="flex justify-between text-gray-600">
+                                    <span>Total Deductions:</span>
+                                    <span id="totalDeductions" class="font-medium">$0.00</span>
+                                </div>
+                                <div class="flex justify-between items-center pt-2 border-t border-gray-300">
+                                    <span class="text-xl font-bold text-gray-900">Net Pay:</span>
+                                    <span id="netPay" class="text-2xl font-extrabold text-green-600">$0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="noLoadsMessage" class="hidden text-center py-8">
+                        <div class="bg-yellow-50 text-yellow-800 p-4 rounded-lg inline-block">
+                            <i class="fas fa-exclamation-triangle mr-2"></i>
+                            No unpaid delivered loads found for this driver in the selected period.
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end space-x-3 pt-2">
+                        <button type="button" onclick="closeCreateModal()"
+                            class="px-6 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 font-medium transition-colors">
+                            Cancel
+                        </button>
+                        <button type="button" id="generateSettlementBtn" onclick="generateSettlement()"
+                            class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled>
+                            Generate Settlement
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
+    <script src="data-stability.js"></script>
+    <script src="main.js"></script>
+    <script>
+        // ========================================
+        // SETTLEMENT PAGE - MAIN LOGIC
+        // ========================================
+
+        // Global variables
+        let selectedLoads = [];
+        let currentSettlementData = {};
+
+        // ========================================
+        // FUNCTION DEFINITIONS (MUST BE FIRST!)
+        // ========================================
+        // These functions must be defined BEFORE DOMContentLoaded
+        // so they're available when onclick handlers are triggered
+
+        // Set current week in the week picker
+        function setCurrentWeek() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const weekNum = Utils.getWeekNumber(now);
+            const weekStr = `${year}-W${weekNum.toString().padStart(2, '0')}`;
+
+            const weekFilter = document.getElementById('weekFilter');
+            const settlementWeek = document.getElementById('settlementWeek');
+
+            if (weekFilter) weekFilter.value = weekStr;
+            if (settlementWeek) {
+                settlementWeek.value = weekStr;
+                updatePeriodDisplay();
+            }
+        }
+
+        // Update period display based on selected week
+
+        function updatePeriodDisplay() {
+            const weekInput = document.getElementById('settlementWeek');
+            const periodDisplay = document.getElementById('periodDisplay');
+
+            if (!weekInput.value) {
+                periodDisplay.textContent = 'Select a week to see the period';
+                return;
+            }
+
+            const [year, week] = weekInput.value.split('-W');
+            const weekStart = getDateOfISOWeek(parseInt(week), parseInt(year));
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+
+            periodDisplay.textContent = Utils.formatDateRange(weekStart, weekEnd);
+        }
+
+        // Get date from ISO week number
+        function getDateOfISOWeek(week, year) {
+            const simple = new Date(year, 0, 1 + (week - 1) * 7);
+            const dow = simple.getDay();
+            const ISOweekStart = simple;
+            if (dow <= 4)
+                ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
+            else
+                ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
+            return ISOweekStart;
+        }
+
+        // Populate filter dropdowns
+        function populateFilters() {
+            const driverFilter = document.getElementById('driverFilter');
+            driverFilter.innerHTML = '<option value="">All Drivers</option>';
+
+            DataManager.drivers.forEach(d => {
+                const opt = new Option(`${d.firstName} ${d.lastName}`, d.id);
+                driverFilter.add(opt);
+            });
+        }
+
+        // Apply filters to settlements table
+        function applyFilters() {
+            renderSettlementsTable();
+        }
+
+        // Expose render function for external updates
+        window.renderSettlements = function () {
+            renderSettlementsTable();
+            updateStats();
+            updateSettlementCharts();
+        };
+
+        // ========================================
+        // MODAL FUNCTIONS
+        // ========================================
+
+        window.openGenerateSettlementModal = async function () {
+            console.log('🚀 openGenerateSettlementModal called!');
+
+            const modal = document.getElementById('createSettlementModal');
+            if (!modal) {
+                console.error('❌ Modal not found');
+                return;
+            }
+
+            console.log('✅ Modal found, opening...');
+            modal.classList.add('show');
+
+            // Show loading state
+            const select = document.getElementById('driverSelect');
+            select.innerHTML = '<option>Loading drivers...</option>';
+
+            // Reset form
+            document.getElementById('settlementLoadsSection').classList.add('hidden');
+            document.getElementById('noLoadsMessage').classList.add('hidden');
+            document.getElementById('driverLoadsBody').innerHTML = '';
+            document.getElementById('grossPay').textContent = '$0.00';
+            document.getElementById('totalDeductions').textContent = '$0.00';
+            document.getElementById('netPay').textContent = '$0.00';
+            document.getElementById('fuelDeduction').value = '0';
+            document.getElementById('otherDeduction').value = '0';
+            document.getElementById('generateSettlementBtn').disabled = true;
+
+            // Set current week
+            setCurrentWeek();
+
+            // Wait for drivers to load
+            while (!DataManager?.drivers || DataManager.drivers.length === 0) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+
+            // Populate drivers
+            select.innerHTML = '<option value="">Select a driver...</option>';
+            DataManager.drivers.forEach(d => {
+                const opt = new Option(`${d.firstName} ${d.lastName}`, d.id);
+                select.add(opt);
+            });
+            console.log('Drivers loaded:', DataManager.drivers.length);
+        };
+
+        window.closeCreateModal = function () {
+            document.getElementById('createSettlementModal').classList.remove('show');
+        };
+
+        window.refreshDriversList = async function () {
+            const select = document.getElementById('driverSelect');
+            select.innerHTML = '<option value="">Refreshing drivers...</option>';
+
+            if (!DataManager || !DataManager.drivers || DataManager.drivers.length === 0) {
+                try {
+                    await DataManager.init();
+                } catch (error) {
+                    console.error('Error reinitializing:', error);
+                }
+            }
+
+            if (DataManager?.drivers && DataManager.drivers.length > 0) {
+                select.innerHTML = '<option value="">Select a driver...</option>';
+                DataManager.drivers.forEach(d => {
+                    const opt = new Option(`${d.firstName} ${d.lastName}`, d.id);
+                    select.add(opt);
+                });
+            } else {
+                select.innerHTML = '<option value="">No drivers found</option>';
+            }
+        };
+
+        // ========================================
+        // LOAD DRIVER'S DELIVERED LOADS
+        // ========================================
+
+        window.loadDriverLoads = function () {
+            console.log('📋 loadDriverLoads called!');
+
+            const driverId = document.getElementById('driverSelect').value;
+            const weekInput = document.getElementById('settlementWeek').value;
+
+            console.log('Driver ID:', driverId);
+            console.log('Week input:', weekInput);
+
+            if (!driverId) {
+                console.log('❌ No driver selected in loadDriverLoads');
+                document.getElementById('settlementLoadsSection').classList.add('hidden');
+                document.getElementById('noLoadsMessage').classList.add('hidden');
+                return;
+            }
+
+            const driver = DataManager.drivers.find(d => d.id === driverId);
+            if (!driver) return;
+
+            // Get week dates
+            let weekStart, weekEnd;
+            if (weekInput) {
+                const [year, week] = weekInput.split('-W');
+                weekStart = getDateOfISOWeek(parseInt(week), parseInt(year));
+                weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 6);
+                weekEnd.setHours(23, 59, 59, 999);
+            } else {
+                // Default to current week
+                weekStart = Utils.getWeekStart(new Date());
+                weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 6);
+                weekEnd.setHours(23, 59, 59, 999);
+            }
+
+            // Get delivered loads without settlementId for this driver in the selected period
+            const unpaidLoads = DataManager.loads.filter(load => {
+                const isDriver = load.driverId === driverId;
+                const isDelivered = (load.status === 'delivered' || load.status === 'Delivered');
+                const notSettled = !load.settlementId;
+
+                // Check if delivery date is within the selected week
+                const deliveryDate = new Date(load.delivery?.date || load.deliveredAt || load.createdAt);
+                const inPeriod = deliveryDate >= weekStart && deliveryDate <= weekEnd;
+
+                return isDriver && isDelivered && notSettled && inPeriod;
+            });
+
+            const loadsBody = document.getElementById('driverLoadsBody');
+            loadsBody.innerHTML = '';
+
+            if (unpaidLoads.length === 0) {
+                document.getElementById('settlementLoadsSection').classList.add('hidden');
+                document.getElementById('noLoadsMessage').classList.remove('hidden');
+                document.getElementById('generateSettlementBtn').disabled = true;
+                return;
+            }
+
+            document.getElementById('settlementLoadsSection').classList.remove('hidden');
+            document.getElementById('noLoadsMessage').classList.add('hidden');
+
+            // Calculate driver pay percentage
+            const payPercentage = Utils.validatePayPercentage(driver.payPercentage, driver.driverType);
+
+            // Store period info
+            currentSettlementData.periodStart = weekStart.toISOString();
+            currentSettlementData.periodEnd = weekEnd.toISOString();
+            currentSettlementData.periodDisplay = Utils.formatDateRange(weekStart, weekEnd);
+
+            unpaidLoads.forEach(load => {
+                const rate = parseFloat(load.rate?.total || load.rate || 0);
+                const driverPay = rate * payPercentage;
+                const miles = load.mileage?.total || 0;
+
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="px-4 py-2">
+                        <input type="checkbox" class="load-checkbox" data-load-id="${load.id}" 
+                            data-pay="${driverPay}" data-miles="${miles}" checked 
+                            onchange="calculateSettlementTotals()">
+                    </td>
+                    <td class="px-4 py-2 text-sm font-medium">${load.loadNumber || load.id}</td>
+                    <td class="px-4 py-2 text-sm">${Utils.formatDate(load.delivery?.date || load.deliveredAt)}</td>
+                    <td class="px-4 py-2 text-sm">${load.pickup?.city || ''} → ${load.delivery?.city || ''}</td>
+                    <td class="px-4 py-2 text-sm text-right font-semibold">${Utils.formatCurrency(driverPay)}</td>
+                `;
+                loadsBody.appendChild(row);
+            });
+
+            // Auto-populate O/O expenses
+            if (driver.driverType === 'owner_operator') {
+                autoPopulateOOExpenses(driverId);
+            }
+
+            calculateSettlementTotals();
+            document.getElementById('generateSettlementBtn').disabled = false;
+        };
+
+        // Auto-populate expenses for Owner Operators
+        function autoPopulateOOExpenses(driverId) {
+            const unsettledExpenses = DataManager.expenses.filter(expense =>
+                expense.driverId === driverId &&
+                expense.paidBy === 'company' &&
+                !expense.settlementId
+            );
+
+            if (unsettledExpenses.length > 0) {
+                let totalFuel = 0;
+                let totalOther = 0;
+
+                unsettledExpenses.forEach(expense => {
+                    const amount = parseFloat(expense.amount) || 0;
+                    const category = (expense.category || expense.type || '').toLowerCase();
+
+                    if (category.includes('fuel')) {
+                        totalFuel += amount;
+                    } else {
+                        totalOther += amount;
+                    }
+                });
+
+                document.getElementById('fuelDeduction').value = totalFuel.toFixed(2);
+                document.getElementById('otherDeduction').value = totalOther.toFixed(2);
+
+                // Store expense IDs for settlement creation
+                window.autoPopulatedExpenses = unsettledExpenses.map(e => e.id);
+
+                console.log(`Auto-populated: Fuel $${totalFuel}, Other $${totalOther}`);
+            } else {
+                window.autoPopulatedExpenses = [];
+            }
+        }
+
+        // ========================================
+        // CALCULATION FUNCTIONS
+        // ========================================
+
+        window.calculateSettlementTotals = function () {
+            const checkboxes = document.querySelectorAll('.load-checkbox:checked');
+            let grossPay = 0;
+            let totalMiles = 0;
+
+            checkboxes.forEach(cb => {
+                grossPay += parseFloat(cb.dataset.pay) || 0;
+                totalMiles += parseFloat(cb.dataset.miles) || 0;
+            });
+
+            const fuelDeduction = parseFloat(document.getElementById('fuelDeduction')?.value) || 0;
+            const otherDeduction = parseFloat(document.getElementById('otherDeduction')?.value) || 0;
+            const totalDeductions = fuelDeduction + otherDeduction;
+
+            const netPay = Math.max(0, grossPay - totalDeductions);
+
+            document.getElementById('grossPay').textContent = Utils.formatCurrency(grossPay);
+            document.getElementById('totalDeductions').textContent = Utils.formatCurrency(totalDeductions);
+            document.getElementById('netPay').textContent = Utils.formatCurrency(netPay);
+
+            // Store for settlement creation
+            currentSettlementData.grossPay = grossPay;
+            currentSettlementData.totalDeductions = totalDeductions;
+            currentSettlementData.netPay = netPay;
+            currentSettlementData.totalMiles = totalMiles;
+            currentSettlementData.fuelDeduction = fuelDeduction;
+            currentSettlementData.otherDeduction = otherDeduction;
+        };
+
+        window.toggleAllLoads = function (source) {
+            const checkboxes = document.querySelectorAll('.load-checkbox');
+            checkboxes.forEach(cb => cb.checked = source.checked);
+            calculateSettlementTotals();
+        };
+
+        // ========================================
+        // GENERATE SETTLEMENT
+        // ========================================
+
+        window.generateSettlement = async function () {
+            console.log('🔥 generateSettlement called!');
+
+            // Debug checks
+            console.log('DataManager available:', !!DataManager);
+            console.log('Utils available:', !!Utils);
+            console.log('currentSettlementData:', currentSettlementData);
+
+            const driverId = document.getElementById('driverSelect').value;
+            console.log('Selected driverId:', driverId);
+
+            if (!driverId) {
+                console.log('❌ No driver selected');
+                if (Utils && Utils.showNotification) {
+                    Utils.showNotification('Please select a driver', 'warning');
+                } else {
+                    alert('Please select a driver');
+                }
+                return;
+            }
+
+            const checkedLoads = document.querySelectorAll('.load-checkbox:checked');
+            console.log('Checked loads:', checkedLoads.length);
+
+            if (checkedLoads.length === 0) {
+                console.log('❌ No loads selected');
+                if (Utils && Utils.showNotification) {
+                    Utils.showNotification('Please select at least one load', 'warning');
+                } else {
+                    alert('Please select at least one load');
+                }
+                return;
+            }
+
+            const driver = DataManager.drivers.find(d => d.id === driverId);
+            const loadIds = Array.from(checkedLoads).map(cb => cb.dataset.loadId);
+            const expenseIds = window.autoPopulatedExpenses || [];
+
+            // Generate settlement number
+            const settlementNumber = 'ST-' + new Date().getFullYear() + '-' + (1000 + DataManager.settlements.length + 1);
+
+            const settlementData = {
+                settlementNumber: settlementNumber,
+                driverId: driverId,
+                driverName: `${driver.firstName} ${driver.lastName}`,
+                loadIds: loadIds,
+                expenseIds: expenseIds,
+                grossPay: currentSettlementData.grossPay,
+                totalDeductions: currentSettlementData.totalDeductions,
+                netPay: currentSettlementData.netPay,
+                totalMiles: currentSettlementData.totalMiles,
+                fuelDeduction: currentSettlementData.fuelDeduction,
+                otherDeduction: currentSettlementData.otherDeduction,
+                period: {
+                    start: currentSettlementData.periodStart,
+                    end: currentSettlementData.periodEnd,
+                    display: currentSettlementData.periodDisplay
+                },
+                status: 'pending',
+                createdAt: new Date().toISOString()
+            };
+
+            try {
+                const id = await DataManager.addSettlement(settlementData);
+
+                // Mark loads as settled
+                for (const loadId of loadIds) {
+                    await DataManager.updateLoad(loadId, { settlementId: id }, { silent: true });
+                }
+
+                // Mark expenses as settled
+                for (const expenseId of expenseIds) {
+                    await DataManager.updateExpense(expenseId, { settlementId: id });
+                }
+
+                Utils.showNotification(`Settlement ${settlementNumber} created successfully!`, 'success');
+                Utils.logActivity('Settlement Generated', `Settlement #${settlementNumber} for ${driver.firstName} ${driver.lastName}`, 'money');
+                closeCreateModal();
+                renderSettlementsTable();
+            } catch (error) {
+                console.error('Error creating settlement:', error);
+                Utils.showNotification('Failed to create settlement', 'error');
+            }
+        };
+
+        // ========================================
+        // RENDER SETTLEMENTS TABLE
+        // ========================================
+
+        function renderSettlementsTable() {
+            const tbody = document.getElementById('settlementsTableBody');
+            if (!tbody) return;
+
+            tbody.innerHTML = '';
+            let settlements = DataManager.settlements || [];
+
+            // Apply filters
+            const driverFilter = document.getElementById('driverFilter')?.value;
+            const statusFilter = document.getElementById('statusFilter')?.value;
+
+            if (driverFilter) {
+                settlements = settlements.filter(s => s.driverId === driverFilter);
+            }
+            if (statusFilter) {
+                settlements = settlements.filter(s => s.status === statusFilter);
+            }
+
+            if (settlements.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="9" class="px-6 py-8 text-center text-gray-500">
+                            <i class="fas fa-file-invoice-dollar text-4xl mb-4 text-gray-300"></i>
+                            <p>No settlements found. Click "Generate Settlement" to create one.</p>
+                        </td>
+                    </tr>
+                `;
+                updateStats();
+                return;
+            }
+
+            settlements.forEach(settlement => {
+                const statusClass = settlement.status === 'paid'
+                    ? 'bg-green-100 text-green-800'
+                    : settlement.status === 'processed'
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-yellow-100 text-yellow-800';
+
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-50';
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${settlement.settlementNumber || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${settlement.driverName || 'Unknown'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${settlement.period?.display || formatDate(settlement.createdAt)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${settlement.totalMiles || 0}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${Utils.formatCurrency(settlement.grossPay || 0)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">-${Utils.formatCurrency(settlement.totalDeductions || 0)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-bold text-green-600">${Utils.formatCurrency(settlement.netPay || 0)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 text-xs rounded-full ${statusClass}">${(settlement.status || 'pending').charAt(0).toUpperCase() + (settlement.status || 'pending').slice(1)}</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                        <button onclick="viewSettlement('${settlement.id}')" class="text-blue-600 hover:text-blue-800" title="View">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button onclick="printSettlement('${settlement.id}')" class="text-gray-600 hover:text-gray-800" title="Print PDF">
+                            <i class="fas fa-print"></i>
+                        </button>
+                        <button onclick="deleteSettlement('${settlement.id}')" class="text-red-600 hover:text-red-800" title="Delete">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            updateStats();
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        // ========================================
+        // UPDATE STATISTICS
+        // ========================================
+
+        function updateStats() {
+            const settlements = DataManager.settlements || [];
+
+            document.getElementById('totalSettlements').textContent = settlements.length;
+
+            const pending = settlements.filter(s => s.status === 'pending').length;
+            document.getElementById('pendingSettlements').textContent = pending;
+
+            // This week's total
+            const now = new Date();
+            const weekStart = Utils.getWeekStart(now);
+
+            const thisWeekSettlements = settlements.filter(s => {
+                const created = new Date(s.createdAt);
+                return created >= weekStart;
+            });
+            const thisWeekTotal = thisWeekSettlements.reduce((sum, s) => sum + (s.netPay || 0), 0);
+            document.getElementById('thisWeekTotal').textContent = Utils.formatCurrency(thisWeekTotal);
+
+            // Average settlement
+            const avgSettlement = settlements.length > 0
+                ? settlements.reduce((sum, s) => sum + (s.netPay || 0), 0) / settlements.length
+                : 0;
+            document.getElementById('avgSettlement').textContent = Utils.formatCurrency(avgSettlement);
+        }
+
+        // ========================================
+        // SETTLEMENT ACTIONS
+        // ========================================
+
+        window.viewSettlement = function (settlementId) {
+            const settlement = DataManager.settlements.find(s => s.id === settlementId);
+            if (!settlement) {
+                Utils.showNotification('Settlement not found', 'error');
+                return;
+            }
+
+            const info = `
+Settlement: ${settlement.settlementNumber}
+Driver: ${settlement.driverName}
+Period: ${settlement.period?.display || 'N/A'}
+Gross Pay: ${Utils.formatCurrency(settlement.grossPay)}
+Deductions: ${Utils.formatCurrency(settlement.totalDeductions)}
+Net Pay: ${Utils.formatCurrency(settlement.netPay)}
+Status: ${settlement.status}
+            `.trim();
+
+            alert(info);
+        };
+
+        window.deleteSettlement = async function (settlementId) {
+            if (!confirm('Are you sure you want to delete this settlement?')) return;
+
+            try {
+                const settlement = DataManager.settlements.find(s => s.id === settlementId);
+
+                // Clear settlementId from associated loads
+                if (settlement && settlement.loadIds) {
+                    for (const loadId of settlement.loadIds) {
+                        await DataManager.updateLoad(loadId, { settlementId: null }, { silent: true });
+                    }
+                }
+
+                // Clear settlementId from associated expenses
+                if (settlement && settlement.expenseIds) {
+                    for (const expenseId of settlement.expenseIds) {
+                        await DataManager.updateExpense(expenseId, { settlementId: null });
+                    }
+                }
+
+                await DataManager.deleteSettlement(settlementId);
+                Utils.logActivity('Settlement Deleted', 'Settlement record deleted', 'money');
+                Utils.showNotification('Settlement deleted', 'success');
+                renderSettlementsTable();
+            } catch (error) {
+                console.error('Error deleting settlement:', error);
+                Utils.showNotification('Failed to delete settlement', 'error');
+            }
+        };
+
+        window.refreshSettlements = function () {
+            Utils.showNotification('Refreshing settlements...', 'info');
+            renderSettlementsTable();
+            updateSettlementCharts();
+            Utils.showNotification('Settlements refreshed', 'success');
+        };
+
+        window.printAllSettlements = function () {
+            const settlements = DataManager.settlements.filter(s => s.status !== 'draft');
+
+            if (settlements.length === 0) {
+                Utils.showNotification('No settlements to print', 'warning');
+                return;
+            }
+
+            if (settlements.length > 10) {
+                if (!confirm(`This will generate ${settlements.length} PDF files. Continue?`)) {
+                    return;
+                }
+            }
+
+            Utils.showNotification(`Generating ${settlements.length} settlement PDFs...`, 'info');
+
+            settlements.forEach((settlement, index) => {
+                setTimeout(() => {
+                    try {
+                        generateSettlementPDF(settlement);
+                    } catch (error) {
+                        console.error(`Error generating PDF for settlement ${settlement.id}:`, error);
+                    }
+                }, index * 500);
+            });
+        };
+
+        // ========================================
+        // PDF GENERATION - EXACT DESIGN MATCH
+        // ========================================
+
+        window.printSettlement = function (settlementId) {
+            const settlement = DataManager.settlements.find(s => s.id === settlementId);
+            if (!settlement) {
+                Utils.showNotification('Settlement not found', 'error');
+                return;
+            }
+
+            try {
+                generateSettlementPDF(settlement);
+                Utils.showNotification('Settlement PDF generated successfully', 'success');
+            } catch (error) {
+                console.error('Error generating PDF:', error);
+                Utils.showNotification('Error generating PDF: ' + error.message, 'error');
+            }
+        };
+
+        function generateSettlementPDF(settlement) {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            // Get driver info
+            const driver = DataManager.drivers.find(d => d.id === settlement.driverId);
+            const driverName = driver ? `${driver.firstName} ${driver.lastName}` : settlement.driverName || 'Unknown Driver';
+            const driverId = driver?.driverId || driver?.id?.substring(0, 8) || 'N/A';
+
+            // Colors - NO RED, all dark charcoal
+            const darkColor = [31, 41, 55];      // #1f2937 - primary text
+            const grayColor = [107, 114, 128];   // #6b7280 - secondary text
+            const lightGray = [243, 244, 246];   // #f3f4f6 - table headers
+            const borderGray = [229, 231, 235];  // #e5e7eb - borders
+
+            let yPos = 15;
+
+            // === TOP LEFT: Date/Time stamp ===
+            doc.setFontSize(9);
+            doc.setTextColor(...grayColor);
+            const now = new Date();
+            doc.text(`${now.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })}, ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`, 15, yPos);
+
+            // === TOP RIGHT: Settlement Number ===
+            doc.text(`Settlement ${settlement.settlementNumber || 'N/A'}`, 155, yPos);
+
+            yPos = 30;
+
+            // === COMPANY HEADER LEFT SIDE ===
+            doc.setFontSize(22);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);
+            doc.text('ATS FREIGHT LLC', 15, yPos);
+
+            doc.setFontSize(10);
+            doc.setFont(undefined, 'normal');
+            doc.setTextColor(...grayColor);
+            doc.text('DOT 3169186', 15, yPos + 8);
+
+            doc.setFontSize(10);
+            doc.setTextColor(...darkColor);
+            doc.text('3191 MORSE RD STE 15', 15, yPos + 18);
+            doc.text('COLUMBUS, OH 43231', 15, yPos + 24);
+            doc.text('Phone: (614) 254-0380', 15, yPos + 30);
+
+            // === HEADER RIGHT SIDE ===
+            doc.setFontSize(18);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);
+            doc.text('DRIVER SETTLEMENT', 130, yPos);
+
+            doc.setFontSize(10);
+            doc.setFont(undefined, 'normal');
+            doc.setTextColor(...grayColor);
+            doc.text(`Settlement #: ${settlement.settlementNumber || 'N/A'}`, 130, yPos + 10);
+            doc.text(`Date: ${safeFormatDate(settlement.createdAt)}`, 130, yPos + 16);
+            doc.text(`Period: ${settlement.period?.display || 'N/A'}`, 130, yPos + 22);
+
+            yPos = 75;
+
+            // === DRIVER INFORMATION BOX ===
+            doc.setFillColor(...lightGray);
+            doc.setDrawColor(...borderGray);
+            doc.roundedRect(15, yPos, 180, 28, 2, 2, 'FD');
+
+            doc.setFontSize(11);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);
+            doc.text('Driver Information', 20, yPos + 8);
+
+            doc.setFontSize(10);
+            doc.setFont(undefined, 'normal');
+            doc.text(`Name: ${driverName} (${driverId})`, 20, yPos + 16);
+            doc.text(`Driver ID: ${driverId}`, 20, yPos + 22);
+            doc.text(`Total Miles: ${settlement.totalMiles || 0}`, 120, yPos + 16);
+
+            yPos = 110;
+
+            // === ITEMIZED LOADS & EARNINGS ===
+            doc.setFontSize(12);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);
+            doc.text('Itemized Loads & Earnings', 15, yPos);
+
+            yPos += 8;
+
+            // Table Header
+            doc.setFillColor(...lightGray);
+            doc.rect(15, yPos, 180, 10, 'F');
+            doc.setDrawColor(...borderGray);
+            doc.rect(15, yPos, 180, 10, 'S');
+
+            doc.setFontSize(8);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...grayColor);
+            doc.text('LOAD #', 18, yPos + 7);
+            doc.text('DATE', 45, yPos + 7);
+            doc.text('ROUTE', 75, yPos + 7);
+            doc.text('LOAD AMOUNT', 115, yPos + 7);
+            doc.text('CALCULATION', 145, yPos + 7);
+            doc.text('GROSS PAY', 178, yPos + 7);
+
+            yPos += 10;
+
+            // Load Rows
+            let calculatedGross = 0;
+            const driverPayPercentage = driver ? Utils.validatePayPercentage(driver.payPercentage, driver.driverType) : 0.88;
+
+            if (settlement.loadIds && settlement.loadIds.length > 0) {
+                settlement.loadIds.forEach((loadId, index) => {
+                    const load = DataManager.loads.find(l => l.id === loadId);
+                    if (!load) return;
+
+                    const loadAmount = parseFloat(load.rate?.total || load.rate || 0);
+                    const grossPay = loadAmount * driverPayPercentage;
+                    calculatedGross += grossPay;
+
+                    if (index % 2 === 0) {
+                        doc.setFillColor(255, 255, 255);
+                    } else {
+                        doc.setFillColor(250, 250, 250);
+                    }
+                    doc.rect(15, yPos, 180, 10, 'F');
+                    doc.setDrawColor(...borderGray);
+                    doc.rect(15, yPos, 180, 10, 'S');
+
+                    doc.setFontSize(9);
+                    doc.setFont(undefined, 'normal');
+                    doc.setTextColor(...darkColor);
+
+                    const loadNum = load.loadNumber || loadId.substring(0, 8);
+                    const loadDate = safeFormatDate(load.delivery?.date || load.deliveredAt);
+                    const route = `${loadNum}: ${load.pickup?.city || 'Origin'} → ${load.delivery?.city || 'Dest'}`;
+                    const calcText = `${Utils.formatCurrency(loadAmount)} × ${Math.round(driverPayPercentage * 100)}% = ${Utils.formatCurrency(grossPay)}`;
+
+                    doc.text(loadNum, 18, yPos + 7);
+                    doc.text(loadDate, 45, yPos + 7);
+                    doc.setFontSize(7);
+                    doc.text(route.substring(0, 35), 75, yPos + 7);
+                    doc.setFontSize(9);
+                    doc.text(Utils.formatCurrency(loadAmount), 118, yPos + 7);
+                    doc.setFontSize(6);
+                    doc.text(calcText, 145, yPos + 7);
+                    doc.setFontSize(9);
+                    doc.setFont(undefined, 'bold');
+                    doc.text(Utils.formatCurrency(grossPay), 178, yPos + 7);
+
+                    yPos += 10;
+                });
+            }
+
+            // GROSS PAY Total Row
+            doc.setFillColor(...lightGray);
+            doc.rect(15, yPos, 180, 10, 'F');
+            doc.setDrawColor(...borderGray);
+            doc.rect(15, yPos, 180, 10, 'S');
+
+            doc.setFontSize(10);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);
+            doc.text('GROSS PAY', 18, yPos + 7);
+            doc.text(Utils.formatCurrency(settlement.grossPay || calculatedGross), 178, yPos + 7);
+
+            yPos += 18;
+
+            // === DEDUCTIONS SECTION ===
+            if (settlement.totalDeductions > 0 || settlement.fuelDeduction > 0 || settlement.otherDeduction > 0) {
+                doc.setFontSize(12);
+                doc.setFont(undefined, 'bold');
+                doc.setTextColor(...darkColor);
+                doc.text('Itemized Deductions', 15, yPos);
+
+                yPos += 8;
+
+                // Show load-specific deductions if available
+                if (settlement.loadIds && settlement.loadIds.length > 0 && settlement.fuelDeduction > 0) {
+                    // Only show for first load to avoid duplicating the deduction
+                    const loadId = settlement.loadIds[0];
+                    const load = DataManager.loads.find(l => l.id === loadId);
+
+                    if (load) {
+                        doc.setFontSize(10);
+                        doc.setFont(undefined, 'bold');
+                        doc.setTextColor(...darkColor);
+                        doc.text(`Load #${load.loadNumber || loadId.substring(0, 8)}`, 15, yPos);
+                        yPos += 6;
+
+                        // Mini table header
+                        doc.setFillColor(...lightGray);
+                        doc.rect(15, yPos, 180, 8, 'F');
+                        doc.setDrawColor(...borderGray);
+                        doc.rect(15, yPos, 180, 8, 'S');
+
+                        doc.setFontSize(8);
+                        doc.setFont(undefined, 'bold');
+                        doc.setTextColor(...grayColor);
+                        doc.text('TYPE', 18, yPos + 5);
+                        doc.text('DESCRIPTION', 80, yPos + 5);
+                        doc.text('AMOUNT', 175, yPos + 5);
+
+                        yPos += 8;
+
+                        // Fuel deduction row
+                        doc.setFillColor(255, 255, 255);
+                        doc.rect(15, yPos, 180, 8, 'F');
+                        doc.setDrawColor(...borderGray);
+                        doc.rect(15, yPos, 180, 8, 'S');
+
+                        doc.setFontSize(9);
+                        doc.setFont(undefined, 'normal');
+                        doc.setTextColor(...darkColor);
+                        doc.text('Fuel', 18, yPos + 5);
+                        doc.text('Fuel', 80, yPos + 5);
+                        doc.text(`-${Utils.formatCurrency(settlement.fuelDeduction)}`, 175, yPos + 5);
+                        yPos += 12;
+                    }
+                }
+
+                // === DEDUCTIONS BREAKDOWN ===
+                doc.setFontSize(12);
+                doc.setFont(undefined, 'bold');
+                doc.setTextColor(...darkColor);
+                doc.text('Deductions Breakdown', 15, yPos);
+
+                yPos += 10;
+
+                const totalExpenses = (settlement.fuelDeduction || 0) + (settlement.otherDeduction || 0);
+                if (totalExpenses > 0) {
+                    doc.setFontSize(10);
+                    doc.setFont(undefined, 'normal');
+                    doc.setTextColor(...darkColor);
+                    doc.text('Expenses', 25, yPos);
+                    doc.text(`-${Utils.formatCurrency(totalExpenses)}`, 175, yPos);
+                    yPos += 7;
+                }
+
+                if (settlement.fuelDeduction > 0) {
+                    doc.setTextColor(...darkColor);
+                    doc.text('Fuel Deduction', 25, yPos);
+                    doc.text(`-${Utils.formatCurrency(settlement.fuelDeduction)}`, 175, yPos);
+                    yPos += 12;
+                }
+
+                // === TAXES SECTION ===
+                doc.setFontSize(10);
+                doc.setFont(undefined, 'bold');
+                doc.setTextColor(...darkColor);
+                doc.text('Taxes:', 25, yPos);
+                yPos += 8;
+
+                const taxes = ['Federal Tax', 'State Tax', 'Social Security', 'Medicare'];
+                doc.setFont(undefined, 'normal');
+                doc.setTextColor(...grayColor);
+                taxes.forEach(tax => {
+                    doc.text(tax, 35, yPos);
+                    doc.text('-$0.00', 175, yPos);
+                    yPos += 6;
+                });
+
+                yPos += 8;
+
+                // === TOTAL DEDUCTIONS ROW ===
+                doc.setFontSize(11);
+                doc.setFont(undefined, 'bold');
+                doc.setTextColor(...darkColor);
+                doc.text('Total Deductions', 15, yPos);
+                doc.text(`-${Utils.formatCurrency(settlement.totalDeductions || 0)}`, 175, yPos);
+
+                yPos += 15;
+            }
+
+            // === NET PAY SECTION ===
+            doc.setDrawColor(...borderGray);
+            doc.setLineWidth(0.5);
+            doc.line(15, yPos, 195, yPos);
+
+            yPos += 15;
+
+            // NET PAY label
+            doc.setFontSize(12);
+            doc.setFont(undefined, 'normal');
+            doc.setTextColor(...grayColor);
+            doc.text('NET PAY', 105, yPos, { align: 'center' });
+
+            yPos += 12;
+
+            // NET PAY amount (LARGE, DARK - NO RED)
+            doc.setFontSize(28);
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(...darkColor);  // Dark charcoal, NOT red
+            doc.text(Utils.formatCurrency(settlement.netPay || 0), 105, yPos, { align: 'center' });
+
+            yPos += 20;
+
+            // === FOOTER ===
+            doc.setDrawColor(...borderGray);
+            doc.setLineWidth(0.3);
+            doc.line(15, yPos, 195, yPos);
+
+            yPos += 10;
+
+            doc.setFontSize(9);
+            doc.setFont(undefined, 'italic');
+            doc.setTextColor(...grayColor);
+            doc.text('This is a computer-generated settlement statement. Please review all items carefully.', 105, yPos, { align: 'center' });
+
+            yPos += 6;
+            doc.text(`Generated on ${now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} at ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`, 105, yPos, { align: 'center' });
+
+            yPos += 12;
+
+            doc.setFont(undefined, 'normal');
+            doc.setTextColor(...grayColor);
+            doc.text('Print', 85, yPos);
+            doc.text('Email to Driver', 110, yPos);
+
+            // === SAVE PDF ===
+            const fileName = `Settlement_${settlement.settlementNumber || settlement.id}.pdf`;
+            doc.save(fileName);
+        }
+
+        function safeFormatDate(dateValue, fallback = 'N/A') {
+            if (!dateValue) return fallback;
+
+            try {
+                const date = new Date(dateValue);
+                if (isNaN(date.getTime())) return fallback;
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch (error) {
+                return fallback;
+            }
+        }
+
+        // ========================================
+        // CHARTS
+        // ========================================
+
+        function initializeSettlementCharts() {
+            renderSettlementTrendsChart();
+            renderPaymentStatusChart();
+        }
+
+        function updateSettlementCharts() {
+            if (typeof Plotly !== 'undefined') {
+                initializeSettlementCharts();
+            }
+        }
+
+        function renderSettlementTrendsChart() {
+            const settlements = DataManager.settlements || [];
+
+            const weeklyData = {};
+            const today = new Date();
+
+            for (let i = 7; i >= 0; i--) {
+                const weekStart = new Date(today);
+                weekStart.setDate(today.getDate() - (i * 7));
+                weekStart.setHours(0, 0, 0, 0);
+
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 6);
+                weekEnd.setHours(23, 59, 59, 999);
+
+                const weekKey = `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
+
+                weeklyData[weekKey] = {
+                    week: weekKey,
+                    settlements: 0,
+                    totalAmount: 0,
+                    avgAmount: 0
+                };
+
+                settlements.forEach(settlement => {
+                    try {
+                        const dateValue = settlement.createdAt || settlement.date;
+                        if (!dateValue) return;
+
+                        const settlementDate = new Date(dateValue);
+                        if (isNaN(settlementDate.getTime())) return;
+
+                        if (settlementDate >= weekStart && settlementDate <= weekEnd) {
+                            weeklyData[weekKey].settlements++;
+                            weeklyData[weekKey].totalAmount += parseFloat(settlement.netPay || 0);
+                        }
+                    } catch (error) {
+                        console.warn('Error processing settlement date:', settlement, error);
+                    }
+                });
+
+                if (weeklyData[weekKey].settlements > 0) {
+                    weeklyData[weekKey].avgAmount = weeklyData[weekKey].totalAmount / weeklyData[weekKey].settlements;
+                }
+            }
+
+            const weeks = Object.keys(weeklyData);
+            const settlementCounts = weeks.map(week => weeklyData[week].settlements);
+            const avgAmounts = weeks.map(week => weeklyData[week].avgAmount);
+
+            const data = [
+                {
+                    x: weeks,
+                    y: settlementCounts,
+                    name: 'Settlements Count',
+                    type: 'bar',
+                    yaxis: 'y',
+                    marker: { color: '#3b82f6' }
+                },
+                {
+                    x: weeks,
+                    y: avgAmounts,
+                    name: 'Avg Amount',
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    yaxis: 'y2',
+                    line: { color: '#10b981', width: 3 },
+                    marker: { color: '#10b981', size: 8 }
+                }
+            ];
+
+            const layout = {
+                title: '',
+                showlegend: true,
+                margin: { t: 20, b: 40, l: 60, r: 60 },
+                xaxis: { title: 'Week', tickangle: -45 },
+                yaxis: { title: 'Number of Settlements', side: 'left', color: '#3b82f6' },
+                yaxis2: { title: 'Average Amount ($)', side: 'right', overlaying: 'y', color: '#10b981', tickformat: '$,.0f' },
+                font: { family: 'Inter, sans-serif', size: 12 }
+            };
+
+            Plotly.newPlot('settlementChart', data, layout, { responsive: true, displayModeBar: false });
+        }
+
+        function renderPaymentStatusChart() {
+            const settlements = DataManager.settlements || [];
+
+            const statusCounts = { 'Paid': 0, 'Pending': 0, 'Processed': 0, 'Draft': 0 };
+
+            settlements.forEach(settlement => {
+                const status = settlement.status || 'pending';
+                switch (status.toLowerCase()) {
+                    case 'paid': statusCounts['Paid']++; break;
+                    case 'processed': statusCounts['Processed']++; break;
+                    case 'draft': statusCounts['Draft']++; break;
+                    default: statusCounts['Pending']++;
+                }
+            });
+
+            const labels = Object.keys(statusCounts);
+            const values = Object.values(statusCounts);
+            const colors = ['#10b981', '#f59e0b', '#3b82f6', '#6b7280'];
+
+            const data = [{
+                values: values,
+                labels: labels,
+                type: 'pie',
+                hole: 0.4,
+                marker: { colors: colors, line: { color: '#ffffff', width: 2 } },
+                textinfo: 'label+percent',
+                textposition: 'outside',
+                textfont: { size: 12, family: 'Inter, sans-serif' }
+            }];
+
+            const layout = {
+                title: '',
+                showlegend: true,
+                margin: { t: 20, b: 20, l: 20, r: 20 },
+                font: { family: 'Inter, sans-serif', size: 12 },
+                legend: {
+                    orientation: 'h', x: 0.5, xanchor: 'center', y: -0.1
+                }
+            };
+
+            Plotly.newPlot('paymentStatusChart', data, layout, { responsive: true, displayModeBar: false });
+        }
+
+        // ========================================
+        // PAGE INITIALIZATION
+        // ========================================
+        // This MUST be at the end, after all functions are defined
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('Settlements page ready');
+
+            // Wait for DataManager to be fully initialized
+            let attempts = 0;
+            while ((!DataManager || !DataManager.settlements) && attempts < 50) {
+                console.log('Waiting for DataManager to initialize...');
+                await new Promise(r => setTimeout(r, 200));
+                attempts++;
+            }
+
+            if (!DataManager || !DataManager.settlements) {
+                console.error('DataManager failed to initialize');
+                return;
+            }
+
+            console.log('DataManager ready, rendering settlements table...');
+            renderSettlementsTable();
+            populateFilters();
+            initializeSettlementCharts();
+
+            // Set default week to current week
+            setCurrentWeek();
+        });
+    </script>
+
+</body>
+
+</html>

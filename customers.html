@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Management - ATS FREIGHT LLC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .bg-navy {
+            background-color: #1f2937;
+        }
+
+        .text-navy {
+            color: #1f2937;
+        }
+
+        .gradient-bg {
+            background-color: #1f2937;
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .status-active {
+            background-color: #10b981;
+        }
+
+        .status-inactive {
+            background-color: #6b7280;
+        }
+
+        .nav-item {
+            transition: all 0.2s ease;
+        }
+
+        .nav-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-item.active {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-4">
+                    <div
+                        class="w-10 h-10 bg-white rounded-full flex items-center justify-center text-blue-800 font-bold">
+                        ST</div>
+                    <div>
+                        <h1 class="text-xl font-bold">ATS FREIGHT LLC</h1>
+                        <p class="text-sm opacity-90">Transportation Management System</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-6">
+                    <a href="index.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-tachometer-alt mr-2"></i>Dashboard
+                    </a>
+                    <a href="loads.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-truck mr-2"></i>Loads
+                    </a>
+                    <a href="drivers.html" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-users mr-2"></i>Drivers
+                    </a>
+                    <span class="nav-item active px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-building mr-2"></i>Customers
+                    </span>
+                    <span class="text-sm">Welcome, Admin</span>
+                    <button onclick="Auth.signOut()" class="nav-item px-3 py-2 rounded-md text-sm font-medium">
+                        <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Page Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h2 class="text-3xl font-bold text-gray-900">Customer Management</h2>
+                <p class="text-gray-600 mt-2">Manage shippers, receivers, and brokers</p>
+            </div>
+            <button onclick="openCreateCustomerModal()"
+                class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">
+                <i class="fas fa-plus mr-2"></i>Add New Customer
+            </button>
+        </div>
+
+        <!-- Customers Table -->
+        <div class="bg-white rounded-lg card-shadow">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-semibold text-gray-900">All Customers</h3>
+                    <div class="flex items-center space-x-4">
+                        <button onclick="Utils.exportToCSV(DataManager.customers, 'customers.csv')"
+                            class="text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-download mr-2"></i>Export
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Company</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Contact Person</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Contact Info</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Address</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="customersTableBody" class="bg-white divide-y divide-gray-200">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Customer Modal -->
+    <div id="customerModal" class="modal" onclick="if(event.target === this) closeModal();">
+        <div class="modal-content" onclick="event.stopPropagation();">
+            <div class="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4">
+                <div class="flex justify-between items-center">
+                    <h3 id="modalTitle" class="text-xl font-semibold">Add New Customer</h3>
+                    <button onclick="closeModal()" class="text-white hover:text-gray-200">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="p-6">
+                <form id="customerForm" class="space-y-6">
+                    <input type="hidden" id="customerId">
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
+                            <input type="text" id="companyName" required
+                                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Customer Number</label>
+                            <input type="text" id="customerNumber" required
+                                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="CUST-001">
+                        </div>
+                    </div>
+
+                    <div class="border-t pt-6">
+                        <h4 class="text-lg font-semibold text-gray-900 mb-4">Contact Information</h4>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Contact Name</label>
+                                <input type="text" id="contactName"
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Phone</label>
+                                <input type="tel" id="phone"
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                                <input type="email" id="email"
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border-t pt-6">
+                        <h4 class="text-lg font-semibold text-gray-900 mb-4">Address</h4>
+                        <div class="grid grid-cols-1 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Street Address</label>
+                                <input type="text" id="address"
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                            <div class="grid grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">City</label>
+                                    <input type="text" id="city"
+                                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">State</label>
+                                    <input type="text" id="state"
+                                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">ZIP</label>
+                                    <input type="text" id="zip"
+                                        class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border-t pt-6 flex justify-end space-x-4">
+                        <button type="button" onclick="closeModal()"
+                            class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit"
+                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                            Save Customer
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
+    <script src="data-stability.js"></script>
+    <script src="main.js"></script>
+    <script src="populate-mock-data.js"></script>
+    <script>
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            Auth.init();
+            await DataManager.init();
+            renderCustomers();
+        });
+
+        function renderCustomers() {
+            const tbody = document.getElementById('customersTableBody');
+            tbody.innerHTML = '';
+
+            DataManager.customers.forEach(customer => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="text-sm font-medium text-gray-900">${customer.company.name}</div>
+                        <div class="text-sm text-gray-500">${customer.customerNumber}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="text-sm text-gray-900">${customer.contact.name}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="text-sm text-gray-900">${customer.contact.phone}</div>
+                        <div class="text-sm text-gray-500">${customer.contact.email}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="text-sm text-gray-900">${customer.company.city}, ${customer.company.state}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button onclick="editCustomer('${customer.id}')" class="text-blue-600 hover:text-blue-900 mr-3">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button onclick="deleteCustomer('${customer.id}')" class="text-red-600 hover:text-red-900">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function openCreateCustomerModal() {
+            try {
+                const modal = document.getElementById('customerModal');
+                const form = document.getElementById('customerForm');
+                const modalTitle = document.getElementById('modalTitle');
+                const customerId = document.getElementById('customerId');
+                
+                if (!modal || !form || !modalTitle) {
+                    console.error('Modal elements not found');
+                    Utils.showNotification('Error opening customer form', 'error');
+                    return;
+                }
+                
+                modalTitle.textContent = 'Add New Customer';
+                form.reset();
+                if (customerId) customerId.value = '';
+                modal.classList.add('show');
+            } catch (error) {
+                console.error('Error opening customer modal:', error);
+                Utils.showNotification('Error opening customer form: ' + error.message, 'error');
+            }
+        }
+
+        function closeModal() {
+            try {
+                const modal = document.getElementById('customerModal');
+                if (modal) {
+                    modal.classList.remove('show');
+                }
+            } catch (error) {
+                console.error('Error closing modal:', error);
+            }
+        }
+
+        function editCustomer(id) {
+            try {
+                const customer = DataManager.getCustomer(id);
+                if (!customer) {
+                    Utils.showNotification('Customer not found', 'error');
+                    return;
+                }
+
+                const modal = document.getElementById('customerModal');
+                const modalTitle = document.getElementById('modalTitle');
+                const customerId = document.getElementById('customerId');
+                
+                if (!modal || !modalTitle) {
+                    console.error('Modal elements not found');
+                    return;
+                }
+
+                modalTitle.textContent = 'Edit Customer';
+                if (customerId) customerId.value = customer.id;
+                
+                // Safely populate form fields
+                const companyName = document.getElementById('companyName');
+                const customerNumber = document.getElementById('customerNumber');
+                const contactName = document.getElementById('contactName');
+                const phone = document.getElementById('phone');
+                const email = document.getElementById('email');
+                const address = document.getElementById('address');
+                const city = document.getElementById('city');
+                const state = document.getElementById('state');
+                const zip = document.getElementById('zip');
+                
+                if (companyName) companyName.value = customer.company?.name || '';
+                if (customerNumber) customerNumber.value = customer.customerNumber || '';
+                if (contactName) contactName.value = customer.contact?.name || '';
+                if (phone) phone.value = customer.contact?.phone || '';
+                if (email) email.value = customer.contact?.email || '';
+                if (address) address.value = customer.company?.address || '';
+                if (city) city.value = customer.company?.city || '';
+                if (state) state.value = customer.company?.state || '';
+                if (zip) zip.value = customer.company?.zip || '';
+
+                modal.classList.add('show');
+            } catch (error) {
+                console.error('Error editing customer:', error);
+                Utils.showNotification('Error opening customer form: ' + error.message, 'error');
+            }
+        }
+
+        async function deleteCustomer(id) {
+            if (confirm('Are you sure you want to delete this customer?')) {
+                await DataManager.deleteCustomer(id);
+                renderCustomers();
+            }
+        }
+
+        // Form submission
+        window.customerForm_handler = async function (e) {
+            // e.preventDefault() is handled by main.js universal listener
+
+            const submitBtn = document.querySelector('#customerForm button[type="submit"]');
+            if (!submitBtn) {
+                console.error('Submit button not found');
+                return;
+            }
+
+            const originalText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+
+            try {
+                // Validate required fields manually
+                const companyName = document.getElementById('companyName');
+                const customerNumber = document.getElementById('customerNumber');
+                
+                if (!companyName || !companyName.value.trim()) {
+                    throw new Error('Company Name is required');
+                }
+                if (!customerNumber || !customerNumber.value.trim()) {
+                    throw new Error('Customer Number is required');
+                }
+
+                const customerData = {
+                    customerNumber: customerNumber.value.trim(),
+                    company: {
+                        name: companyName.value.trim(),
+                        address: document.getElementById('address')?.value?.trim() || '',
+                        city: document.getElementById('city')?.value?.trim() || '',
+                        state: document.getElementById('state')?.value?.trim() || '',
+                        zip: document.getElementById('zip')?.value?.trim() || ''
+                    },
+                    contact: {
+                        name: document.getElementById('contactName')?.value?.trim() || '',
+                        email: document.getElementById('email')?.value?.trim() || '',
+                        phone: document.getElementById('phone')?.value?.trim() || ''
+                    }
+                };
+
+                const id = document.getElementById('customerId')?.value;
+                if (id) {
+                    await DataManager.updateCustomer(id, customerData);
+                    Utils.showNotification('Customer updated successfully!', 'success');
+                } else {
+                    await DataManager.addCustomer(customerData);
+                    Utils.showNotification('Customer added successfully!', 'success');
+                }
+
+                closeModal();
+                renderCustomers();
+            } catch (error) {
+                console.error('Error saving customer:', error);
+                Utils.showNotification('Failed to save customer: ' + (error.message || 'Unknown error'), 'error');
+                // Don't close modal on error - let user fix and try again
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
+            }
+        };
+
+        // Modal close is handled inline in the HTML onclick handler
+    </script>
+</body>
+
+</html>
