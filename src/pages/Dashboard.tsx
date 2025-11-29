@@ -32,7 +32,7 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
-  const { loads, kpis, addLoad, drivers, invoices } = useTMS();
+  const { loads, kpis, addLoad, drivers, invoices, settlements, expenses, factoringCompanies } = useTMS();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   // Calculate real revenue trends from loads (last 6 months)
@@ -116,6 +116,148 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const COLORS = ['#94a3b8', '#facc15', '#3b82f6', '#10b981', '#a855f7', '#ef4444'];
 
+  // Calculate Net Profit using the same logic as Reports page
+  const netProfitData = useMemo(() => {
+    // Only count delivered/completed loads for revenue
+    const revenueLoads = loads.filter(l => 
+      l.status === LoadStatus.Delivered || l.status === LoadStatus.Completed
+    );
+
+    // Calculate total revenue (using grandTotal if available, otherwise rate)
+    let totalRevenue = 0;
+    revenueLoads.forEach(load => {
+      const grossAmount = load.grandTotal || load.rate || 0;
+      if (load.driverId) {
+        const driver = drivers.find(d => d.id === load.driverId);
+        if (driver && driver.type === 'OwnerOperator') {
+          // For O/O, use full revenue
+          totalRevenue += grossAmount;
+        } else {
+          // For company drivers, use company revenue calculation
+          totalRevenue += calculateCompanyRevenue(grossAmount, driver);
+        }
+      } else {
+        totalRevenue += grossAmount;
+      }
+    });
+
+    // Calculate total driver pay from settlements
+    let totalDriverPay = 0;
+    settlements.forEach(settlement => {
+      if (settlement.type === 'driver' || !settlement.type) {
+        const payeeId = (settlement as any).payeeId || settlement.driverId;
+        const driver = drivers.find(d => d.id === payeeId);
+        if (driver) {
+          if (driver.type === 'OwnerOperator') {
+            // O/O: use grossPay
+            totalDriverPay += settlement.grossPay || 0;
+          } else {
+            // Company driver: use netPay
+            totalDriverPay += settlement.netPay || 0;
+          }
+        }
+      }
+    });
+
+    // If no settlements, estimate from loads
+    if (settlements.length === 0) {
+      revenueLoads.forEach(load => {
+        if (!load.driverId) return;
+        const driver = drivers.find(d => d.id === load.driverId);
+        if (!driver) return;
+
+        if (driver.type === 'OwnerOperator') {
+          const payPercentage = (driver.rateOrSplit || driver.payPercentage || 88) / 100;
+          totalDriverPay += (load.rate || 0) * payPercentage;
+        } else {
+          // Company driver: use driverTotalGross if available, otherwise estimate
+          totalDriverPay += load.driverTotalGross || load.driverBasePay || load.rate || 0;
+        }
+      });
+    }
+
+    // Calculate company expenses (same logic as Reports)
+    const companyExpenses = expenses.filter(exp => {
+      // Must be paid by company
+      if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
+        return false;
+      }
+      
+      // If expense is linked to a driver, check if driver is O/O
+      if (exp.driverId) {
+        const driver = drivers.find(d => d.id === exp.driverId);
+        if (driver && driver.type === 'OwnerOperator') {
+          // This is an O/O expense - check if it's a pass-through
+          const expenseType = (exp.type || '').toLowerCase();
+          const isPassThrough = 
+            expenseType === 'fuel' || 
+            expenseType === 'insurance' || 
+            expenseType === 'toll' ||
+            expenseType === 'maintenance' ||
+            (exp.description || '').toLowerCase().includes('eld');
+          
+          // O/O pass-through expenses are NOT company expenses
+          if (isPassThrough) {
+            return false;
+          }
+        }
+      }
+      
+      return true;
+    });
+
+    const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
+
+    // Calculate factoring expenses (factoring fees from all factored loads)
+    const factoringExpenses = revenueLoads
+      .filter(load => load.isFactored)
+      .reduce((sum, load) => {
+        // If factoringFee is already stored, use it
+        if (load.factoringFee && load.factoringFee > 0) {
+          return sum + load.factoringFee;
+        }
+        
+        // Otherwise, calculate it from grandTotal and fee percentage
+        const grandTotal = load.grandTotal || load.rate || 0;
+        if (grandTotal > 0) {
+          // Try to get fee percentage from load first
+          let feePercentage = load.factoringFeePercent;
+          
+          // If not on load, get it from the factoring company
+          if ((!feePercentage || feePercentage === 0) && load.factoringCompanyId) {
+            const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
+            if (factoringCompany && factoringCompany.feePercentage) {
+              feePercentage = factoringCompany.feePercentage;
+            }
+          }
+          
+          // If still no percentage, default to 2.5% (typical factoring fee)
+          if (!feePercentage || feePercentage === 0) {
+            feePercentage = 2.5; // Default factoring fee percentage
+          }
+          
+          const factoringFee = grandTotal * (feePercentage / 100);
+          return sum + factoringFee;
+        }
+        
+        return sum;
+      }, 0);
+
+    // Calculate dispatcher cost (sum of all dispatcher commissions)
+    const dispatcherCost = revenueLoads.reduce((sum, load) => {
+      return sum + (load.dispatcherCommissionAmount || 0);
+    }, 0);
+
+    // Total expenses including fees
+    const totalExpensesWithFees = totalExpenses + factoringExpenses + dispatcherCost;
+
+    // Net profit (Revenue - Total Expenses - Driver Pay)
+    const netProfit = totalRevenue - totalExpensesWithFees - totalDriverPay;
+    const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
+
+    return { netProfit, profitMargin };
+  }, [loads, drivers, settlements, expenses, factoringCompanies]);
+
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-8">
       {/* Header */}
@@ -170,9 +312,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         />
         <StatsCard 
           label="Net Profit" 
-          value={`$${kpis.profit.toLocaleString()}`} 
+          value={`$${netProfitData.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
           icon={TrendingUp} 
-          trend={kpis.profitChange}
+          trend={netProfitData.profitMargin}
           color="orange"
         />
       </div>

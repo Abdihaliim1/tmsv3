@@ -15,6 +15,7 @@ const AddDriverModal: React.FC<AddDriverModalProps> = ({ isOpen, onClose, onSubm
     lastName: '',
     status: 'active',
     type: 'Company',
+    employeeType: 'driver', // Required field
     rateOrSplit: 0,
     email: '',
     phone: '',
@@ -45,7 +46,7 @@ const AddDriverModal: React.FC<AddDriverModalProps> = ({ isOpen, onClose, onSubm
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 md:p-0"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 animate-in fade-in zoom-in duration-200">
+      <div className="bg-white rounded-xl md:rounded-xl shadow-xl w-full max-w-lg mx-4 md:mx-4 animate-in fade-in zoom-in duration-200 h-full md:h-auto max-h-[90vh] md:max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900">Onboard New Driver</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
@@ -93,7 +94,7 @@ const AddDriverModal: React.FC<AddDriverModalProps> = ({ isOpen, onClose, onSubm
 
           <div className="flex justify-end gap-3 pt-4">
             <button type="button" onClick={onClose} className="px-4 py-2 text-slate-700 hover:bg-slate-50 rounded-lg">Cancel</button>
-            <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Driver</button>
+            <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Employee</button>
           </div>
         </form>
       </div>

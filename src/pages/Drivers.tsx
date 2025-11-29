@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Download } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Driver, DriverStatus, PaymentType, DriverType, NewDriverInput } from '../types';
+import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType } from '../types';
 
 const Drivers: React.FC = () => {
-  const { drivers, loads, trucks, addDriver, updateDriver, deleteDriver } = useTMS();
+  const { employees, drivers, loads, trucks, addEmployee, updateEmployee, deleteEmployee, addDriver, updateDriver, deleteDriver } = useTMS();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -13,30 +13,35 @@ const Drivers: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // Filter drivers
-  const filteredDrivers = useMemo(() => {
-    return drivers.filter(driver => {
-      const matchesStatus = !statusFilter || driver.status === statusFilter;
-      const matchesPayment = !paymentFilter || driver.payment?.type === paymentFilter;
+  const [employeeTypeFilter, setEmployeeTypeFilter] = useState<string>('');
+
+  // Filter employees (showing all types, not just drivers)
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(employee => {
+      const matchesStatus = !statusFilter || employee.status === statusFilter;
+      const matchesType = !employeeTypeFilter || employee.employeeType === employeeTypeFilter;
+      const matchesPayment = !paymentFilter || employee.payment?.type === paymentFilter;
       const matchesSearch = !searchTerm ||
-        driver.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        driver.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (driver.driverNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (driver.license?.number || '').toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesStatus && matchesPayment && matchesSearch;
+        employee.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        employee.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (employee.employeeNumber || employee.driverNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (employee.license?.number || '').toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesStatus && matchesType && matchesPayment && matchesSearch;
     });
-  }, [drivers, statusFilter, paymentFilter, searchTerm]);
+  }, [employees, statusFilter, employeeTypeFilter, paymentFilter, searchTerm]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredDrivers.length / itemsPerPage);
-  const paginatedDrivers = useMemo(() => {
+  const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
+  const paginatedEmployees = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    return filteredDrivers.slice(start, start + itemsPerPage);
-  }, [filteredDrivers, currentPage]);
+    return filteredEmployees.slice(start, start + itemsPerPage);
+  }, [filteredEmployees, currentPage]);
 
   // Calculate stats
   const stats = useMemo(() => {
-    const activeDrivers = drivers.filter(d => d.status === 'active').length;
+    const activeEmployees = employees.filter(e => e.status === 'active').length;
+    const activeDrivers = employees.filter(e => e.status === 'active' && (e.employeeType === 'driver' || e.employeeType === 'owner_operator')).length;
+    const activeDispatchers = employees.filter(e => e.status === 'active' && e.employeeType === 'dispatcher').length;
     
     const deliveredLoads = loads.filter(l => l.status === 'delivered' || l.status === 'completed');
     const onTimeLoads = deliveredLoads.filter(l => {
@@ -52,14 +57,14 @@ const Drivers: React.FC = () => {
 
     const safetyScore = deliveredLoads.length > 0 ? 98.5 : 0;
 
-    return { activeDrivers, onTimePercentage, avgMiles, safetyScore };
-  }, [drivers, loads]);
+    return { activeEmployees, activeDrivers, activeDispatchers, onTimePercentage, avgMiles, safetyScore };
+  }, [employees, loads]);
 
   const formatCurrency = (amount: number) => {
     return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const getStatusColor = (status: DriverStatus) => {
+  const getStatusColor = (status: EmployeeStatus) => {
     const colors = {
       'active': 'bg-green-100 text-green-800',
       'inactive': 'bg-gray-100 text-gray-800',
@@ -99,29 +104,44 @@ const Drivers: React.FC = () => {
     return truck ? `${truck.number} - ${truck.make} ${truck.model}` : 'Unknown';
   };
 
-  const handleEdit = (driver: Driver) => {
-    setEditingDriver(driver);
+  const handleEdit = (employee: Employee) => {
+    setEditingDriver(employee as Driver);
     setIsModalOpen(true);
   };
 
-  const handleDelete = (driverId: string) => {
-    if (window.confirm('Are you sure you want to delete this driver?')) {
-      deleteDriver(driverId);
+  const handleDelete = (employeeId: string) => {
+    if (window.confirm('Are you sure you want to delete this employee?')) {
+      deleteEmployee(employeeId);
     }
+  };
+
+  const getEmployeeTypeLabel = (type: EmployeeType) => {
+    const labels: Record<EmployeeType, string> = {
+      'driver': 'Driver',
+      'dispatcher': 'Dispatcher',
+      'manager': 'Manager',
+      'safety': 'Safety',
+      'owner_operator': 'Owner Operator',
+      'owner': 'Owner',
+      'admin': 'Admin',
+      'other': 'Other',
+    };
+    return labels[type] || type;
   };
 
   const handleExport = () => {
     const csv = [
-      ['Driver #', 'Name', 'Status', 'Type', 'Payment Type', 'Rate', 'Phone', 'Email'].join(','),
-      ...filteredDrivers.map(driver => [
-        driver.driverNumber || '',
-        `${driver.firstName} ${driver.lastName}`,
-        driver.status,
-        getDriverTypeLabel(driver.type),
-        driver.payment?.type || '',
-        getPaymentDisplay(driver),
-        driver.phone,
-        driver.email,
+      ['Employee #', 'Name', 'Employee Type', 'Status', 'Type', 'Payment Type', 'Rate', 'Phone', 'Email'].join(','),
+      ...filteredEmployees.map(employee => [
+        employee.employeeNumber || employee.driverNumber || '',
+        `${employee.firstName} ${employee.lastName}`,
+        getEmployeeTypeLabel(employee.employeeType),
+        employee.status,
+        (employee.employeeType === 'driver' || employee.employeeType === 'owner_operator') ? getDriverTypeLabel(employee.type) : 'N/A',
+        employee.payment?.type || '',
+        (employee.employeeType === 'driver' || employee.employeeType === 'owner_operator') ? getPaymentDisplay(employee as Driver) : 'N/A',
+        employee.phone,
+        employee.email,
       ].join(','))
     ].join('\n');
 
@@ -138,8 +158,8 @@ const Drivers: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Driver Management</h1>
-          <p className="text-slate-600 mt-2">Manage drivers, payments, and performance</p>
+          <h1 className="text-3xl font-bold text-slate-900">Employee Management</h1>
+          <p className="text-slate-600 mt-2">Manage employees, drivers, dispatchers, and performance</p>
         </div>
         <button
           onClick={() => {
@@ -149,7 +169,7 @@ const Drivers: React.FC = () => {
           className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
         >
           <Plus size={20} />
-          Add New Driver
+          Add New Employee
         </button>
       </div>
 
@@ -161,8 +181,8 @@ const Drivers: React.FC = () => {
               <UserCheck size={20} className="text-green-600" />
             </div>
             <div className="ml-5">
-              <dt className="text-sm font-medium text-slate-500">Active Drivers</dt>
-              <dd className="text-2xl font-semibold text-slate-900">{stats.activeDrivers}</dd>
+              <dt className="text-sm font-medium text-slate-500">Active Employees</dt>
+              <dd className="text-2xl font-semibold text-slate-900">{stats.activeEmployees}</dd>
             </div>
           </div>
         </div>
@@ -208,6 +228,27 @@ const Drivers: React.FC = () => {
       <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Employee Type</label>
+            <select
+              value={employeeTypeFilter}
+              onChange={(e) => {
+                setEmployeeTypeFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All Types</option>
+              <option value="driver">Driver</option>
+              <option value="dispatcher">Dispatcher</option>
+              <option value="manager">Manager</option>
+              <option value="safety">Safety</option>
+              <option value="owner_operator">Owner Operator</option>
+              <option value="owner">Owner</option>
+              <option value="admin">Admin</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Status</label>
             <select
               value={statusFilter}
@@ -218,7 +259,7 @@ const Drivers: React.FC = () => {
               className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
             >
               <option value="">All Statuses</option>
-              {(['active', 'inactive', 'on_leave', 'terminated'] as DriverStatus[]).map(status => (
+              {(['active', 'inactive', 'on_leave', 'terminated'] as EmployeeStatus[]).map(status => (
                 <option key={status} value={status}>{status.replace('_', ' ').toUpperCase()}</option>
               ))}
             </select>
@@ -250,7 +291,7 @@ const Drivers: React.FC = () => {
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                placeholder="Driver name, license #..."
+                placeholder="Employee name, ID..."
                 className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -270,14 +311,15 @@ const Drivers: React.FC = () => {
       {/* Drivers Table */}
       <div className="bg-white rounded-lg border border-slate-200 shadow-sm">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-          <h3 className="text-lg font-semibold text-slate-900">All Drivers</h3>
+          <h3 className="text-lg font-semibold text-slate-900">All Employees</h3>
         </div>
 
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Driver</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Employee</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Type</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">License</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Payment Type</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Rate</th>
@@ -287,82 +329,119 @@ const Drivers: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-200">
-              {paginatedDrivers.length === 0 ? (
+              {paginatedEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                    No drivers found. Add a new driver to get started.
+                  <td colSpan={8} className="px-6 py-12 text-center text-slate-500">
+                    No employees found. Add a new employee to get started.
                   </td>
                 </tr>
               ) : (
-                paginatedDrivers.map(driver => (
-                  <tr key={driver.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div className="h-10 w-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold">
-                          {driver.firstName[0]}{driver.lastName[0]}
-                        </div>
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-slate-900">
-                            {driver.firstName} {driver.lastName}
+                paginatedEmployees.map(employee => {
+                  const isDriver = employee.employeeType === 'driver' || employee.employeeType === 'owner_operator';
+                  return (
+                    <tr key={employee.id} className="hover:bg-slate-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <div className="h-10 w-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold">
+                            {employee.firstName[0]}{employee.lastName[0]}
                           </div>
-                          <div className="text-sm text-slate-500">{driver.driverNumber || ''}</div>
+                          <div className="ml-4">
+                            <div className="text-sm font-medium text-slate-900">
+                              {employee.firstName} {employee.lastName}
+                            </div>
+                            <div className="text-sm text-slate-500">{employee.employeeNumber || employee.driverNumber || ''}</div>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-slate-900">{driver.license?.number || 'N/A'}</div>
-                      <div className="text-sm text-slate-500">
-                        {driver.license?.state || ''} {driver.license?.expiration ? `Exp: ${driver.license.expiration}` : ''}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-slate-900">{getDriverTypeLabel(driver.type)}</div>
-                      <div className="text-xs text-slate-500">
-                        {driver.payment?.type ? driver.payment.type.replace('_', ' ').toUpperCase() : 'Unknown'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-slate-900">{getPaymentDisplay(driver)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-slate-900">
-                        {getCurrentTruckDisplay(driver.currentTruckId || driver.truckId)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(driver.status)}`}>
-                        {driver.status.replace('_', ' ').toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleEdit(driver)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="Edit"
-                        >
-                          <Edit size={18} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            alert(`Driver: ${driver.firstName} ${driver.lastName}\nStatus: ${driver.status}\nType: ${getDriverTypeLabel(driver.type)}\nRate: ${getPaymentDisplay(driver)}`);
-                          }}
-                          className="text-green-600 hover:text-green-900"
-                          title="View"
-                        >
-                          <Eye size={18} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(driver.id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="Delete"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-slate-900">{getEmployeeTypeLabel(employee.employeeType)}</div>
+                        {isDriver && (
+                          <div className="text-xs text-slate-500">{getDriverTypeLabel(employee.type)}</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isDriver ? (
+                          <>
+                            <div className="text-sm text-slate-900">{employee.license?.number || 'N/A'}</div>
+                            {employee.license?.state && (
+                              <div className="text-sm text-slate-500">
+                                {employee.license.state} {employee.license.expiration ? `Exp: ${employee.license.expiration}` : ''}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-sm text-slate-500">N/A</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isDriver ? (
+                          <>
+                            <div className="text-sm text-slate-900">{getDriverTypeLabel(employee.type)}</div>
+                            <div className="text-xs text-slate-500">
+                              {employee.payment?.type ? employee.payment.type.replace('_', ' ').toUpperCase() : 'Unknown'}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-sm text-slate-500">N/A</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isDriver ? (
+                          <div className="text-sm text-slate-900">{getPaymentDisplay(employee as Driver)}</div>
+                        ) : employee.employeeType === 'dispatcher' && employee.dispatcherCommissionType ? (
+                          <div className="text-sm text-slate-900">
+                            {employee.dispatcherCommissionType === 'percentage' ? `${employee.dispatcherCommissionRate}%` : 
+                             employee.dispatcherCommissionType === 'flat_fee' ? `$${employee.dispatcherCommissionRate}` :
+                             employee.dispatcherCommissionType === 'per_mile' ? `$${employee.dispatcherCommissionRate}/mi` : 'N/A'}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-slate-500">N/A</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isDriver ? (
+                          <div className="text-sm text-slate-900">
+                            {getCurrentTruckDisplay(employee.currentTruckId || employee.truckId)}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-slate-500">N/A</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(employee.status)}`}>
+                          {employee.status.replace('_', ' ').toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleEdit(employee)}
+                            className="text-blue-600 hover:text-blue-900"
+                            title="Edit"
+                          >
+                            <Edit size={18} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              alert(`Employee: ${employee.firstName} ${employee.lastName}\nType: ${getEmployeeTypeLabel(employee.employeeType)}\nStatus: ${employee.status}`);
+                            }}
+                            className="text-green-600 hover:text-green-900"
+                            title="View"
+                          >
+                            <Eye size={18} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(employee.id)}
+                            className="text-red-600 hover:text-red-900"
+                            title="Delete"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -374,9 +453,9 @@ const Drivers: React.FC = () => {
             <div className="text-sm text-slate-700">
               Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
               <span className="font-medium">
-                {Math.min(currentPage * itemsPerPage, filteredDrivers.length)}
+                {Math.min(currentPage * itemsPerPage, filteredEmployees.length)}
               </span>{' '}
-              of <span className="font-medium">{filteredDrivers.length}</span> drivers
+              of <span className="font-medium">{filteredEmployees.length}</span> employees
             </div>
             <div className="flex gap-2">
               <button
@@ -419,11 +498,12 @@ const Drivers: React.FC = () => {
             setIsModalOpen(false);
             setEditingDriver(null);
           }}
-          onSave={(driverData) => {
+          onSave={(employeeData) => {
+            // Use addEmployee/updateEmployee for all employee types (not just drivers)
             if (editingDriver) {
-              updateDriver(editingDriver.id, driverData);
+              updateEmployee(editingDriver.id, employeeData);
             } else {
-              addDriver(driverData);
+              addEmployee(employeeData);
             }
             setIsModalOpen(false);
             setEditingDriver(null);
@@ -434,7 +514,7 @@ const Drivers: React.FC = () => {
   );
 };
 
-// Driver Modal Component
+// Employee Modal Component
 interface DriverModalProps {
   driver: Driver | null;
   onClose: () => void;
@@ -442,16 +522,20 @@ interface DriverModalProps {
 }
 
 const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) => {
-  const { drivers, trucks } = useTMS();
+  const { employees, trucks } = useTMS();
   const [formData, setFormData] = useState<Partial<NewDriverInput>>({
-    driverNumber: driver?.driverNumber || `DRV-${drivers.length + 101}`,
+    employeeNumber: driver?.employeeNumber || driver?.driverNumber || '',
+    driverNumber: driver?.driverNumber || driver?.employeeNumber || '',
     firstName: driver?.firstName || '',
     lastName: driver?.lastName || '',
     status: driver?.status || 'active',
+    employeeType: driver?.employeeType || 'driver',
     type: driver?.type || 'Company',
     email: driver?.email || '',
     phone: driver?.phone || '',
     currentTruckId: driver?.currentTruckId || driver?.truckId || '',
+    dispatcherCommissionType: driver?.dispatcherCommissionType,
+    dispatcherCommissionRate: driver?.dispatcherCommissionRate || 0,
     dob: driver?.dob || '',
     ssn: driver?.ssn || '',
     address: driver?.address || '',
@@ -496,6 +580,9 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
 
   const [paymentType, setPaymentType] = useState<PaymentType>(formData.payment?.type || 'per_mile');
   const [driverType, setDriverType] = useState<DriverType>(formData.type || 'Company');
+  const [employeeType, setEmployeeType] = useState<EmployeeType>(formData.employeeType || 'driver');
+  
+  const isDriverOrOwnerOperator = employeeType === 'driver' || employeeType === 'owner_operator';
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
@@ -510,6 +597,10 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
     } else if (name === 'driverType') {
       setDriverType(value as DriverType);
       setFormData(prev => ({ ...prev, type: value as DriverType }));
+    } else if (name === 'employeeType') {
+      const newType = value as EmployeeType;
+      setEmployeeType(newType);
+      setFormData(prev => ({ ...prev, employeeType: newType }));
     } else if (name.startsWith('license.')) {
       const field = name.split('.')[1];
       setFormData(prev => ({
@@ -551,10 +642,29 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Calculate payPercentage for percentage type
-    if (paymentType === 'percentage') {
+    // Calculate payPercentage for percentage type (only for drivers)
+    if (isDriverOrOwnerOperator && paymentType === 'percentage') {
       const percentageInput = parseFloat((document.getElementById('percentageRate') as HTMLInputElement)?.value || '0');
       formData.payPercentage = percentageInput > 1 ? percentageInput / 100 : percentageInput;
+    }
+
+    // Ensure employeeType is set from state
+    formData.employeeType = employeeType;
+
+    // For dispatchers and other non-driver employees, ensure type is set correctly
+    if (employeeType === 'dispatcher' || (employeeType !== 'driver' && employeeType !== 'owner_operator')) {
+      // Non-driver employees don't need driver type, but we keep it for backward compatibility
+      if (!formData.type) {
+        formData.type = 'Company'; // Default legacy type
+      }
+      // Clear driver-specific fields for non-drivers
+      if (employeeType === 'dispatcher') {
+        // Keep dispatcher commission fields, but clear driver payment fields
+        formData.payment = undefined;
+        formData.payPercentage = undefined;
+        formData.currentTruckId = undefined;
+        formData.truckId = undefined;
+      }
     }
 
     onSave(formData as NewDriverInput);
@@ -589,11 +699,11 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
               <h4 className="text-lg font-semibold text-slate-900 mb-4">Basic Information</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Driver Number</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Employee Number</label>
                   <input
                     type="text"
-                    name="driverNumber"
-                    value={formData.driverNumber}
+                    name="employeeNumber"
+                    value={formData.employeeNumber || formData.driverNumber || ''}
                     onChange={handleChange}
                     readOnly
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-slate-50"
@@ -607,45 +717,110 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                     onChange={handleChange}
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                   >
-                    {(['active', 'inactive', 'on_leave'] as DriverStatus[]).map(status => (
+                    {(['active', 'inactive', 'on_leave'] as EmployeeStatus[]).map(status => (
                       <option key={status} value={status}>{status.replace('_', ' ').toUpperCase()}</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Driver Type *</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Employee Type *</label>
                   <select
-                    name="driverType"
-                    value={driverType}
-                    onChange={handleChange}
+                    name="employeeType"
+                    value={employeeType}
+                    onChange={(e) => {
+                      const newType = e.target.value as EmployeeType;
+                      setEmployeeType(newType);
+                      setFormData(prev => ({ ...prev, employeeType: newType }));
+                      // Auto-set driver type for driver/owner_operator
+                      if (newType === 'driver') {
+                        setDriverType('Company');
+                        setFormData(prev => ({ ...prev, type: 'Company' }));
+                      } else if (newType === 'owner_operator') {
+                        setDriverType('OwnerOperator');
+                        setFormData(prev => ({ ...prev, type: 'OwnerOperator' }));
+                      }
+                    }}
                     required
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">Select Driver Type</option>
-                    <option value="Company">Company Driver</option>
-                    <option value="OwnerOperator">Owner Operator</option>
-                  </select>
-                  <p className="text-xs text-slate-500 mt-1">
-                    <strong>Company Driver:</strong> Custom percentage or per-mile rate<br />
-                    <strong>Owner Operator:</strong> Custom percentage, expenses may be deducted
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Current Truck</label>
-                  <select
-                    name="currentTruckId"
-                    value={formData.currentTruckId}
-                    onChange={handleChange}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">No truck assigned</option>
-                    {trucks.map(truck => (
-                      <option key={truck.id} value={truck.id}>
-                        {truck.number} - {truck.make} {truck.model}
-                      </option>
-                    ))}
+                    <option value="driver">Driver</option>
+                    <option value="dispatcher">Dispatcher</option>
+                    <option value="manager">Manager</option>
+                    <option value="safety">Safety</option>
+                    <option value="owner_operator">Owner Operator</option>
+                    <option value="owner">Owner</option>
+                    <option value="admin">Admin</option>
+                    <option value="other">Other</option>
                   </select>
                 </div>
+                {isDriverOrOwnerOperator && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Driver Type *</label>
+                      <select
+                        name="driverType"
+                        value={driverType}
+                        onChange={handleChange}
+                        required
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Select Driver Type</option>
+                        <option value="Company">Company Driver</option>
+                        <option value="OwnerOperator">Owner Operator</option>
+                      </select>
+                      <p className="text-xs text-slate-500 mt-1">
+                        <strong>Company Driver:</strong> Custom percentage or per-mile rate<br />
+                        <strong>Owner Operator:</strong> Custom percentage, expenses may be deducted
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Current Truck</label>
+                      <select
+                        name="currentTruckId"
+                        value={formData.currentTruckId}
+                        onChange={handleChange}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">No truck assigned</option>
+                        {trucks.map(truck => (
+                          <option key={truck.id} value={truck.id}>
+                            {truck.number} - {truck.make} {truck.model}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                {employeeType === 'dispatcher' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Commission Type</label>
+                      <select
+                        name="dispatcherCommissionType"
+                        value={formData.dispatcherCommissionType || ''}
+                        onChange={(e) => setFormData(prev => ({ ...prev, dispatcherCommissionType: e.target.value as any }))}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Select Type</option>
+                        <option value="percentage">Percentage</option>
+                        <option value="flat_fee">Flat Fee</option>
+                        <option value="per_mile">Per Mile</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Commission Rate</label>
+                      <input
+                        type="number"
+                        name="dispatcherCommissionRate"
+                        value={formData.dispatcherCommissionRate || ''}
+                        onChange={(e) => setFormData(prev => ({ ...prev, dispatcherCommissionRate: parseFloat(e.target.value) || 0 }))}
+                        step="0.01"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -764,7 +939,8 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
               </div>
             </div>
 
-            {/* License Information */}
+            {/* License Information - Only for Drivers and Owner Operators */}
+            {isDriverOrOwnerOperator && (
             <div className="border-t pt-6">
               <h4 className="text-lg font-semibold text-slate-900 mb-4">License Information</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -809,7 +985,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                     name="medicalExpirationDate"
                     value={formData.medicalExpirationDate}
                     onChange={handleChange}
-                    required
+                    required={isDriverOrOwnerOperator}
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                   />
                   <p className="text-xs text-slate-500 mt-1">Required for FMCSA compliance</p>
@@ -841,8 +1017,10 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                 </div>
               </div>
             </div>
+            )}
 
-            {/* Payment Configuration */}
+            {/* Payment Configuration - Only for Drivers/Owner Operators */}
+            {isDriverOrOwnerOperator && (
             <div className="border-t pt-6">
               <h4 className="text-lg font-semibold text-slate-900 mb-4">Payment Configuration</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -941,9 +1119,10 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                 </div>
               </div>
             </div>
+            )}
 
             {/* Owner Operator Deduction Preferences */}
-            {driverType === 'OwnerOperator' && (
+            {isDriverOrOwnerOperator && driverType === 'OwnerOperator' && (
               <div className="border-t pt-6">
                 <h4 className="text-lg font-semibold text-slate-900 mb-4">Deduction Preferences (Owner Operator Only)</h4>
                 <p className="text-sm text-slate-600 mb-4">Select which expenses should be deducted from settlement.</p>
@@ -1057,7 +1236,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                 type="submit"
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
-                Save Driver
+                Save Employee
               </button>
             </div>
           </form>

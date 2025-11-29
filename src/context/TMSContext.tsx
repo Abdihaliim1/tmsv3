@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect } from 'react';
-import { Load, LoadStatus, NewLoadInput, KPIMetrics, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput } from '../types';
+import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, EmployeeType, Trailer, NewTrailerInput } from '../types';
 import { recentLoads, generateMockKPIs, initialDrivers, initialInvoices } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
 import { getTenantFromSubdomain } from '../utils/tenant';
@@ -13,21 +13,31 @@ const getStorageKey = (tenantId: string | null, key: string): string => {
 
 interface TMSContextType {
   loads: Load[];
-  drivers: Driver[];
+  employees: Employee[]; // New: unified employees
+  drivers: Driver[]; // Legacy: filtered employees where type is driver/owner_operator
   invoices: Invoice[];
   settlements: Settlement[];
   trucks: Truck[];
+  trailers: Trailer[];
   expenses: Expense[];
+  factoringCompanies: FactoringCompany[];
+  dispatchers: Employee[]; // Computed: filtered employees where employeeType is dispatcher
   kpis: KPIMetrics;
   addLoad: (load: NewLoadInput) => void;
   updateLoad: (id: string, load: Partial<Load>) => void;
   deleteLoad: (id: string) => void;
-  addDriver: (driver: NewDriverInput) => void;
-  updateDriver: (id: string, driver: Partial<Driver>) => void;
-  deleteDriver: (id: string) => void;
-  addTruck: (truck: NewTruckInput) => void;
+  addEmployee: (employee: NewEmployeeInput) => void;
+  updateEmployee: (id: string, employee: Partial<Employee>) => void;
+  deleteEmployee: (id: string) => void;
+  addDriver: (driver: NewDriverInput) => void; // Legacy: creates employee with type=driver
+  updateDriver: (id: string, driver: Partial<Driver>) => void; // Legacy
+  deleteDriver: (id: string) => void; // Legacy
+  addTruck: (truck: NewTruckInput) => string; // Returns truck ID
   updateTruck: (id: string, truck: Partial<Truck>) => void;
   deleteTruck: (id: string) => void;
+  addTrailer: (trailer: NewTrailerInput) => string; // Returns trailer ID
+  updateTrailer: (id: string, trailer: Partial<Trailer>) => void;
+  deleteTrailer: (id: string) => void;
   addInvoice: (invoice: Omit<Invoice, 'id'>) => void;
   updateInvoice: (id: string, invoice: Partial<Invoice>) => void;
   deleteInvoice: (id: string) => void;
@@ -37,6 +47,12 @@ interface TMSContextType {
   addExpense: (expense: NewExpenseInput) => void;
   updateExpense: (id: string, expense: Partial<Expense>) => void;
   deleteExpense: (id: string) => void;
+  addFactoringCompany: (company: NewFactoringCompanyInput) => void;
+  updateFactoringCompany: (id: string, company: Partial<FactoringCompany>) => void;
+  deleteFactoringCompany: (id: string) => void;
+  addDispatcher: (dispatcher: NewDispatcherInput) => void;
+  updateDispatcher: (id: string, dispatcher: Partial<Dispatcher>) => void;
+  deleteDispatcher: (id: string) => void;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
 }
@@ -74,11 +90,27 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Initialize state from localStorage or defaults
   const [loads, setLoads] = useState<Load[]>(() => loadFromStorage('loads', recentLoads));
-  const [drivers, setDrivers] = useState<Driver[]>(() => loadFromStorage('drivers', initialDrivers));
+  // Employees: unified system (includes drivers, dispatchers, managers, etc.)
+  const [employees, setEmployees] = useState<Employee[]>(() => {
+    const stored = loadFromStorage('employees', []);
+    // If no employees but we have drivers, migrate drivers to employees
+    if (stored.length === 0) {
+      const legacyDrivers = loadFromStorage('drivers', initialDrivers);
+      return legacyDrivers.map(d => ({
+        ...d,
+        employeeType: (d.type === 'Company' ? 'driver' : 'owner_operator') as EmployeeType,
+        employeeNumber: d.driverNumber,
+        id: d.id
+      }));
+    }
+    return stored;
+  });
   const [invoices, setInvoices] = useState<Invoice[]>(() => loadFromStorage('invoices', initialInvoices));
   const [settlements, setSettlements] = useState<Settlement[]>(() => loadFromStorage('settlements', []));
   const [trucks, setTrucks] = useState<Truck[]>(() => loadFromStorage('trucks', []));
+  const [trailers, setTrailers] = useState<Trailer[]>(() => loadFromStorage('trailers', []));
   const [expenses, setExpenses] = useState<Expense[]>(() => loadFromStorage('expenses', []));
+  const [factoringCompanies, setFactoringCompanies] = useState<FactoringCompany[]>(() => loadFromStorage('factoringCompanies', []));
 
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -98,8 +130,21 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [loads, tenantId]);
 
   useEffect(() => {
-    saveToStorage('drivers', drivers);
-  }, [drivers, tenantId]);
+    saveToStorage('employees', employees);
+    // Also save to legacy 'drivers' key for backward compatibility
+    const driversOnly = employees.filter(e => e.employeeType === 'driver' || e.employeeType === 'owner_operator');
+    saveToStorage('drivers', driversOnly);
+  }, [employees, tenantId]);
+
+  // Computed: Drivers (filtered employees)
+  const drivers = useMemo(() => {
+    return employees.filter(e => e.employeeType === 'driver' || e.employeeType === 'owner_operator');
+  }, [employees]);
+
+  // Computed: Dispatchers (filtered employees)
+  const dispatchers = useMemo(() => {
+    return employees.filter(e => e.employeeType === 'dispatcher');
+  }, [employees]);
 
   useEffect(() => {
     saveToStorage('invoices', invoices);
@@ -114,8 +159,17 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [trucks, tenantId]);
 
   useEffect(() => {
+    saveToStorage('trailers', trailers);
+  }, [trailers, tenantId]);
+
+  useEffect(() => {
     saveToStorage('expenses', expenses);
   }, [expenses, tenantId]);
+
+  useEffect(() => {
+    saveToStorage('factoringCompanies', factoringCompanies);
+  }, [factoringCompanies, tenantId]);
+
 
   // KPIs
   const kpis = useMemo(() => {
@@ -162,15 +216,27 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 30); // Net 30
       
+      // Check if load is factored
+      const isFactored = newLoad.isFactored || false;
+      const factoringCompany = factoringCompanies.find(fc => fc.id === newLoad.factoringCompanyId);
+      
       const newInvoice: Invoice = {
         id: `inv-${newLoadId}`,
         invoiceNumber: `INV-${new Date().getFullYear()}-${(invoices.length + 1001)}`,
         loadIds: [newLoad.id],
         customerName: newLoad.customerName,
-        amount: newLoad.rate,
-        status: 'pending',
+        amount: newLoad.grandTotal || newLoad.rate, // Use grandTotal (includes accessorials) if available
+        status: isFactored ? 'paid' : 'pending', // Mark as paid if factored
         date: today.toISOString().split('T')[0],
         dueDate: dueDate.toISOString().split('T')[0],
+        // Factoring fields
+        isFactored: isFactored,
+        factoringCompanyId: newLoad.factoringCompanyId,
+        factoringCompanyName: factoringCompany?.name || newLoad.factoringCompanyName,
+        factoredDate: newLoad.factoredDate,
+        factoredAmount: newLoad.factoredAmount,
+        factoringFee: newLoad.factoringFee,
+        paidAt: isFactored ? (newLoad.factoredDate || today.toISOString().split('T')[0]) : undefined,
       };
       setInvoices(prev => [newInvoice, ...prev]);
 
@@ -195,7 +261,8 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             driverName: `${driver.firstName} ${driver.lastName}`,
             loadId: newLoad.loadNumber,
             grossPay: grossPay,
-            deductions: 0, // Can be edited later
+            deductions: {}, // Can be edited later
+            totalDeductions: 0,
             netPay: grossPay,
             status: 'pending',
             date: new Date().toISOString().split('T')[0]
@@ -214,29 +281,67 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setLoads(prev => prev.filter(load => load.id !== id));
   };
 
-  const addDriver = (input: NewDriverInput) => {
-    const newDriver: Driver = {
+  // Employee functions
+  const addEmployee = (input: NewEmployeeInput) => {
+    const newEmployee: Employee = {
       ...input,
       id: Math.random().toString(36).substr(2, 9),
-      driverNumber: input.driverNumber || `DRV-${drivers.length + 101}`,
+      employeeNumber: input.employeeNumber || input.driverNumber || `EMP-${employees.length + 101}`,
+      employeeType: input.employeeType || 'driver', // Default to driver if not specified
+      // Set legacy type field based on employeeType
+      type: input.type || (input.employeeType === 'owner_operator' ? 'OwnerOperator' : 'Company'),
+      driverNumber: input.driverNumber || input.employeeNumber, // Legacy compatibility
     };
-    setDrivers([...drivers, newDriver]);
+    setEmployees(prev => [...prev, newEmployee]);
+  };
+
+  const updateEmployee = (id: string, updates: Partial<Employee>) => {
+    setEmployees(prev => prev.map(employee => 
+      employee.id === id 
+        ? { 
+            ...employee, 
+            ...updates,
+            // Sync legacy fields
+            driverNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
+            employeeNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
+            type: updates.type || (updates.employeeType === 'owner_operator' ? 'OwnerOperator' : 'Company') || employee.type
+          }
+        : employee
+    ));
+  };
+
+  const deleteEmployee = (id: string) => {
+    setEmployees(prev => prev.filter(employee => employee.id !== id));
+  };
+
+  // Legacy driver functions (for backward compatibility)
+  const addDriver = (input: NewDriverInput) => {
+    addEmployee({
+      ...input,
+      employeeType: input.type === 'OwnerOperator' ? 'owner_operator' : 'driver',
+      employeeNumber: input.driverNumber,
+    });
   };
 
   const updateDriver = (id: string, updates: Partial<Driver>) => {
-    setDrivers(prev => prev.map(driver => driver.id === id ? { ...driver, ...updates } : driver));
+    updateEmployee(id, {
+      ...updates,
+      employeeType: updates.type === 'OwnerOperator' ? 'owner_operator' : 'driver',
+      employeeNumber: updates.driverNumber || updates.employeeNumber,
+    });
   };
 
   const deleteDriver = (id: string) => {
-    setDrivers(prev => prev.filter(driver => driver.id !== id));
+    deleteEmployee(id);
   };
 
-  const addTruck = (input: NewTruckInput) => {
+  const addTruck = (input: NewTruckInput): string => {
     const newTruck: Truck = {
       ...input,
       id: Math.random().toString(36).substr(2, 9),
     };
     setTrucks([...trucks, newTruck]);
+    return newTruck.id; // Return the ID so it can be used immediately
   };
 
   const updateTruck = (id: string, updates: Partial<Truck>) => {
@@ -245,6 +350,33 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteTruck = (id: string) => {
     setTrucks(prev => prev.filter(truck => truck.id !== id));
+  };
+
+  const addTrailer = (input: NewTrailerInput): string => {
+    const newTrailer: Trailer = {
+      ...input,
+      id: Math.random().toString(36).substr(2, 9),
+      createdAt: new Date().toISOString(),
+    };
+    setTrailers([...trailers, newTrailer]);
+    return newTrailer.id;
+  };
+
+  const updateTrailer = (id: string, updates: Partial<Trailer>) => {
+    setTrailers(prev => prev.map(trailer => 
+      trailer.id === id 
+        ? { ...trailer, ...updates, updatedAt: new Date().toISOString() }
+        : trailer
+    ));
+  };
+
+  const deleteTrailer = (id: string) => {
+    // Unlink trailer from trucks
+    setTrucks(prev => prev.map(truck => {
+      // Remove assignedTrailerId if it matches (we'll add this field to Truck)
+      return truck;
+    }));
+    setTrailers(prev => prev.filter(trailer => trailer.id !== id));
   };
 
   const addInvoice = (input: Omit<Invoice, 'id'>) => {
@@ -298,6 +430,13 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteSettlement = (id: string) => {
     setSettlements(prev => prev.filter(settlement => settlement.id !== id));
+    // Clean up: Remove settlementId from all loads that were linked to this settlement
+    setLoads(prev => prev.map(load => {
+      if (load.settlementId === id) {
+        return { ...load, settlementId: undefined };
+      }
+      return load;
+    }));
   };
 
   const addExpense = (input: NewExpenseInput) => {
@@ -322,6 +461,58 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setExpenses(prev => prev.filter(expense => expense.id !== id));
   };
 
+  const addFactoringCompany = (input: NewFactoringCompanyInput) => {
+    const newCompany: FactoringCompany = {
+      ...input,
+      id: Math.random().toString(36).substr(2, 9),
+      createdAt: new Date().toISOString(),
+    };
+    setFactoringCompanies(prev => [newCompany, ...prev]);
+  };
+
+  const updateFactoringCompany = (id: string, updates: Partial<FactoringCompany>) => {
+    setFactoringCompanies(prev => prev.map(company => 
+      company.id === id 
+        ? { ...company, ...updates, updatedAt: new Date().toISOString() }
+        : company
+    ));
+  };
+
+  const deleteFactoringCompany = (id: string) => {
+    setFactoringCompanies(prev => prev.filter(company => company.id !== id));
+  };
+
+  // Legacy dispatcher functions (dispatchers are now employees)
+  const addDispatcher = (input: NewDispatcherInput) => {
+    // Convert dispatcher input to employee
+    addEmployee({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email || '',
+      phone: input.phone || '',
+      employeeType: 'dispatcher',
+      status: input.status === 'active' ? 'active' : 'inactive',
+      employeeNumber: input.employeeId || `DSP-${employees.filter(e => e.employeeType === 'dispatcher').length + 1}`,
+      type: 'Company', // Default type for dispatchers
+      rateOrSplit: 0, // Not applicable for dispatchers
+    });
+  };
+
+  const updateDispatcher = (id: string, updates: Partial<Dispatcher>) => {
+    // Update corresponding employee
+    updateEmployee(id, {
+      firstName: updates.firstName,
+      lastName: updates.lastName,
+      email: updates.email,
+      phone: updates.phone,
+      status: updates.status === 'active' ? 'active' : 'inactive',
+    });
+  };
+
+  const deleteDispatcher = (id: string) => {
+    deleteEmployee(id);
+  };
+
   const filteredLoads = useMemo(() => {
     if (!searchTerm) return loads;
     const lowerTerm = searchTerm.toLowerCase();
@@ -336,21 +527,31 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <TMSContext.Provider value={{ 
       loads: filteredLoads, 
-      drivers, 
+      employees,
+      drivers, // Computed: filtered employees
       invoices, 
       settlements,
       trucks,
+      trailers,
       expenses,
+      factoringCompanies,
+      dispatchers, // Computed: filtered employees
       kpis, 
       addLoad, 
       updateLoad,
       deleteLoad,
-      addDriver,
-      updateDriver,
-      deleteDriver,
+      addEmployee,
+      updateEmployee,
+      deleteEmployee,
+      addDriver, // Legacy
+      updateDriver, // Legacy
+      deleteDriver, // Legacy
       addTruck,
       updateTruck,
       deleteTruck,
+      addTrailer,
+      updateTrailer,
+      deleteTrailer,
       addInvoice,
       updateInvoice,
       deleteInvoice,
@@ -360,6 +561,12 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addExpense,
       updateExpense,
       deleteExpense,
+      addFactoringCompany,
+      updateFactoringCompany,
+      deleteFactoringCompany,
+      addDispatcher, // Legacy
+      updateDispatcher, // Legacy
+      deleteDispatcher, // Legacy
       searchTerm,
       setSearchTerm
     }}>

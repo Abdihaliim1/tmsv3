@@ -7,11 +7,11 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 
-type TabType = 'overview' | 'revenue' | 'expenses' | 'drivers' | 'customers';
+type TabType = 'overview' | 'revenue' | 'expenses' | 'drivers' | 'customers' | 'brokers' | 'lanes' | 'dispatchers';
 type PeriodType = 'current_month' | 'last_month' | 'current_quarter' | 'current_year' | 'all_time';
 
 const Reports: React.FC = () => {
-  const { loads, drivers, invoices, settlements, expenses } = useTMS();
+  const { loads, drivers, invoices, settlements, expenses, factoringCompanies } = useTMS();
   const [currentTab, setCurrentTab] = useState<TabType>('overview');
   const [reportPeriod, setReportPeriod] = useState<PeriodType>('current_month');
 
@@ -82,7 +82,7 @@ const Reports: React.FC = () => {
     let ownerOperatorRevenue = 0;
 
     revenueLoads.forEach(load => {
-      const grossAmount = load.rate || 0;
+      const grossAmount = load.grandTotal || load.rate || 0;
       if (load.driverId) {
         const driver = drivers.find(d => d.id === load.driverId);
         if (driver) {
@@ -148,32 +148,141 @@ const Reports: React.FC = () => {
     const totalDriverPay = companyDriverPay + ownerOperatorPay + ownerAsDriverPay;
 
     // Calculate real expenses from expense data
-    // Only count expenses paid by company (not owner operator expenses)
-    const companyExpenses = filteredExpenses.filter(exp => 
-      !exp.paidBy || exp.paidBy === 'company' || exp.paidBy === 'tracked_only'
-    );
+    // CRITICAL: Only include expenses that affect company P&L
+    // EXCLUDE: O/O pass-through expenses (fuel, insurance, tolls charged to O/O)
+    const companyExpenses = filteredExpenses.filter(exp => {
+      // Must be paid by company
+      if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
+        return false;
+      }
+      
+      // If expense is linked to a driver, check if driver is O/O
+      if (exp.driverId) {
+        const driver = drivers.find(d => d.id === exp.driverId);
+        if (driver && driver.type === 'OwnerOperator') {
+          // This is an O/O expense - check if it's a pass-through
+          const expenseType = (exp.type || '').toLowerCase();
+          const isPassThrough = 
+            expenseType === 'fuel' || 
+            expenseType === 'insurance' || 
+            expenseType === 'toll' ||
+            expenseType === 'maintenance' ||
+            (exp.description || '').toLowerCase().includes('eld');
+          
+          // O/O pass-through expenses are NOT company expenses
+          if (isPassThrough) {
+            return false;
+          }
+        }
+      }
+      
+      // If expense is linked to a truck, check if truck is O/O owned
+      if (exp.truckId) {
+        // For now, assume truck expenses are company expenses unless linked to O/O driver
+        // This could be enhanced with truck ownership data
+      }
+      
+      return true;
+    });
 
     const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
     
+    // Comprehensive expense breakdown matching user specification
     const expenseBreakdown = {
+      // Fuel expenses (company-paid only)
       fuel: companyExpenses.filter(e => e.type === 'fuel' || e.category === 'fuel').reduce((sum, e) => sum + (e.amount || 0), 0),
-      insurance: companyExpenses.filter(e => e.type === 'insurance' || e.category === 'insurance').reduce((sum, e) => sum + (e.amount || 0), 0),
-      maintenance: companyExpenses.filter(e => e.type === 'maintenance' || e.category === 'maintenance').reduce((sum, e) => sum + (e.amount || 0), 0),
-      fixed: 0, // Fixed costs would come from trucks or other sources
-      truckPayments: 0, // Truck payments would come from trucks data
-      other: companyExpenses.filter(e => 
-        e.type !== 'fuel' && 
-        e.type !== 'insurance' && 
-        e.type !== 'maintenance' &&
-        e.category !== 'fuel' &&
-        e.category !== 'insurance' &&
-        e.category !== 'maintenance'
-      ).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Insurance expenses (only if paidBy === 'company')
+      // Note: Insurance paid by driver is NOT included here (it's a driver deduction)
+      insurance: companyExpenses.filter(e => {
+        const isInsurance = e.type === 'insurance' || e.category === 'insurance';
+        const isCompanyPaid = !e.paidBy || e.paidBy === 'company' || e.paidBy === 'tracked_only';
+        return isInsurance && isCompanyPaid;
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Maintenance and repairs (company-paid only)
+      maintenance: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        return type.includes('maintenance') || type.includes('repair') || 
+               category.includes('maintenance') || category.includes('repair');
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Permits and licenses (IRP, IFTA, UCR, etc.)
+      permits: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        const description = (e.description || '').toLowerCase();
+        return type === 'permit' || category === 'permit' || 
+               description.includes('permit') || description.includes('irp') || 
+               description.includes('ifta') || description.includes('ucr') ||
+               description.includes('license');
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // ELD service (only if company pays)
+      eld: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        const description = (e.description || '').toLowerCase();
+        return type === 'eld' || category === 'eld' || 
+               description.includes('eld') || description.includes('electronic logging');
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Office expenses (rent, utilities, software, accounting, legal, marketing)
+      office: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        const description = (e.description || '').toLowerCase();
+        return type === 'other' && (
+          description.includes('office') || description.includes('rent') ||
+          description.includes('software') || description.includes('subscription') ||
+          description.includes('accounting') || description.includes('legal') ||
+          description.includes('marketing') || description.includes('utility') ||
+          description.includes('utilities')
+        );
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Parking and tolls (company-paid only)
+      parkingTolls: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        return type === 'toll' || category === 'toll' || 
+               type === 'parking' || category === 'parking';
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Truck payments (lease/loan payments - would come from trucks data)
+      truckPayments: 0, // TODO: Calculate from trucks data if needed
+      
+      // Other expenses (everything else that's company-paid)
+      other: companyExpenses.filter(e => {
+        const type = (e.type || '').toLowerCase();
+        const category = (e.category || '').toLowerCase();
+        const description = (e.description || '').toLowerCase();
+        // Exclude already categorized expenses
+        return !(
+          type === 'fuel' || category === 'fuel' ||
+          type === 'insurance' || category === 'insurance' ||
+          type === 'maintenance' || category === 'maintenance' ||
+          type === 'permit' || category === 'permit' ||
+          type === 'eld' || category === 'eld' ||
+          type === 'toll' || category === 'toll' ||
+          type === 'parking' || category === 'parking' ||
+          description.includes('permit') || description.includes('irp') ||
+          description.includes('ifta') || description.includes('ucr') ||
+          description.includes('eld') || description.includes('electronic logging') ||
+          description.includes('office') || description.includes('rent') ||
+          description.includes('software') || description.includes('subscription') ||
+          description.includes('accounting') || description.includes('legal') ||
+          description.includes('marketing') || description.includes('utility')
+        );
+      }).reduce((sum, e) => sum + (e.amount || 0), 0),
+      
+      // Factoring Fees and Dispatch Fees (will be calculated later)
+      factoringFees: 0,
+      dispatchFees: 0,
     };
 
-    // Net profit
-    const netProfit = totalRevenue - totalDriverPay - totalExpenses;
-    const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
+    // Note: dispatcherCost, netProfit, and profitMargin will be calculated after dispatcherReports is defined
 
     // Monthly revenue
     const monthlyRevenue = Array(12).fill(0);
@@ -202,7 +311,7 @@ const Reports: React.FC = () => {
         if (!customerRevenue[customerName]) {
           customerRevenue[customerName] = { revenue: 0, loads: 0 };
         }
-        customerRevenue[customerName].revenue += load.rate || 0;
+        customerRevenue[customerName].revenue += load.grandTotal || load.rate || 0;
         customerRevenue[customerName].loads += 1;
       }
     });
@@ -212,6 +321,119 @@ const Reports: React.FC = () => {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 
+    // Revenue by Broker
+    const revenueByBroker: Record<string, number> = {};
+    revenueLoads.forEach(load => {
+      const brokerName = load.brokerName || load.customerName || 'Unknown';
+      revenueByBroker[brokerName] = (revenueByBroker[brokerName] || 0) + (load.grandTotal || load.rate || 0);
+    });
+
+    // Revenue by Lane (Origin-Destination)
+    const revenueByLane: Record<string, number> = {};
+    revenueLoads.forEach(load => {
+      const lane = `${load.originCity || ''}, ${load.originState || ''} → ${load.destCity || ''}, ${load.destState || ''}`;
+      if (lane.trim() !== '→') {
+        revenueByLane[lane] = (revenueByLane[lane] || 0) + (load.grandTotal || load.rate || 0);
+      }
+    });
+
+    // Driver-specific reports
+    const driverReports: Record<string, { 
+      loadsCompleted: number; 
+      milesCompleted: number; 
+      grossEarnings: number;
+      driverName: string;
+    }> = {};
+    revenueLoads.forEach(load => {
+      if (load.driverId && load.driverName) {
+        if (!driverReports[load.driverId]) {
+          driverReports[load.driverId] = {
+            loadsCompleted: 0,
+            milesCompleted: 0,
+            grossEarnings: 0,
+            driverName: load.driverName,
+          };
+        }
+        driverReports[load.driverId].loadsCompleted += 1;
+        driverReports[load.driverId].milesCompleted += load.miles || 0;
+        driverReports[load.driverId].grossEarnings += load.driverTotalGross || load.driverBasePay || 0;
+      }
+    });
+
+    // Dispatcher-specific reports
+    const dispatcherReports: Record<string, {
+      loadsBooked: number;
+      revenueBooked: number;
+      commissionEarned: number;
+      dispatcherName: string;
+    }> = {};
+    revenueLoads.forEach(load => {
+      if (load.dispatcherId && load.dispatcherName) {
+        if (!dispatcherReports[load.dispatcherId]) {
+          dispatcherReports[load.dispatcherId] = {
+            loadsBooked: 0,
+            revenueBooked: 0,
+            commissionEarned: 0,
+            dispatcherName: load.dispatcherName,
+          };
+        }
+        dispatcherReports[load.dispatcherId].loadsBooked += 1;
+        dispatcherReports[load.dispatcherId].revenueBooked += load.grandTotal || load.rate || 0;
+        dispatcherReports[load.dispatcherId].commissionEarned += load.dispatcherCommissionAmount || 0;
+      }
+    });
+
+    // Calculate dispatcher cost for profitability (after dispatcherReports is defined)
+    const dispatcherCost = Object.values(dispatcherReports).reduce((sum, report) => sum + report.commissionEarned, 0);
+
+    // Calculate factoring expenses (factoring fees from all factored loads)
+    // Factoring Fee = Grand Total × (Factoring Fee Percent / 100)
+    // If load has factoringFee, use it; otherwise calculate from grandTotal and fee percentage
+    const factoringExpenses = revenueLoads
+      .filter(load => load.isFactored)
+      .reduce((sum, load) => {
+        // If factoringFee is already stored, use it
+        if (load.factoringFee && load.factoringFee > 0) {
+          return sum + load.factoringFee;
+        }
+        
+        // Otherwise, calculate it from grandTotal and fee percentage
+        const grandTotal = load.grandTotal || load.rate || 0;
+        if (grandTotal > 0) {
+          // Try to get fee percentage from load first
+          let feePercentage = load.factoringFeePercent;
+          
+          // If not on load, get it from the factoring company
+          if ((!feePercentage || feePercentage === 0) && load.factoringCompanyId) {
+            const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
+            if (factoringCompany && factoringCompany.feePercentage) {
+              feePercentage = factoringCompany.feePercentage;
+            }
+          }
+          
+          // If still no percentage, default to 2.5% (typical factoring fee)
+          if (!feePercentage || feePercentage === 0) {
+            feePercentage = 2.5; // Default factoring fee percentage
+          }
+          
+          const factoringFee = grandTotal * (feePercentage / 100);
+          return sum + factoringFee;
+        }
+        
+        return sum;
+      }, 0);
+
+    // Add Factoring Fees and Dispatch Fees to expense breakdown
+    expenseBreakdown.factoringFees = factoringExpenses;
+    expenseBreakdown.dispatchFees = dispatcherCost;
+    
+    // Update total expenses to include factoring fees and dispatcher cost
+    const totalExpensesWithFees = totalExpenses + factoringExpenses + dispatcherCost;
+
+    // Net profit (Revenue - Total Expenses - Driver Pay)
+    const netProfit = totalRevenue - totalExpensesWithFees - totalDriverPay;
+    const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
+
     return {
       revenue: totalRevenue,
       revenueBreakdown: { companyDriver: companyDriverRevenue, ownerOperator: ownerOperatorRevenue },
@@ -220,15 +442,22 @@ const Reports: React.FC = () => {
       driverPay: totalDriverPay,
       driverPayBreakdown: { companyDriver: companyDriverPay, ownerOperator: ownerOperatorPay, ownerAsDriver: ownerAsDriverPay },
       driverPayEstimated: isEstimated,
-      expenses: totalExpenses,
+      expenses: totalExpensesWithFees,
       expenseBreakdown,
       netProfit,
       profitMargin,
       monthlyRevenue: { labels: monthLabels, values: monthlyRevenue },
       loadStatus: { labels: Object.keys(statusCounts), values: Object.values(statusCounts) },
       customers: topCustomers,
+      // New reporting fields
+      revenueByBroker,
+      revenueByLane,
+      driverReports,
+      dispatcherReports,
+      dispatcherCost,
+      factoringExpenses,
     };
-  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers]);
+  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, factoringCompanies]);
 
   // Format currency
   const formatCurrency = (amount: number): string => {
@@ -454,20 +683,36 @@ const Reports: React.FC = () => {
               </div>
               <div className="pl-4 space-y-1 mt-2">
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Fuel</span>
-                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.fuel)}</span>
+                  <span className="text-slate-600">Company Truck Fuel</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.fuel || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Insurance</span>
-                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.insurance)}</span>
+                  <span className="text-slate-600">Company Truck Insurance</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.insurance || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Maintenance</span>
-                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.maintenance)}</span>
+                  <span className="text-slate-600">Company Truck Tolls</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.parkingTolls || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">Factoring Fees</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.factoringFees || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">Dispatch Fees</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.dispatchFees || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">Permits</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.permits || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">Company Truck Maintenance</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.maintenance || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-slate-600">Other</span>
-                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.other)}</span>
+                  <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.other || 0)}</span>
                 </div>
               </div>
             </div>
@@ -483,13 +728,16 @@ const Reports: React.FC = () => {
               </div>
               <div className="pl-4 space-y-1 mt-2">
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Company Drivers</span>
+                  <span className="text-slate-600">Company Drivers (Gross Pay)</span>
                   <span className="text-blue-600 font-medium">{formatCurrency(reportData.driverPayBreakdown.companyDriver)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Owner Operators</span>
+                  <span className="text-slate-600">Owner Operators (Gross Pay before deductions)</span>
                   <span className="text-blue-600 font-medium">{formatCurrency(reportData.driverPayBreakdown.ownerOperator)}</span>
                 </div>
+              </div>
+              <div className="mt-3 p-2 bg-blue-50 rounded text-xs text-blue-700 border border-blue-200">
+                <strong>Note:</strong> O/O expenses (fuel, insurance, tolls) are pass-through costs recovered from O/O settlements and are <strong>NOT</strong> included in company expenses above.
               </div>
               {reportData.driverPayEstimated && (
                 <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
@@ -509,7 +757,7 @@ const Reports: React.FC = () => {
                   {formatCurrency(reportData.netProfit)}
                 </span>
               </div>
-              <p className="text-sm text-slate-500 mt-1">Owner gets this as distribution (salary already in driver pay)</p>
+              <p className="text-sm text-slate-500 mt-1">Revenue - Total Expenses - Driver Pay</p>
             </div>
           </div>
 
@@ -730,17 +978,12 @@ const Reports: React.FC = () => {
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Driver Performance Metrics</h3>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={drivers.map(driver => {
-                  const driverLoads = filteredLoads.filter(l => l.driverId === driver.id);
-                  const driverMiles = driverLoads.reduce((sum, l) => sum + (l.miles || 0), 0);
-                  const driverRevenue = driverLoads.reduce((sum, l) => sum + (l.rate || 0), 0);
-                  return {
-                    name: `${driver.firstName} ${driver.lastName}`,
-                    miles: driverMiles,
-                    revenue: driverRevenue,
-                    loads: driverLoads.length,
-                  };
-                })}>
+                <BarChart data={Object.values(reportData.driverReports || {}).map((report: any) => ({
+                  name: report.driverName,
+                  miles: report.milesCompleted,
+                  earnings: report.grossEarnings,
+                  loads: report.loadsCompleted,
+                }))}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="name" angle={-45} textAnchor="end" height={100} tick={{ fill: '#64748b', fontSize: 10 }} />
                   <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
@@ -749,7 +992,7 @@ const Reports: React.FC = () => {
                   <Legend />
                   <Bar yAxisId="left" dataKey="miles" fill="#3b82f6" name="Miles" />
                   <Bar yAxisId="left" dataKey="loads" fill="#f59e0b" name="Loads" />
-                  <Bar yAxisId="right" dataKey="revenue" fill="#10b981" name="Revenue" />
+                  <Bar yAxisId="right" dataKey="earnings" fill="#10b981" name="Gross Earnings" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -770,20 +1013,17 @@ const Reports: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {drivers.map(driver => {
-                    const driverLoads = filteredLoads.filter(l => l.driverId === driver.id);
-                    const driverMiles = driverLoads.reduce((sum, l) => sum + (l.miles || 0), 0);
-                    const driverRevenue = driverLoads.reduce((sum, l) => sum + (l.rate || 0), 0);
-                    const performance = driverMiles > 4000 ? 'Excellent' : driverMiles > 3000 ? 'Good' : 'Average';
+                  {Object.values(reportData.driverReports || {}).map((report: any, index) => {
+                    const performance = report.milesCompleted > 4000 ? 'Excellent' : report.milesCompleted > 3000 ? 'Good' : 'Average';
                     const performanceClass = performance === 'Excellent' ? 'bg-green-100 text-green-800' :
                       performance === 'Good' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800';
 
                     return (
-                      <tr key={driver.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-sm font-medium text-slate-900">{driver.firstName} {driver.lastName}</td>
-                        <td className="px-4 py-3 text-sm text-slate-900">{driverMiles.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm text-slate-900">{formatCurrency(driverRevenue)}</td>
-                        <td className="px-4 py-3 text-sm text-slate-900">{driverLoads.length}</td>
+                      <tr key={index} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-sm font-medium text-slate-900">{report.driverName}</td>
+                        <td className="px-4 py-3 text-sm text-slate-900">{report.milesCompleted.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-sm text-slate-900">{formatCurrency(report.grossEarnings)}</td>
+                        <td className="px-4 py-3 text-sm text-slate-900">{report.loadsCompleted}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${performanceClass}`}>
                             {performance}

@@ -1,10 +1,12 @@
-# ATS FREIGHT LLC - Transportation Management System (TMS)
+# TMS Pro - Multi-Tenant Transportation Management System
 
-A comprehensive, modern Transportation Management System built with React, TypeScript, and Tailwind CSS for managing freight operations, driver settlements, expenses, invoices, and fleet management.
+A comprehensive, modern Transportation Management System built with React, TypeScript, and Tailwind CSS. Designed for multi-company deployment with subdomain-based tenant isolation.
 
 ## 🚀 Project Overview
 
-This TMS is designed for ATS FREIGHT LLC to streamline transportation operations including:
+TMS Pro is a scalable, multi-tenant TMS that can serve multiple companies independently. Each company accesses via their subdomain (e.g., `company1.mydomain.com`) with complete data isolation.
+
+**Key Capabilities:**
 - **Load Management** - Track loads from dispatch to delivery
 - **Driver Management** - Comprehensive driver profiles and payment configurations
 - **Fleet Management** - Truck inventory, maintenance, and profitability tracking

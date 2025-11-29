@@ -36,10 +36,12 @@ export const initialDrivers: Driver[] = [
     lastName: 'Doe',
     status: 'active',
     type: 'OwnerOperator',
+    employeeType: 'owner_operator',
     rateOrSplit: 80, // 80% split
     email: 'john@example.com',
     phone: '555-0101',
-    truckId: 'TRK-101'
+    truckId: 'TRK-101',
+    employeeNumber: 'DRV-001'
   },
   {
     id: 'd2',
@@ -47,10 +49,12 @@ export const initialDrivers: Driver[] = [
     lastName: 'Smith',
     status: 'active',
     type: 'Company',
+    employeeType: 'driver',
     rateOrSplit: 0.65, // $0.65 per mile
     email: 'mike@example.com',
     phone: '555-0102',
-    truckId: 'TRK-102'
+    truckId: 'TRK-102',
+    employeeNumber: 'DRV-002'
   }
 ];
 

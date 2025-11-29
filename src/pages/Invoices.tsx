@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { FileText, DollarSign, Clock, AlertTriangle, Download, Printer, CheckCircle, Trash2, MoreHorizontal, X } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
+import { useCompany } from '../context/CompanyContext';
 import { Invoice, InvoiceStatus, LoadStatus } from '../types';
 
 const Invoices: React.FC = () => {
-  const { invoices, loads, addInvoice, updateInvoice, deleteInvoice } = useTMS();
+  const { invoices, loads, addInvoice, updateInvoice, deleteInvoice, updateLoad } = useTMS();
+  const { company } = useCompany();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -245,9 +247,9 @@ const Invoices: React.FC = () => {
       <body>
         <div class="header">
           <div class="company-info">
-            <h1>ATS FREIGHT LLC</h1>
+            <h1>${company.name}</h1>
             <p style="margin:5px 0 0 0; color:#666; font-size:12px; line-height:1.6;">
-              3191 MORSE RD STE 15<br>COLUMBUS, OH 43231<br>(614) 254-0380
+              ${company.address ? `${company.address}<br>` : ''}${company.city && company.state ? `${company.city}, ${company.state} ${company.zip || ''}<br>` : ''}${company.phone || ''}
             </p>
           </div>
           <div class="invoice-details">
@@ -470,16 +472,36 @@ const Invoices: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-slate-900">{formatDate(invoice.dueDate)}</div>
                         {invoice.status === 'paid' && invoice.paidAt && (
-                          <div className="text-xs text-green-600 mt-1">Paid: {formatDate(invoice.paidAt)}</div>
+                          <div className="text-xs text-green-600 mt-1">
+                            Paid: {formatDate(invoice.paidAt)}
+                            {invoice.paymentMethod && (
+                              <span className="ml-1">({invoice.paymentMethod})</span>
+                            )}
+                            {invoice.paymentReference && (
+                              <span className="ml-1 text-slate-500">Ref: {invoice.paymentReference}</span>
+                            )}
+                          </div>
+                        )}
+                        {invoice.isFactored && invoice.factoringCompanyName && (
+                          <div className="text-xs text-blue-600 mt-1">
+                            Factored: {invoice.factoringCompanyName} ({formatDate(invoice.factoredDate || '')})
+                          </div>
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-slate-900">{formatCurrency(invoice.amount)}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(invoice.status)}`}>
-                          {invoice.status.toUpperCase()}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(invoice.status)}`}>
+                            {invoice.status.toUpperCase()}
+                          </span>
+                          {invoice.isFactored && (
+                            <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                              FACTORED
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="relative menu-container">

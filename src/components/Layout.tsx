@@ -56,7 +56,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
       <div className={`flex-1 flex flex-col transition-all duration-300 ${
         isMobile ? 'ml-0' : isSidebarOpen ? 'lg:ml-64' : 'lg:ml-20'
       }`}>
-        <Header toggleSidebar={toggleSidebar} isMobile={isMobile} />
+        <Header toggleSidebar={toggleSidebar} isMobile={isMobile} onNavigate={handleNavigate} />
         
         <main className="flex-1 mt-16 overflow-x-hidden p-4 md:p-6">
           {children}

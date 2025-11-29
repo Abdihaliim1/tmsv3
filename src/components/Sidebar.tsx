@@ -10,9 +10,22 @@ import {
   BarChart3, 
   Settings, 
   LogOut,
-  Upload
+  Upload,
+  Building2,
+  Package
 } from 'lucide-react';
 import { PageType } from '../App';
+import { useCompany } from '../context/CompanyContext';
+
+const CompanyName: React.FC = () => {
+  const { company } = useCompany();
+  return (
+    <>
+      <h1 className="font-bold text-lg leading-tight">{company.shortName || company.name}</h1>
+      <p className="text-xs text-slate-400">TMS Pro</p>
+    </>
+  );
+};
 
 interface SidebarProps {
   isOpen: boolean;
@@ -22,15 +35,15 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate, isMobile = false }) => {
-  const menuItems: { icon: any, label: PageType }[] = [
+  const menuItems: { icon: any, label: PageType, displayLabel?: string }[] = [
     { icon: LayoutDashboard, label: 'Dashboard' },
     { icon: Truck, label: 'Loads' },
-    { icon: Users, label: 'Drivers' },
-    { icon: Truck, label: 'Fleet' }, 
+    { icon: Users, label: 'Drivers', displayLabel: 'Employees' },
+    { icon: Truck, label: 'Fleet' },
     { icon: Receipt, label: 'Expenses' },
-    { icon: FileText, label: 'Invoices' },
     { icon: Calculator, label: 'Settlements' },
     { icon: BarChart3, label: 'Reports' },
+    { icon: Building2, label: 'AccountReceivables', displayLabel: 'Account Receivables' },
     { icon: Upload, label: 'Import' },
     { icon: Settings, label: 'Settings' },
   ];
@@ -48,8 +61,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate, isMo
         </div>
         {isOpen && (
           <div className="ml-3 fade-in">
-            <h1 className="font-bold text-lg leading-tight">ATS Freight</h1>
-            <p className="text-xs text-slate-400">TMS Pro</p>
+            <CompanyName />
           </div>
         )}
       </div>
@@ -68,7 +80,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate, isMo
                 }`}
               >
                 <item.icon size={20} className="shrink-0" />
-                {isOpen && <span className="ml-3 font-medium">{item.label}</span>}
+                {isOpen && (
+                  <span className="ml-3 font-medium">
+                    {item.displayLabel || item.label}
+                  </span>
+                )}
               </button>
             </li>
           ))}

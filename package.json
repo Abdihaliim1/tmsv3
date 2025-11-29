@@ -1,7 +1,7 @@
 {
-  "name": "ats-freight-tms",
+  "name": "tms-pro",
   "version": "2.0.0",
-  "description": "ATS FREIGHT LLC Transportation Management System - Professional freight operations management",
+  "description": "TMS Pro - Multi-tenant Transportation Management System for freight operations",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,21 +22,22 @@
     "expenses",
     "reporting"
   ],
-  "author": "ATS FREIGHT LLC",
+  "author": "TMS Pro",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/ats-freight-tms.git"
+    "url": "https://github.com/yourusername/tms-pro.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/ats-freight-tms/issues"
+    "url": "https://github.com/yourusername/tms-pro/issues"
   },
-  "homepage": "https://github.com/yourusername/ats-freight-tms#readme",
+  "homepage": "https://github.com/yourusername/tms-pro#readme",
   "dependencies": {
+    "firebase": "^9.22.1",
+    "jspdf": "^3.0.4",
+    "lucide-react": "^0.555.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "firebase": "^9.22.1",
-    "lucide-react": "^0.555.0",
     "recharts": "^3.5.1"
   },
   "devDependencies": {
