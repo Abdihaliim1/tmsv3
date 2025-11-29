@@ -1,0 +1,18 @@
+runtime: nodejs18
+
+env: standard
+
+handlers:
+  - url: /.*
+    static_files: dist/index.html
+    upload: dist/index.html
+    secure: always
+
+  - url: /(.*\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json))$
+    static_files: dist/\1
+    upload: dist/(.*\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json))$
+    secure: always
+
+skip_files:
+  - ^(?!dist)
+
