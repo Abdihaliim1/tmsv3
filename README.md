@@ -1,321 +1,240 @@
-# 🚛 ATS FREIGHT LLC - Transportation Management System V2
+# ATS FREIGHT LLC - Transportation Management System (TMS)
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/yourusername/ats-freight-tms)
-[![Status](https://img.shields.io/badge/status-Production%20Ready-green.svg)](https://github.com/yourusername/ats-freight-tms)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+A comprehensive, modern Transportation Management System built with React, TypeScript, and Tailwind CSS for managing freight operations, driver settlements, expenses, invoices, and fleet management.
 
-## 🎉 **PRODUCTION READY - NOVEMBER 2025**
+## 🚀 Project Overview
 
-A comprehensive Transportation Management System (TMS) built for ATS FREIGHT LLC. This system handles all aspects of freight operations including load management, driver settlements, expense tracking, fleet management, and financial reporting.
+This TMS is designed for ATS FREIGHT LLC to streamline transportation operations including:
+- **Load Management** - Track loads from dispatch to delivery
+- **Driver Management** - Comprehensive driver profiles and payment configurations
+- **Fleet Management** - Truck inventory, maintenance, and profitability tracking
+- **Expense Tracking** - Detailed expense management with categorization
+- **Invoice Management** - Automated invoice generation and tracking
+- **Driver Settlements** - Weekly settlement calculations and payments
+- **Reports & Analytics** - Comprehensive business intelligence and reporting
 
----
+## ✨ Key Features
 
-## 🚀 **NEW IN VERSION 2.0**
+### ✅ Recently Implemented
 
-### 💰 **Advanced Settlement Generation**
-- ✅ **Auto-populate O/O expenses** - Automatically includes all company-paid expenses for Owner Operators
-- ✅ **Smart expense categorization** - Fuel vs Other expenses auto-filled
-- ✅ **Professional UI warnings** - Red banner shows company-paid expenses with totals
-- ✅ **Real-time calculations** - Net pay updates instantly as expenses are included
-- ✅ **Expense tracking** - Links expenses to settlements, prevents double-settlement
+- **Auto-Save Functionality** - All changes are automatically saved to localStorage
+- **Settlement System** - Complete driver settlement generation with load filtering
+- **Invoice Automation** - Auto-generates invoices for delivered loads
+- **Fleet Management** - Truck profitability analysis and maintenance tracking
+- **Driver Profiles** - Comprehensive driver management with payment configurations
+- **Responsive Design** - Mobile-friendly interface with modern UI/UX
 
-### 📊 **Accurate P&L Reporting**
-- ✅ **No double-counting** - O/O expenses excluded from company expense totals
-- ✅ **Real settlement data** - Uses actual net pay from settlements instead of estimates
-- ✅ **Gross Method for O/O** - Shows full revenue + reimbursements for transparency
-- ✅ **Interactive charts** - Professional Plotly.js visualizations
-- ✅ **Export functionality** - PDF, CSV, print-ready reports
+### Core Features
 
-### 🚚 **Enhanced Driver Management**
-- ✅ **One driver = One truck system** - Auto-fill truck based on driver assignment
-- ✅ **Dynamic pay calculation** - No hardcoded percentages, uses actual driver records
-- ✅ **Real-time updates** - Changes reflect immediately across entire system
-- ✅ **Professional validation** - Comprehensive error checking and defaults
+1. **Load Management**
+   - Create, edit, and track loads
+   - Automatic mileage calculation
+   - Status tracking (Dispatched, In Transit, Delivered, etc.)
+   - Customer and driver assignment
+   - Rate confirmation upload (simulated OCR)
 
-### 💸 **Professional Expense Management**
-- ✅ **Smart allocation logic** - Automatic Company vs O/O expense handling
-- ✅ **Expense ledger system** - Tracks remaining balances for Owner Operators
-- ✅ **Status management** - Approved, pending, rejected workflow
-- ✅ **Receipt handling** - File upload and preview capabilities
+2. **Driver Settlements**
+   - Weekly settlement generation
+   - Automatic load filtering (only unsettled loads)
+   - Driver pay calculation (Owner Operator vs Company Driver)
+   - Deduction management (fuel, other expenses)
+   - Settlement PDF generation
 
-### 🏢 **Complete Fleet Management**
-- ✅ **Ownership tracking** - Owned, leased, financed, owner-operator categories
-- ✅ **Insurance automation** - Auto-creates monthly insurance expenses
-- ✅ **Profitability analysis** - Revenue, expenses, ROI calculations per truck
-- ✅ **Compliance tracking** - Insurance, registration, inspection date monitoring
+3. **Expense Management**
+   - Categorized expenses (Fuel, Maintenance, Insurance, etc.)
+   - Receipt upload support
+   - Driver and truck assignment
+   - Expense status tracking
 
----
+4. **Invoice Management**
+   - Automatic invoice creation for delivered loads
+   - Invoice status tracking (Pending, Paid, Overdue)
+   - PDF generation and printing
+   - Payment date tracking
 
-## 🛡️ **ENTERPRISE FEATURES**
+5. **Fleet Management**
+   - Truck inventory management
+   - Ownership tracking (Owned, Leased, Financed, Owner Operator)
+   - Maintenance scheduling
+   - Profitability analysis
+   - Insurance and compliance tracking
 
-### 🔄 **Real-time Data Synchronization**
-- Firebase Firestore for instant multi-user sync
-- Offline persistence with IndexedDB
-- Optimistic updates with automatic rollback on errors
-- Connection monitoring and intelligent retry logic
+6. **Driver Management**
+   - Comprehensive driver profiles
+   - License and medical card tracking
+   - Payment configuration (Per Mile, Percentage, Flat Rate)
+   - Owner Operator deduction preferences
+   - Employment information
 
-### 🎯 **Financial Accuracy**
-- Rule-based calculation system (no hardcoded values)
-- Automatic recalculation when business rules change
-- Version tracking for all financial calculations
-- Comprehensive validation and error handling
+7. **Reports & Analytics**
+   - Revenue and expense reports
+   - Driver performance metrics
+   - Customer analysis
+   - Profit/loss statements
+   - Custom date range filtering
 
-### 🔒 **Data Stability & Security**
-- Exponential backoff retry logic for failed operations
-- Pre-save data validation to prevent corruption
-- Conflict resolution using timestamp-based merging
-- Comprehensive error logging and monitoring
+## 🛠️ Technology Stack
 
----
+- **Frontend Framework**: React 18.2 with TypeScript
+- **Build Tool**: Vite 5.0
+- **Styling**: Tailwind CSS 3.4
+- **Icons**: Lucide React
+- **Charts**: Recharts
+- **State Management**: React Context API
+- **Data Persistence**: localStorage (auto-save)
 
-## 📋 **SYSTEM CAPABILITIES**
+## 📦 Installation
 
-### 👥 **Multi-Driver Type Support**
-- **Company Drivers** - W2 employees, company pays all expenses
-- **Owner Operators** - 1099 contractors, company deducts expenses from settlements
-- **Owner as Driver** - Business owner driving company trucks
+### Prerequisites
 
-### 💰 **Accurate Financial Management**
-- **Revenue Recognition** - Full amount for company drivers, commission-only for O/O
-- **Expense Allocation** - Smart logic based on driver type and truck ownership
-- **Settlement Generation** - Auto-includes all relevant expenses with professional UI
-- **P&L Reporting** - Accurate profit calculations with no double-counting
+- Node.js >= 18.0.0
+- npm or yarn
 
-### 🚛 **Complete Fleet Operations**
-- **Truck Management** - Ownership types, insurance, maintenance tracking
-- **Driver Assignment** - One driver per truck assignment system
-- **Profitability Analysis** - Revenue, expenses, ROI calculations per asset
-- **Compliance Tracking** - Insurance, registration, inspection date monitoring
+### Setup
 
----
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/ats-freight-tms.git
+   cd ats-freight-tms
+   ```
 
-## 🏗️ **TECHNICAL STACK**
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
 
-### **Frontend**
-- **HTML5** - Semantic markup with accessibility features
-- **CSS3** - Modern styling with Tailwind CSS framework
-- **JavaScript ES6+** - Modern JavaScript with async/await patterns
-- **Responsive Design** - Mobile-first approach with professional UI/UX
+3. **Start development server**
+   ```bash
+   npm run dev
+   ```
 
-### **Backend & Database**
-- **Firebase Firestore** - NoSQL cloud database with real-time sync
-- **Firebase Auth** - User authentication and authorization
-- **IndexedDB** - Client-side storage for offline persistence
-- **Cloud Functions** - Serverless backend processing (ready for deployment)
+4. **Build for production**
+   ```bash
+   npm run build
+   ```
 
-### **Libraries & Tools**
-- **Plotly.js** - Interactive charts and data visualization
-- **Font Awesome** - Professional icon library
-- **Tailwind CSS** - Utility-first CSS framework
-- **Firebase SDK** - Real-time database and authentication
+5. **Preview production build**
+   ```bash
+   npm run preview
+   ```
 
----
+## 📁 Project Structure
 
-## 🚀 **QUICK START**
-
-### **1. Clone Repository**
-```bash
-git clone https://github.com/yourusername/ats-freight-tms.git
-cd ats-freight-tms
+```
+TMS-PRO-GOOGLE-/
+├── src/
+│   ├── components/          # Reusable React components
+│   │   ├── Layout.tsx       # Main layout wrapper
+│   │   ├── Sidebar.tsx      # Navigation sidebar
+│   │   ├── Header.tsx       # Top header bar
+│   │   └── AddLoadModal.tsx # Load creation modal
+│   ├── pages/               # Page components
+│   │   ├── Dashboard.tsx   # Main dashboard
+│   │   ├── Loads.tsx       # Load management
+│   │   ├── Drivers.tsx     # Driver management
+│   │   ├── Fleet.tsx       # Fleet management
+│   │   ├── Expenses.tsx    # Expense tracking
+│   │   ├── Invoices.tsx   # Invoice management
+│   │   ├── Settlements.tsx # Driver settlements
+│   │   └── Reports.tsx     # Reports & analytics
+│   ├── context/            # React Context providers
+│   │   └── TMSContext.tsx  # Global state management
+│   ├── services/           # Utility services
+│   │   ├── mockData.ts    # Mock data for development
+│   │   └── utils.ts       # Helper functions
+│   ├── types.ts            # TypeScript type definitions
+│   ├── App.tsx            # Main app component
+│   └── main.tsx           # Entry point
+├── public/                 # Static assets
+├── docs/                   # Documentation
+├── legacy/                 # Legacy HTML files (reference)
+└── package.json           # Dependencies and scripts
 ```
 
-### **2. Firebase Setup**
-1. Create Firebase project at [console.firebase.google.com](https://console.firebase.google.com)
-2. Enable Firestore Database
-3. Enable Authentication
-4. Copy your Firebase config to `main.js`
+## 🔧 Key Features Implementation
 
-### **3. Deploy**
-```bash
-# Option 1: Static hosting (Netlify, Vercel, etc.)
-# Upload entire folder to your hosting provider
+### Auto-Save System
 
-# Option 2: Firebase Hosting
-firebase init hosting
-firebase deploy
-```
+All data is automatically saved to localStorage whenever changes are made:
+- **Loads**: Saved to `tms_loads`
+- **Drivers**: Saved to `tms_drivers`
+- **Invoices**: Saved to `tms_invoices`
+- **Settlements**: Saved to `tms_settlements`
+- **Trucks**: Saved to `tms_trucks`
 
-### **4. First Time Setup**
-1. Open the application in your browser
-2. **IMPORTANT**: Run data cleanup to remove test data
-   - Click "Clean All Data" button on dashboard
-   - OR open browser console and run: `cleanupMockData()`
-3. Add your real drivers, trucks, and customers
-4. Start managing your freight operations!
+No manual save required - all changes persist automatically!
 
----
+### Settlement Logic
 
-## 📖 **DOCUMENTATION**
+The settlement system follows this logic:
+1. **Load Filtering**: Only shows delivered loads that haven't been settled
+2. **Driver Pay Calculation**: 
+   - Owner Operators: Uses percentage (e.g., 88%)
+   - Company Drivers: Full rate (paid separately)
+3. **Deductions**: Fuel and other expenses
+4. **Auto-Marking**: Loads are marked with `settlementId` after settlement creation
 
-### **Core Modules**
-- [`main.js`](main.js) - Core data management and Firebase integration
-- [`data-stability.js`](data-stability.js) - Offline persistence and retry logic
-- [`expense-ledger-utils.js`](expense-ledger-utils.js) - O/O expense tracking system
-- [`populate-mock-data.js`](populate-mock-data.js) - Test data generation (for development)
+### Invoice Automation
 
-### **Pages**
-- [`index.html`](index.html) - Dashboard with KPIs and quick actions
-- [`loads.html`](loads.html) - Load management and tracking
-- [`drivers.html`](drivers.html) - Driver profiles and assignments
-- [`settlements.html`](settlements.html) - Driver settlement generation
-- [`expenses.html`](expenses.html) - Expense tracking and approval
-- [`fleet.html`](fleet.html) - Truck management and profitability
-- [`reports.html`](reports.html) - P&L and business analytics
-- [`customers.html`](customers.html) - Customer management and invoicing
+- Automatically creates invoices when loads are marked as "Delivered"
+- Tracks invoice status (Pending, Paid, Overdue)
+- Auto-detects overdue invoices based on due date
+- Supports multiple loads per invoice
 
-### **Utilities**
-- [`cleanup-mock-data.js`](cleanup-mock-data.js) - Remove all test data
-- [`final-test.js`](final-test.js) - System verification script
-- [`cleanup.html`](cleanup.html) - User-friendly data cleanup interface
+## 🎯 Development Roadmap
 
----
+### Completed ✅
+- [x] React/TypeScript migration
+- [x] Auto-save functionality
+- [x] Settlement system implementation
+- [x] Invoice automation
+- [x] Fleet management
+- [x] Driver management
+- [x] Expense tracking
+- [x] Reports and analytics
 
-## 🔧 **CONFIGURATION**
+### In Progress 🚧
+- [ ] Backend API integration
+- [ ] User authentication
+- [ ] Multi-user support
+- [ ] Real-time updates
 
-### **Business Rules** (Configurable in Settings)
-```javascript
-const businessRules = {
-    driverPayRules: {
-        companyDriver: { percentage: 0 },    // Individual percentage per driver
-        ownerOperator: { percentage: 0.88 }     // 88% of load revenue
-    },
-    revenueRules: {
-        commissionRate: 0.12                    // 12% commission from O/O loads
-    },
-    expenseRules: {
-        autoDeductFromOO: true,                 // Auto-deduct company-paid O/O expenses
-        createInsuranceExpenses: true           // Auto-create monthly insurance expenses
-    }
-};
-```
+### Planned 📋
+- [ ] Mobile app
+- [ ] Advanced reporting
+- [ ] Integration with accounting systems
+- [ ] GPS tracking integration
+- [ ] Document management system
+- [ ] Email notifications
 
-### **Firebase Security Rules**
-```javascript
-// Firestore Security Rules (deploy to Firebase)
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
+## 🤝 Contributing
 
----
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 🧪 **TESTING**
+## 📝 License
 
-### **Test Data Management**
-```javascript
-// Populate test data for development
-populateMockData()
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-// Clean all test data before production
-cleanupMockData()
+## 👥 Authors
 
-// Verify system functionality
-runFinalTest()
-```
+- **ATS FREIGHT LLC** - Initial work
 
-### **System Verification**
-The system includes comprehensive testing utilities:
-- Mock data population for development and testing
-- Automated cleanup for production deployment
-- System verification to ensure all features work correctly
-- Real-time calculation validation
+## 🙏 Acknowledgments
+
+- Built with modern React and TypeScript best practices
+- UI components styled with Tailwind CSS
+- Charts powered by Recharts
+
+## 📞 Support
+
+For support, email support@atsfreight.com or open an issue in the GitHub repository.
 
 ---
 
-## 📊 **BUSINESS LOGIC**
-
-### **Settlement Calculation**
-```javascript
-// Owner Operator Settlement Example
-const grossPay = loadRevenue * driverPayPercentage;  // e.g., $3000 * 0.88 = $2640
-const expenses = getCompanyPaidExpenses(driverId);   // Auto-populated: $500 fuel + $200 insurance
-const netPay = Math.max(0, grossPay - expenses);    // $2640 - $700 = $1940
-```
-
-### **P&L Calculation**
-```javascript
-// Company Revenue (excludes O/O expenses to prevent double-counting)
-const companyRevenue = companyDriverLoads.total + ownerOperatorLoads.commission;
-const companyExpenses = expenses.filter(e => !isOwnerOperatorExpense(e));
-const netProfit = companyRevenue - companyExpenses - actualDriverPay;
-```
-
----
-
-## 🔒 **SECURITY & COMPLIANCE**
-
-### **Data Protection**
-- Firebase security rules for authenticated access only
-- Client-side data validation before database writes
-- Automatic data backup and versioning
-- Audit trail for all financial transactions
-
-### **Business Compliance**
-- Accurate 1099 contractor expense tracking
-- Proper revenue recognition for tax reporting
-- Detailed financial reporting for accounting
-- Professional invoicing and settlement documentation
-
----
-
-## 🚀 **DEPLOYMENT OPTIONS**
-
-### **Option 1: Netlify (Recommended)**
-1. Connect GitHub repository to Netlify
-2. Set build command: (none - static site)
-3. Set publish directory: `/`
-4. Deploy automatically on git push
-
-### **Option 2: Firebase Hosting**
-```bash
-npm install -g firebase-tools
-firebase login
-firebase init hosting
-firebase deploy
-```
-
-### **Option 3: Traditional Web Hosting**
-- Upload all files to web server
-- Ensure HTTPS is enabled
-- Configure Firebase for your domain
-
----
-
-## 📞 **SUPPORT**
-
-### **Documentation**
-- [`PRODUCTION_READY.md`](PRODUCTION_READY.md) - Complete feature documentation
-- [`CLEANUP_INSTRUCTIONS.md`](CLEANUP_INSTRUCTIONS.md) - Data cleanup guide
-- [`DELETE_ALL_TEST_DATA.md`](DELETE_ALL_TEST_DATA.md) - Test data removal
-
-### **System Status**
-- **Version**: 2.0.0
-- **Status**: Production Ready
-- **Last Updated**: November 2025
-- **Stability**: Enterprise Grade
-
----
-
-## 📄 **LICENSE**
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🎉 **ACKNOWLEDGMENTS**
-
-- Built with modern web technologies for maximum compatibility
-- Designed for real-world freight operations
-- Tested with comprehensive business scenarios
-- Ready for immediate production deployment
-
----
-
-**🚛 ATS FREIGHT LLC Transportation Management System V2 - Production Ready! 🚀**
-
-*Professional freight management made simple.*
+**Version**: 2.0.0  
+**Last Updated**: 2025-01-27  
+**Status**: Active Development
