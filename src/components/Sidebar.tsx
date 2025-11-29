@@ -18,9 +18,10 @@ interface SidebarProps {
   isOpen: boolean;
   currentPage: PageType;
   onNavigate: (page: PageType) => void;
+  isMobile?: boolean;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate, isMobile = false }) => {
   const menuItems: { icon: any, label: PageType }[] = [
     { icon: LayoutDashboard, label: 'Dashboard' },
     { icon: Truck, label: 'Loads' },
@@ -35,7 +36,11 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate }) =>
   ];
 
   return (
-    <div className={`fixed left-0 top-0 h-full bg-slate-900 text-white transition-all duration-300 z-20 flex flex-col ${isOpen ? 'w-64' : 'w-20'}`}>
+    <div className={`fixed left-0 top-0 h-full bg-slate-900 text-white transition-all duration-300 z-40 flex flex-col ${
+      isMobile 
+        ? `${isOpen ? 'w-64' : '-translate-x-full'} lg:translate-x-0`
+        : isOpen ? 'w-64' : 'w-20'
+    }`}>
       {/* Logo Section */}
       <div className="h-16 flex items-center px-6 border-b border-slate-800">
         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">

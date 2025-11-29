@@ -5,13 +5,16 @@ import { useTMS } from '../context/TMSContext';
 
 interface HeaderProps {
   toggleSidebar: () => void;
+  isMobile?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ toggleSidebar }) => {
+const Header: React.FC<HeaderProps> = ({ toggleSidebar, isMobile = false }) => {
   const { searchTerm, setSearchTerm } = useTMS();
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 fixed top-0 right-0 left-0 z-10 lg:ml-64 transition-all duration-300">
+    <header className={`h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 fixed top-0 right-0 left-0 z-30 transition-all duration-300 ${
+      isMobile ? 'ml-0' : 'lg:ml-64'
+    }`}>
       <div className="flex items-center gap-4">
         <button 
           onClick={toggleSidebar}
@@ -21,7 +24,7 @@ const Header: React.FC<HeaderProps> = ({ toggleSidebar }) => {
         </button>
         
         {/* Global Search */}
-        <div className="relative hidden md:block w-96">
+        <div className="relative hidden md:block w-full md:w-96">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
           <input 
             type="text" 
@@ -31,6 +34,11 @@ const Header: React.FC<HeaderProps> = ({ toggleSidebar }) => {
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-sm"
           />
         </div>
+        
+        {/* Mobile Search Button */}
+        <button className="md:hidden p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+          <Search size={20} />
+        </button>
       </div>
 
       <div className="flex items-center gap-4">
