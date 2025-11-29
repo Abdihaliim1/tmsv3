@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to get tenant ID from request
+    function getTenantId() {
+      return request.auth != null ? request.auth.token.tenantId : null;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+    
+    // Helper function to check if user belongs to tenant
+    function belongsToTenant(tenantId) {
+      return request.auth != null && request.auth.token.tenantId == tenantId;
+    }
+    
+    // Tenant collection - only admins can create/update
+    match /tenants/{tenantId} {
+      allow read: if request.auth != null && 
+                     (belongsToTenant(tenantId) || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Tenant data collections - isolated per tenant
+    match /tenants/{tenantId}/loads/{loadId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    match /tenants/{tenantId}/drivers/{driverId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    match /tenants/{tenantId}/invoices/{invoiceId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    match /tenants/{tenantId}/expenses/{expenseId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    match /tenants/{tenantId}/settlements/{settlementId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    match /tenants/{tenantId}/trucks/{truckId} {
+      allow read, write: if belongsToTenant(tenantId);
+    }
+    
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

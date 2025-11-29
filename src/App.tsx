@@ -10,6 +10,7 @@ import Invoices from './pages/Invoices';
 import Settlements from './pages/Settlements';
 import Reports from './pages/Reports';
 import { TMSProvider } from './context/TMSContext';
+import { TenantProvider } from './context/TenantContext';
 
 export type PageType = 'Dashboard' | 'Loads' | 'Drivers' | 'Fleet' | 'Expenses' | 'Invoices' | 'Settlements' | 'Reports' | 'Import' | 'Settings';
 
@@ -32,11 +33,13 @@ function App() {
   };
 
   return (
-    <TMSProvider>
-      <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
-        {renderPage()}
-      </Layout>
-    </TMSProvider>
+    <TenantProvider>
+      <TMSProvider>
+        <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
+          {renderPage()}
+        </Layout>
+      </TMSProvider>
+    </TenantProvider>
   );
 }
 

@@ -3,15 +3,12 @@ import React, { createContext, useContext, useState, ReactNode, useMemo, useEffe
 import { Load, LoadStatus, NewLoadInput, KPIMetrics, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput } from '../types';
 import { recentLoads, generateMockKPIs, initialDrivers, initialInvoices } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
+import { getTenantFromSubdomain } from '../utils/tenant';
 
-// LocalStorage keys
-const STORAGE_KEYS = {
-  loads: 'tms_loads',
-  drivers: 'tms_drivers',
-  invoices: 'tms_invoices',
-  settlements: 'tms_settlements',
-  trucks: 'tms_trucks',
-  expenses: 'tms_expenses',
+// LocalStorage keys (tenant-aware)
+const getStorageKey = (tenantId: string | null, key: string): string => {
+  const prefix = tenantId ? `tms_${tenantId}_` : 'tms_';
+  return `${prefix}${key}`;
 };
 
 interface TMSContextType {
@@ -47,10 +44,14 @@ interface TMSContextType {
 const TMSContext = createContext<TMSContextType | undefined>(undefined);
 
 export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Load from localStorage or use initial data
+  // Get tenant ID from subdomain (works even without TenantContext)
+  const tenantId = getTenantFromSubdomain();
+
+  // Load from localStorage or use initial data (tenant-aware)
   const loadFromStorage = <T,>(key: string, defaultValue: T[]): T[] => {
     try {
-      const stored = localStorage.getItem(key);
+      const storageKey = getStorageKey(tenantId, key);
+      const stored = localStorage.getItem(storageKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         return Array.isArray(parsed) ? parsed : defaultValue;
@@ -61,49 +62,60 @@ export const TMSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return defaultValue;
   };
 
-  // Save to localStorage
+  // Save to localStorage (tenant-aware)
   const saveToStorage = <T,>(key: string, data: T[]) => {
     try {
-      localStorage.setItem(key, JSON.stringify(data));
+      const storageKey = getStorageKey(tenantId, key);
+      localStorage.setItem(storageKey, JSON.stringify(data));
     } catch (error) {
       console.error(`Error saving ${key} to localStorage:`, error);
     }
   };
 
   // Initialize state from localStorage or defaults
-  const [loads, setLoads] = useState<Load[]>(() => loadFromStorage(STORAGE_KEYS.loads, recentLoads));
-  const [drivers, setDrivers] = useState<Driver[]>(() => loadFromStorage(STORAGE_KEYS.drivers, initialDrivers));
-  const [invoices, setInvoices] = useState<Invoice[]>(() => loadFromStorage(STORAGE_KEYS.invoices, initialInvoices));
-  const [settlements, setSettlements] = useState<Settlement[]>(() => loadFromStorage(STORAGE_KEYS.settlements, []));
-  const [trucks, setTrucks] = useState<Truck[]>(() => loadFromStorage(STORAGE_KEYS.trucks, []));
-  const [expenses, setExpenses] = useState<Expense[]>(() => loadFromStorage(STORAGE_KEYS.expenses, []));
+  const [loads, setLoads] = useState<Load[]>(() => loadFromStorage('loads', recentLoads));
+  const [drivers, setDrivers] = useState<Driver[]>(() => loadFromStorage('drivers', initialDrivers));
+  const [invoices, setInvoices] = useState<Invoice[]>(() => loadFromStorage('invoices', initialInvoices));
+  const [settlements, setSettlements] = useState<Settlement[]>(() => loadFromStorage('settlements', []));
+  const [trucks, setTrucks] = useState<Truck[]>(() => loadFromStorage('trucks', []));
+  const [expenses, setExpenses] = useState<Expense[]>(() => loadFromStorage('expenses', []));
 
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Update tenant ID when TenantContext changes
+  useEffect(() => {
+    try {
+      // This will be handled by TenantProvider wrapper
+      // For now, we'll use a simpler approach
+    } catch {
+      // Tenant context not available
+    }
+  }, []);
+
   // Auto-save to localStorage whenever data changes
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.loads, loads);
-  }, [loads]);
+    saveToStorage('loads', loads);
+  }, [loads, tenantId]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.drivers, drivers);
-  }, [drivers]);
+    saveToStorage('drivers', drivers);
+  }, [drivers, tenantId]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.invoices, invoices);
-  }, [invoices]);
+    saveToStorage('invoices', invoices);
+  }, [invoices, tenantId]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.settlements, settlements);
-  }, [settlements]);
+    saveToStorage('settlements', settlements);
+  }, [settlements, tenantId]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.trucks, trucks);
-  }, [trucks]);
+    saveToStorage('trucks', trucks);
+  }, [trucks, tenantId]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.expenses, expenses);
-  }, [expenses]);
+    saveToStorage('expenses', expenses);
+  }, [expenses, tenantId]);
 
   // KPIs
   const kpis = useMemo(() => {
