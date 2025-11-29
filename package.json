@@ -2,13 +2,12 @@
   "name": "ats-freight-tms",
   "version": "2.0.0",
   "description": "ATS FREIGHT LLC Transportation Management System - Professional freight operations management",
-  "main": "index.html",
+  "type": "module",
   "scripts": {
-    "start": "python3 -m http.server 8000",
-    "dev": "python3 -m http.server 8001",
-    "test": "echo \"Run: runFinalTest() in browser console\"",
-    "cleanup": "echo \"Run: cleanupMockData() in browser console\"",
-    "deploy": "echo \"Upload to Netlify or run: firebase deploy\""
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "keywords": [
     "transportation",
@@ -34,11 +33,29 @@
   },
   "homepage": "https://github.com/yourusername/ats-freight-tms#readme",
   "dependencies": {
-    "firebase": "^9.22.1"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "firebase": "^9.22.1",
+    "lucide-react": "^0.555.0",
+    "recharts": "^3.5.1"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^8.55.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8"
+  },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "browserslist": [
     "> 1%",

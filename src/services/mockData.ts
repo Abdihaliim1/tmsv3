@@ -110,7 +110,8 @@ export const initialInvoices: Invoice[] = [
     loadId: '2',
     customerName: 'Southern Transport',
     amount: 850,
-    status: 'Pending',
-    date: '2025-11-25'
+    status: 'pending',
+    date: '2025-11-25',
+    dueDate: '2025-12-25'
   }
 ];

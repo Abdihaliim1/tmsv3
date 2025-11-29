@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   DollarSign, 
   Truck, 
@@ -21,13 +21,86 @@ import {
 } from 'recharts';
 import StatsCard from '../components/StatsCard';
 import AddLoadModal from '../components/AddLoadModal';
-import { revenueChartData, loadStatusData } from '../services/mockData';
 import { LoadStatus } from '../types';
 import { useTMS } from '../context/TMSContext';
+import { calculateCompanyRevenue } from '../services/utils';
 
-const Dashboard: React.FC = () => {
-  const { loads, kpis, addLoad } = useTMS();
+import { PageType } from '../App';
+
+interface DashboardProps {
+  onNavigate?: (page: PageType) => void;
+}
+
+const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
+  const { loads, kpis, addLoad, drivers, invoices } = useTMS();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // Calculate real revenue trends from loads (last 6 months)
+  const revenueChartData = useMemo(() => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const data: { name: string; value: number }[] = [];
+
+    // Get last 6 months
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+      const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+      monthEnd.setHours(23, 59, 59, 999);
+
+      // Calculate revenue for this month from delivered/completed loads
+      const monthLoads = loads.filter(load => {
+        if (load.status !== LoadStatus.Delivered && load.status !== LoadStatus.Completed) return false;
+        const loadDate = new Date(load.deliveryDate || load.pickupDate || '');
+        return loadDate >= monthStart && loadDate <= monthEnd;
+      });
+
+      let monthRevenue = 0;
+      monthLoads.forEach(load => {
+        const grossAmount = load.rate || 0;
+        if (load.driverId) {
+          const driver = drivers.find(d => d.id === load.driverId);
+          monthRevenue += calculateCompanyRevenue(grossAmount, driver);
+        } else {
+          monthRevenue += grossAmount;
+        }
+      });
+
+      data.push({
+        name: months[date.getMonth()],
+        value: monthRevenue
+      });
+    }
+
+    return data;
+  }, [loads, drivers]);
+
+  // Calculate real load status data
+  const loadStatusData = useMemo(() => {
+    const statusCounts: Record<string, number> = {
+      'Available': 0,
+      'Dispatched': 0,
+      'In Transit': 0,
+      'Delivered': 0,
+      'Completed': 0,
+      'Cancelled': 0
+    };
+
+    loads.forEach(load => {
+      const status = load.status;
+      if (status === LoadStatus.Available) statusCounts['Available']++;
+      else if (status === LoadStatus.Dispatched) statusCounts['Dispatched']++;
+      else if (status === LoadStatus.InTransit) statusCounts['In Transit']++;
+      else if (status === LoadStatus.Delivered) statusCounts['Delivered']++;
+      else if (status === LoadStatus.Completed) statusCounts['Completed']++;
+      else if (status === LoadStatus.Cancelled) statusCounts['Cancelled']++;
+    });
+
+    // Convert to array format, filter out zeros
+    return Object.entries(statusCounts)
+      .filter(([_, value]) => value > 0)
+      .map(([name, value]) => ({ name, value }));
+  }, [loads]);
 
   const getStatusColor = (status: LoadStatus) => {
     switch (status) {
@@ -41,7 +114,7 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const COLORS = ['#94a3b8', '#facc15', '#3b82f6', '#10b981'];
+  const COLORS = ['#94a3b8', '#facc15', '#3b82f6', '#10b981', '#a855f7', '#ef4444'];
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-8">
@@ -52,8 +125,15 @@ const Dashboard: React.FC = () => {
           <p className="text-slate-500 mt-1">Welcome back, here's what's happening today.</p>
         </div>
         <div className="flex gap-3">
-           <button className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors">
-            Download Report
+          <button 
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate('Reports' as PageType);
+              }
+            }}
+            className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors"
+          >
+            View Reports
           </button>
           <button 
             onClick={() => setIsAddModalOpen(true)}
@@ -102,13 +182,23 @@ const Dashboard: React.FC = () => {
         {/* Revenue Chart */}
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-bold text-slate-900">Revenue Trends</h2>
-            <button className="text-slate-400 hover:text-slate-600">
-              <MoreHorizontal size={20} />
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Revenue Trends</h2>
+              <p className="text-sm text-slate-500 mt-1">Last 6 months from delivered loads</p>
+            </div>
+            <button 
+              onClick={() => {
+                if (onNavigate) {
+                  onNavigate('Reports');
+                }
+              }}
+              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              View Details →
             </button>
           </div>
           <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height={300}>
               <AreaChart data={revenueChartData}>
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -132,16 +222,26 @@ const Dashboard: React.FC = () => {
         {/* Load Status Chart */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
            <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-bold text-slate-900">Load Status</h2>
-            <button className="text-slate-400 hover:text-slate-600">
-              <MoreHorizontal size={20} />
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Load Status</h2>
+              <p className="text-sm text-slate-500 mt-1">Real-time load distribution</p>
+            </div>
+            <button 
+              onClick={() => {
+                if (onNavigate) {
+                  onNavigate('Loads' as PageType);
+                }
+              }}
+              className="text-sm font-medium text-blue-600 hover:text-blue-700"
+            >
+              View All →
             </button>
           </div>
           <div className="h-[220px] w-full relative">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie
-                  data={loadStatusData}
+                  data={loadStatusData as any}
                   cx="50%"
                   cy="50%"
                   innerRadius={60}
@@ -180,7 +280,16 @@ const Dashboard: React.FC = () => {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-200 flex items-center justify-between">
           <h2 className="text-lg font-bold text-slate-900">Recent Loads</h2>
-          <button className="text-sm font-medium text-blue-600 hover:text-blue-700">View All</button>
+          <button 
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate('Loads' as PageType);
+              }
+            }}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            View All →
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -202,10 +311,20 @@ const Dashboard: React.FC = () => {
                    </td>
                  </tr>
               ) : (
-                loads.map((load) => (
-                  <tr key={load.id} className="hover:bg-slate-50 transition-colors">
+                loads.slice(0, 10).map((load) => (
+                  <tr 
+                    key={load.id} 
+                    onClick={() => {
+                      if (onNavigate) {
+                        // Store the selected load ID in sessionStorage so Loads page can open it
+                        sessionStorage.setItem('selectedLoadId', load.id);
+                        onNavigate('Loads' as PageType);
+                      }
+                    }}
+                    className="hover:bg-blue-50 cursor-pointer transition-colors"
+                  >
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="font-medium text-blue-600">{load.loadNumber}</span>
+                      <span className="font-medium text-blue-600 hover:text-blue-700">{load.loadNumber}</span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(load.status)}`}>

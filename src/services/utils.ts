@@ -86,3 +86,12 @@ export const calculateCompanyRevenue = (grossAmount: number, driver?: Driver): n
 
   return grossAmount;
 };
+
+export const validatePayPercentage = (percentage: number, driverType?: string): number => {
+  // If percentage is > 1, assume it's stored as integer (e.g., 88) and convert to decimal (0.88)
+  if (percentage > 1) {
+    return percentage / 100;
+  }
+  // If percentage is already decimal (0-1), return as is
+  return percentage;
+};
