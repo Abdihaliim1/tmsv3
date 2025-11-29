@@ -23,22 +23,27 @@ jobs:
       
       - name: Set project
         run: |
-          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID || 'somtms' }}
       
       - name: Build application
         run: |
           npm ci
           npm run build
       
+      - name: Build Docker image
+        run: |
+          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/tms-pro
+      
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy tms-app \
-            --source . \
+          gcloud run deploy tms-pro \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/tms-pro \
             --platform managed \
-            --region us-central1 \
+            --region europe-west1 \
             --allow-unauthenticated \
-            --port 8080 \
+            --port 80 \
             --memory 512Mi \
-            --timeout 300 \
+            --cpu 1 \
+            --min-instances 0 \
             --max-instances 10
 
