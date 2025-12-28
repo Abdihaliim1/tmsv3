@@ -25,8 +25,8 @@ const StatsCard: React.FC<StatsCardProps> = ({ label, value, icon: Icon, trend, 
         <div className={`${style.iconBg} p-3 rounded-lg`}>
           <Icon className={style.text} size={24} />
         </div>
-        <span className={`text-sm font-medium ${trend >= 0 ? 'text-emerald-600' : 'text-red-600'} bg-slate-50 px-2 py-1 rounded-full`}>
-          {trend >= 0 ? '+' : ''}{trend}%
+        <span className={`text-sm font-medium ${trend >= 0 ? 'text-emerald-600' : 'text-red-600'} bg-slate-50 px-2 py-1 rounded-full`} title={`${trend >= 0 ? '+' : ''}${trend}%`}>
+          {trend >= 0 ? '+' : ''}{Math.abs(trend) > 100 ? trend.toFixed(1) : trend.toFixed(1)}%
         </span>
       </div>
       <div>

@@ -8,9 +8,10 @@ interface LayoutProps {
   children: React.ReactNode;
   currentPage: PageType;
   onNavigate: (page: PageType) => void;
+  hasAdminBanner?: boolean; // When admin is viewing a company
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) => {
+const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate, hasAdminBanner = false }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -58,7 +59,9 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
       }`}>
         <Header toggleSidebar={toggleSidebar} isMobile={isMobile} onNavigate={handleNavigate} />
         
-        <main className="flex-1 mt-16 overflow-x-hidden p-4 md:p-6">
+        <main className={`flex-1 overflow-x-hidden p-4 md:p-6 ${
+          hasAdminBanner ? 'mt-24' : 'mt-16'
+        }`}>
           {children}
         </main>
       </div>

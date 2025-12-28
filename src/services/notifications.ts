@@ -1,4 +1,5 @@
 import { Employee, Truck, Trailer } from '../types';
+import { parseDateOnlyLocal } from '../utils/dateOnly';
 
 export type NotificationType = 'critical' | 'warning' | 'info';
 export type NotificationCategory = 'cdl' | 'medical' | 'truck_registration' | 'trailer_registration' | 'truck_insurance' | 'trailer_insurance' | 'truck_inspection' | 'trailer_inspection';
@@ -19,12 +20,13 @@ export interface Notification {
 
 /**
  * Calculate days until expiration
+ * Uses local time parsing to avoid timezone bugs
  */
 const getDaysUntilExpiration = (expirationDate: string): number => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const expiry = new Date(expirationDate);
-  expiry.setHours(0, 0, 0, 0);
+  // Use local time parsing to avoid timezone shift bug
+  const expiry = parseDateOnlyLocal(expirationDate);
   const diffTime = expiry.getTime() - today.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays;
@@ -355,5 +357,50 @@ export const getAllNotifications = (
     if (typeDiff !== 0) return typeDiff;
     return a.daysUntilExpiration - b.daysUntilExpiration;
   });
+};
+
+/**
+ * Simple notification service for user-facing messages
+ * Used by errorHandler and other services to display user notifications
+ * 
+ * TODO: Replace with a proper toast notification library (e.g., react-hot-toast, sonner)
+ */
+export const notifications = {
+  /**
+   * Show an error notification
+   */
+  error: (message: string) => {
+    console.error('[Notification]', message);
+    // TODO: Show toast/alert UI
+    // For now, use browser alert in development
+    if (import.meta.env.DEV) {
+      // In development, log to console
+      // In production, this would show a toast notification
+    }
+  },
+
+  /**
+   * Show a warning notification
+   */
+  warning: (message: string) => {
+    console.warn('[Notification]', message);
+    // TODO: Show toast/alert UI
+  },
+
+  /**
+   * Show an info notification
+   */
+  info: (message: string) => {
+    console.info('[Notification]', message);
+    // TODO: Show toast/alert UI
+  },
+
+  /**
+   * Show a success notification
+   */
+  success: (message: string) => {
+    console.log('[Notification]', message);
+    // TODO: Show toast/alert UI
+  },
 };
 

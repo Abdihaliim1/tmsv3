@@ -32,3 +32,9 @@ dist-ssr
 # OS files
 Thumbs.db
 .DS_Store
+.env
+.env.local
+.env.*.local
+
+# Sensitive credentials (DO NOT COMMIT)
+USERS_AND_CREDENTIALS.md

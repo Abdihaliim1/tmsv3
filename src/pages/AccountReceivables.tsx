@@ -4,7 +4,15 @@ import {
   MoreHorizontal, X, Plus, Building2, Edit, Search, MapPin, Truck, TrendingUp
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Invoice, InvoiceStatus, LoadStatus, FactoringCompany, NewFactoringCompanyInput, Load } from '../types';
+import { useCompany } from '../context/CompanyContext';
+import { Invoice, InvoiceStatus, LoadStatus, FactoringCompany, NewFactoringCompanyInput, Load, Payment } from '../types';
+import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
+import { addPaymentToInvoice, validatePayment, calculateAging, calculateARAgingSummary, calculateInvoiceStatus, calculateTotalPaid, calculateOutstandingBalance, getDaysOutstanding } from '../services/paymentService';
+import { canInvoiceLoad } from '../services/documentService';
+import { useTenant } from '../context/TenantContext';
+import { generateUniqueInvoiceNumber } from '../services/invoiceService';
+import { generateInvoicePDF } from '../services/invoicePDF';
+import { useDebounce } from '../utils/debounce';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
@@ -17,11 +25,19 @@ const AccountReceivables: React.FC = () => {
     addFactoringCompany, updateFactoringCompany, deleteFactoringCompany, updateLoad, updateInvoice: updateInvoiceFunc
   } = useTMS();
   
+  // Get tenant ID at top level (hooks must be called at top level)
+  const { activeTenantId } = useTenant();
+  const tenantId = activeTenantId || 'default';
+  
+  // Get company profile for PDF generation
+  const { companyProfile } = useCompany();
+  
   const [activeTab, setActiveTab] = useState<TabType>('invoices');
   
   // Invoice tab state
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const itemsPerPage = 10;
@@ -29,11 +45,14 @@ const AccountReceivables: React.FC = () => {
   // Factored loads tab state
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [factoredSearchTerm, setFactoredSearchTerm] = useState<string>('');
+  const debouncedFactoredSearchTerm = useDebounce(factoredSearchTerm, 300);
   
   // Factoring companies tab state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCompany, setEditingCompany] = useState<FactoringCompany | null>(null);
   const [companySearchTerm, setCompanySearchTerm] = useState('');
+  const debouncedCompanySearchTerm = useDebounce(companySearchTerm, 300);
+  const [selectedCompanyName, setSelectedCompanyName] = useState('');
 
   // Check for overdue invoices
   useEffect(() => {
@@ -80,24 +99,39 @@ const AccountReceivables: React.FC = () => {
     const deliveredLoads = loads.filter(load => {
       const status = load.status;
       const isDelivered = status === LoadStatus.Delivered || status === LoadStatus.Completed;
-      const hasNoInvoice = !(load as any).invoiceId;
-      return isDelivered && hasNoInvoice && load.customerName;
+      
+      // DUPLICATE CHECK 1: Load already has invoiceId
+      if (load.invoiceId) return false;
+      
+      // DUPLICATE CHECK 2: Any invoice references this load
+      const hasExistingInvoice = invoices.some(inv => 
+        inv.loadId === load.id || inv.loadIds?.includes(load.id)
+      );
+      if (hasExistingInvoice) return false;
+      
+      // Must have a broker name to invoice
+      return isDelivered && (load.brokerName || load.customerName);
     });
 
+    // Create invoices only for loads that passed all duplicate checks
     deliveredLoads.forEach(load => {
-      const existingInvoice = invoices.find(inv => 
-        inv.customerName === load.customerName &&
-        inv.loadIds?.includes(load.id)
+      const brokerName = load.brokerName || load.customerName;
+      
+      // Final safety check - redundant but safe
+      const alreadyHasInvoice = invoices.some(inv => 
+        inv.loadId === load.id || inv.loadIds?.includes(load.id)
       );
-
-      if (!existingInvoice && load.rate > 0) {
+      
+      if (!alreadyHasInvoice && load.rate > 0) {
         const today = new Date();
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30);
 
         const newInvoice: Omit<Invoice, 'id'> = {
-          invoiceNumber: `INV-${new Date().getFullYear()}-${invoices.length + 1001}`,
-          customerName: load.customerName,
+          invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
+          brokerId: load.brokerId,
+          brokerName: brokerName,
+          customerName: brokerName, // Keep for backward compatibility
           loadIds: [load.id],
           amount: load.grandTotal || load.rate,
           status: 'pending',
@@ -117,12 +151,13 @@ const AccountReceivables: React.FC = () => {
   const filteredInvoices = useMemo(() => {
     return invoices.filter(invoice => {
       const matchesStatus = !statusFilter || invoice.status === statusFilter;
-      const matchesSearch = !searchTerm ||
-        invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        invoice.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+      const brokerName = invoice.brokerName || invoice.customerName || '';
+      const matchesSearch = !debouncedSearchTerm ||
+        invoice.invoiceNumber.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        brokerName.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
     });
-  }, [invoices, statusFilter, searchTerm]);
+  }, [invoices, statusFilter, debouncedSearchTerm]);
 
   const invoiceStats = useMemo(() => {
     const total = invoices.length;
@@ -172,7 +207,7 @@ const AccountReceivables: React.FC = () => {
     );
   };
 
-  const handleMarkAsPaid = (invoice: Invoice) => {
+  const handleMarkAsPaid = async (invoice: Invoice) => {
     const paidAmount = prompt('Enter paid amount:', invoice.amount.toString());
     if (!paidAmount) return;
     
@@ -192,16 +227,33 @@ const AccountReceivables: React.FC = () => {
 
     // Update associated loads
     if (invoice.loadIds) {
-      invoice.loadIds.forEach(loadId => {
+      // Use for...of loop to properly handle async/await
+      for (const loadId of invoice.loadIds) {
         const load = loads.find(l => l.id === loadId);
         if (load) {
-          updateLoad(loadId, {
-            paymentReceived: true,
-            paymentReceivedDate: paidAt,
-            paymentAmount: parseFloat(paidAmount)
-          });
+          try {
+            await updateLoad(loadId, {
+              paymentReceived: true,
+              paymentReceivedDate: paidAt,
+              paymentAmount: parseFloat(paidAmount)
+            });
+          } catch (error: any) {
+            console.error('Error updating load payment status:', error);
+            // Continue even if update fails - payment is still recorded
+          }
         }
-      });
+      }
+    }
+  };
+
+  // Handle print/download invoice PDF
+  const handlePrintInvoice = (invoice: Invoice) => {
+    try {
+      generateInvoicePDF(invoice, loads, companyProfile);
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error('Error generating invoice PDF:', error);
+      alert('Failed to generate invoice PDF. Please try again.');
     }
   };
 
@@ -234,13 +286,14 @@ const AccountReceivables: React.FC = () => {
 
   const filteredFactoredData = useMemo(() => {
     return factoredData.filter(item => {
-      const matchesSearch = !factoredSearchTerm ||
-        item.load.loadNumber.toLowerCase().includes(factoredSearchTerm.toLowerCase()) ||
-        item.load.customerName.toLowerCase().includes(factoredSearchTerm.toLowerCase()) ||
-        item.invoice?.invoiceNumber.toLowerCase().includes(factoredSearchTerm.toLowerCase());
+      const brokerName = item.load.brokerName || item.load.customerName || '';
+      const matchesSearch = !debouncedFactoredSearchTerm ||
+        item.load.loadNumber.toLowerCase().includes(debouncedFactoredSearchTerm.toLowerCase()) ||
+        brokerName.toLowerCase().includes(debouncedFactoredSearchTerm.toLowerCase()) ||
+        item.invoice?.invoiceNumber.toLowerCase().includes(debouncedFactoredSearchTerm.toLowerCase());
       return matchesSearch;
     });
-  }, [factoredData, factoredSearchTerm]);
+  }, [factoredData, debouncedFactoredSearchTerm]);
 
   const factoringStats = useMemo(() => {
     const totalFactored = factoredData.length;
@@ -325,20 +378,47 @@ const AccountReceivables: React.FC = () => {
   // TAB 3: FACTORING COMPANIES
   // ================================
   
-  const filteredCompanies = useMemo(() => {
+  // Filter out auto-seeded companies (only show manually added ones in the list)
+  const manuallyAddedCompanies = useMemo(() => {
     return factoringCompanies.filter(company => {
-      const matchesSearch = !companySearchTerm ||
-        company.name.toLowerCase().includes(companySearchTerm.toLowerCase()) ||
-        company.address?.toLowerCase().includes(companySearchTerm.toLowerCase()) ||
-        company.phone?.toLowerCase().includes(companySearchTerm.toLowerCase()) ||
-        company.email?.toLowerCase().includes(companySearchTerm.toLowerCase());
+      // Auto-seeded companies have IDs like "factoring_0001", "factoring_0002", etc.
+      // Manually added companies have random IDs
+      return !company.id.startsWith('factoring_');
+    });
+  }, [factoringCompanies]);
+
+  const filteredCompanies = useMemo(() => {
+    return manuallyAddedCompanies.filter(company => {
+      const matchesSearch = !debouncedCompanySearchTerm ||
+        company.name.toLowerCase().includes(debouncedCompanySearchTerm.toLowerCase()) ||
+        company.address?.toLowerCase().includes(debouncedCompanySearchTerm.toLowerCase()) ||
+        company.phone?.toLowerCase().includes(debouncedCompanySearchTerm.toLowerCase()) ||
+        company.email?.toLowerCase().includes(debouncedCompanySearchTerm.toLowerCase());
       return matchesSearch;
     });
-  }, [factoringCompanies, companySearchTerm]);
+  }, [manuallyAddedCompanies, debouncedCompanySearchTerm]);
 
   const handleEditCompany = (company: FactoringCompany) => {
     setEditingCompany(company);
+    setSelectedCompanyName(company.name);
     setIsModalOpen(true);
+  };
+
+  const handleCompanySelect = (company: FactoringCompany | null) => {
+    if (company) {
+      setSelectedCompanyName(company.name);
+      // If editing, update the editing company
+      if (editingCompany) {
+        setEditingCompany({ ...editingCompany, name: company.name });
+      }
+    } else {
+      setSelectedCompanyName('');
+    }
+  };
+
+  const handleAddNewCompany = (newCompany: Omit<FactoringCompany, 'id'>) => {
+    // This will be handled by the form submission
+    setSelectedCompanyName(newCompany.name || '');
   };
 
   const handleDeleteCompany = (companyId: string) => {
@@ -348,13 +428,20 @@ const AccountReceivables: React.FC = () => {
   };
 
   const handleSaveCompany = (companyData: NewFactoringCompanyInput) => {
+    // Use selected company name if available (from autocomplete)
+    const finalData = {
+      ...companyData,
+      name: selectedCompanyName || companyData.name,
+    };
+    
     if (editingCompany) {
-      updateFactoringCompany(editingCompany.id, companyData);
+      updateFactoringCompany(editingCompany.id, finalData);
     } else {
-      addFactoringCompany(companyData);
+      addFactoringCompany(finalData);
     }
     setIsModalOpen(false);
     setEditingCompany(null);
+    setSelectedCompanyName('');
   };
 
   const formatAddress = (company: FactoringCompany) => {
@@ -394,7 +481,7 @@ const AccountReceivables: React.FC = () => {
                 setEditingCompany(null);
                 setIsModalOpen(true);
               }}
-              className="bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 text-sm font-medium flex items-center gap-2"
+              className="btn-primary px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-2"
             >
               <Plus size={16} />
               Add Factoring Company
@@ -541,7 +628,7 @@ const AccountReceivables: React.FC = () => {
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Invoice #</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Customer</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Broker</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Date</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Due Date</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Amount</th>
@@ -566,7 +653,7 @@ const AccountReceivables: React.FC = () => {
                                 <div className="text-sm font-medium text-blue-600">{invoice.invoiceNumber}</div>
                                 <div className="text-xs text-slate-500">{invoiceLoads.length} load{invoiceLoads.length !== 1 ? 's' : ''}</div>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{invoice.customerName}</td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{invoice.brokerName || invoice.customerName}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{formatDate(invoice.date)}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{invoice.dueDate ? formatDate(invoice.dueDate) : '—'}</td>
                               <td className="px-6 py-4 whitespace-nowrap">
@@ -595,9 +682,12 @@ const AccountReceivables: React.FC = () => {
                                           Mark as Paid
                                         </button>
                                       )}
-                                      <button className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2">
-                                        <Printer size={16} />
-                                        Print
+                                      <button
+                                        onClick={() => handlePrintInvoice(invoice)}
+                                        className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                                      >
+                                        <Download size={16} />
+                                        Download PDF
                                       </button>
                                       <button
                                         onClick={() => {
@@ -807,7 +897,7 @@ const AccountReceivables: React.FC = () => {
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Load #</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Customer</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Broker</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Factoring Company</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Invoice #</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Factored Date</th>
@@ -845,7 +935,7 @@ const AccountReceivables: React.FC = () => {
                                   {load.originCity}, {load.originState} → {load.destCity}, {load.destState}
                                 </div>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{load.customerName}</td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{load.brokerName || load.customerName}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{company?.name || 'N/A'}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{invoice?.invoiceNumber || '—'}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
@@ -996,6 +1086,7 @@ const AccountReceivables: React.FC = () => {
               <button onClick={() => {
                 setIsModalOpen(false);
                 setEditingCompany(null);
+                setSelectedCompanyName('');
               }} className="text-slate-500 hover:text-slate-700">
                 <X size={24} />
               </button>
@@ -1005,7 +1096,7 @@ const AccountReceivables: React.FC = () => {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
               const companyData: NewFactoringCompanyInput = {
-                name: formData.get('name') as string,
+                name: selectedCompanyName || (formData.get('name') as string) || editingCompany?.name || '',
                 feePercentage: parseFloat(formData.get('feePercentage') as string) || 2.5,
                 contactName: formData.get('contactName') as string || undefined,
                 phone: formData.get('phone') as string || undefined,
@@ -1020,12 +1111,19 @@ const AccountReceivables: React.FC = () => {
             }} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Company Name *</label>
+                <FactoringCompanyAutocomplete
+                  value={selectedCompanyName || editingCompany?.name || ''}
+                  onChange={handleCompanySelect}
+                  factoringCompanies={factoringCompanies}
+                  onAddCompany={handleAddNewCompany}
+                  placeholder="Type to search factoring companies (e.g., TAFS, TAB, WEX)..."
+                />
+                {/* Hidden input for form validation */}
                 <input
-                  type="text"
+                  type="hidden"
                   name="name"
+                  value={selectedCompanyName || editingCompany?.name || ''}
                   required
-                  defaultValue={editingCompany?.name || ''}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               
@@ -1153,7 +1251,7 @@ const AccountReceivables: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  className="btn-primary px-4 py-2 rounded-md"
                 >
                   Save Company
                 </button>

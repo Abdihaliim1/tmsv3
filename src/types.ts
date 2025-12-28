@@ -1,4 +1,40 @@
 
+// ============================================================================
+// TENANT & MEMBERSHIP TYPES
+// ============================================================================
+
+export interface Tenant {
+  id: string;
+  name: string;
+  status: 'active' | 'inactive' | 'suspended';
+  createdAt?: string;
+  updatedAt?: string;
+  // Optional: for internal search/filtering only (not for routing)
+  tenantSlug?: string;
+}
+
+export interface UserMembership {
+  tenantId: string;
+  tenantName: string;
+  role: 'admin' | 'dispatcher' | 'driver' | 'accountant' | 'viewer';
+  active: boolean;
+  joinedAt?: string;
+}
+
+export interface UserProfile {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  defaultTenantId?: string; // Preferred tenant (for auto-selection)
+  isPlatformAdmin?: boolean; // Only true for platform admins (can switch companies)
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ============================================================================
+// LOAD TYPES
+// ============================================================================
+
 export enum LoadStatus {
   Available = 'available',
   Dispatched = 'dispatched',
@@ -10,12 +46,13 @@ export enum LoadStatus {
 }
 
 export type DriverType = 'Company' | 'OwnerOperator';
+export type EmployeeType = 'driver' | 'dispatcher' | 'admin' | 'owner' | 'other';
 
 export interface Load {
   id: string;
   loadNumber: string;
   status: LoadStatus;
-  customerName: string;
+  customerName?: string; // Optional: Shipper/Consignee name
   driverId?: string; // Linked to Driver
   driverName?: string; // Display purpose
   // Team Driver Support (Driver 2)
@@ -39,6 +76,8 @@ export interface Load {
   bolNumber?: string; // Bill of Lading number
   poNumber?: string; // Purchase Order number
   podNumber?: string; // Proof of Delivery number
+  // Documents (enhanced with versioning and verification)
+  documents?: TmsDocument[];
   // Equipment
   truckId?: string; // Linked to Truck
   truckNumber?: string; // Truck number for display
@@ -60,46 +99,57 @@ export interface Load {
   statusHistory?: Array<{
     status: LoadStatus;
     timestamp: string;
-    changedBy: string; // User/employee name or ID
-    note?: string; // Optional note about the status change
+    changedBy: string;
+    note?: string;
   }>;
-  // Notes
-  notes?: Array<{
-    text: string;
-    author: string; // User/employee name or ID
+  // Adjustment/Correction Log (for delivered loads)
+  adjustmentLog?: Array<{
+    id: string;
     timestamp: string;
+    changedBy: string;
+    field: string;
+    oldValue: any;
+    newValue: any;
+    reason?: string;
   }>;
-  // Broker/Factoring fields
-  brokerId?: string; // Linked to Customer where type="broker"
-  brokerName?: string; // Display purpose
-  brokerReference?: string; // Broker's load number
-  factoringCompanyId?: string; // Linked to FactoringCompany
-  factoringCompanyName?: string; // Display purpose
-  isFactored?: boolean; // Whether load has been factored
-  factoredDate?: string; // When invoice was submitted to factoring company
-  factoredAmount?: number; // Amount received from factoring company
-  factoringFee?: number; // Auto-calculated: Total Rate - Factored Amount
-  factoringFeePercent?: number; // Factoring fee percentage (e.g., 3 for 3%)
-  // Dispatcher fields
-  dispatcherId?: string; // Linked to Dispatcher
-  dispatcherName?: string; // Display purpose
+  // Lock status for delivered loads
+  isLocked?: boolean; // True when status is DELIVERED or later
+  lockedAt?: string; // Timestamp when load was locked
+  // Broker Information
+  brokerId?: string;
+  brokerName?: string;
+  brokerReference?: string;
+  // Dispatcher Information
+  dispatcherId?: string;
+  dispatcherName?: string;
   dispatcherCommissionType?: 'percentage' | 'flat_fee' | 'per_mile';
-  dispatcherCommissionRate?: number; // % or $ amount depending on type
-  dispatcherCommissionAmount?: number; // Auto-calculated commission amount
-  isExternalDispatch?: boolean; // If using outside dispatch company
-  dispatcherPaid?: boolean; // Whether dispatcher has been paid
-  dispatcherPaidDate?: string; // Date when dispatcher was paid
-  // Accessorials and Detention
-  hasDetention?: boolean; // Whether load has detention
-  detentionLocation?: 'pickup' | 'delivery'; // Where detention occurred
-  detentionHours?: number; // Hours of detention (billable hours, after free time)
+  dispatcherCommissionRate?: number;
+  dispatcherCommissionAmount?: number;
+  isExternalDispatch?: boolean;
+  // Factoring Information
+  isFactored?: boolean;
+  factoringCompanyId?: string;
+  factoringCompanyName?: string;
+  factoringFeePercent?: number; // Fee percentage (e.g., 2.5 for 2.5%)
+  factoringFee?: number; // Calculated factoring fee amount
+  factoredAmount?: number; // Amount after factoring fee deducted
+  factoredDate?: string;
+  // Payment Information
+  paymentReceived?: boolean;
+  paymentReceivedDate?: string;
+  paymentAmount?: number;
+  // Accessorial Charges
+  hasDetention?: boolean; // Whether load has detention charges
+  detentionHours?: number; // Number of detention hours
   detentionRate?: number; // Rate per hour for detention
   detentionAmount?: number; // Total detention amount (detentionHours × detentionRate)
+  driverDetentionPay?: number; // Driver's detention pay (100% pass-through)
   // Layover
   hasLayover?: boolean; // Whether load has layover
   layoverDays?: number; // Number of layover days
   layoverRate?: number; // Rate per day for layover
   layoverAmount?: number; // Total layover amount (layoverDays × layoverRate)
+  driverLayoverPay?: number; // Driver's layover pay (100% pass-through)
   // Lumper
   hasLumper?: boolean; // Whether load has lumper fee
   lumperFee?: number; // Lumper fee amount
@@ -113,101 +163,196 @@ export interface Load {
   otherAccessorials?: number; // Other accessorial charges
   // TONU Fee
   hasTONU?: boolean; // Whether load has TONU (Turned Down, Not Used) fee
-  tonuFee?: number; // TONU fee amount
-  totalAccessorials?: number; // Sum of all accessorials (detention + layover + lumper + fsc + tonu + other)
-  grandTotal?: number; // Base rate + total accessorials (total invoice amount)
-  // Driver Pay Breakdown
-  driverBasePay?: number; // Driver's base pay (rate × driver percentage)
-  driverDetentionPay?: number; // Driver's detention pay (usually 100% pass-through)
-  driverLayoverPay?: number; // Driver's layover pay
-  driverTotalGross?: number; // Total driver gross pay (base + detention + layover)
-  // Broker Payment Tracking
-  paymentReceived?: boolean; // Whether payment has been received from broker
-  paymentReceivedDate?: string; // Date when payment was received
-  paymentAmount?: number; // Amount received from broker
+  tonuFee?: number;
+  // Financial Totals
+  grandTotal?: number; // Total amount (rate + all accessorials)
+  // Driver Pay (stored on load for accuracy)
+  driverBasePay?: number; // Base pay (rate × driver %)
+  driverDetentionPay?: number; // 100% pass-through
+  driverLayoverPay?: number; // 100% pass-through
+  driverTotalGross?: number; // Total driver gross pay
 }
 
-export type NewLoadInput = Omit<Load, 'id' | 'loadNumber'>;
-
-export type EmployeeStatus = 'active' | 'inactive' | 'on_leave' | 'terminated';
-export type PaymentType = 'per_mile' | 'percentage' | 'flat_rate';
-export type EmployeeType = 'driver' | 'dispatcher' | 'manager' | 'safety' | 'owner_operator' | 'owner' | 'admin' | 'other';
+export interface NewLoadInput extends Omit<Load, 'id' | 'loadNumber' | 'createdAt' | 'updatedAt' | 'statusHistory'> {
+  loadNumber?: string; // Optional - will be auto-generated if not provided
+}
 
 export interface Employee {
   id: string;
-  employeeNumber?: string;
   firstName: string;
   lastName: string;
-  status: EmployeeStatus;
-  employeeType: EmployeeType; // New: driver, dispatcher, manager, safety, owner_operator, owner, admin, other
-  type: DriverType; // Legacy field for backward compatibility (maps to driver/owner_operator)
-  email: string;
-  phone: string;
-  truckId?: string;
-  currentTruckId?: string;
-  // Personal Information
-  dob?: string;
-  ssn?: string;
+  email?: string;
+  phone?: string;
+  employeeId?: string;
+  employeeType: 'driver' | 'dispatcher' | 'admin' | 'owner' | 'other';
+  status: 'active' | 'inactive' | 'terminated';
+  // Legacy fields for backward compatibility
+  employeeNumber?: string; // Legacy: employee number
+  driverNumber?: string; // Legacy: driver number (for drivers)
+  // Driver-specific fields (when employeeType === 'driver')
+  type?: DriverType; // 'Company' or 'OwnerOperator'
+  licenseNumber?: string;
+  licenseState?: string;
+  licenseExpiry?: string;
+  // Payment configuration (for drivers)
+  payment?: {
+    type: 'percentage' | 'per_mile' | 'flat_rate';
+    percentage?: number; // For percentage type (stored as decimal 0-1, e.g., 0.35 for 35%)
+    perMileRate?: number; // For per_mile type
+    flatRate?: number; // For flat_rate type
+  };
+  // Legacy fields (for backward compatibility)
+  payPercentage?: number; // Legacy: driver pay percentage
+  rateOrSplit?: number; // Legacy: rate or split (percentage)
+  unitNumber?: string;
   address?: string;
   city?: string;
   state?: string;
   zipCode?: string;
-  // License Information
-  license?: {
-    number?: string;
-    state?: string;
-    expiration?: string;
-    class?: string;
-    endorsements?: string;
-  };
-  medicalExpirationDate?: string;
-  // Payment Configuration
-  payment?: {
-    type: PaymentType;
-    perMileRate?: number;
-    percentage?: number;
-    flatRate?: number;
-    detention?: number;
-    layover?: number;
-    fuelSurcharge?: boolean;
-  };
-  payPercentage?: number; // Stored separately for easier access
-  // Owner Operator Deduction Preferences
-  deductionPreferences?: {
-    fuel?: boolean;
-    insurance?: boolean;
-    maintenance?: boolean;
-    other?: boolean;
-  };
-  // Employment Information
-  employment?: {
-    hireDate?: string;
-    payFrequency?: 'weekly' | 'bi-weekly' | 'monthly';
-    w4Exemptions?: number;
-  };
-  // Emergency Contact
-  emergencyContact?: {
-    name?: string;
-    relationship?: string;
-    phone?: string;
-  };
-  // Legacy fields for backward compatibility
-  rateOrSplit?: number;
-  driverNumber?: string; // Legacy alias for employeeNumber
-  // Dispatcher-specific fields (if employeeType === 'dispatcher')
-  dispatcherCommissionType?: 'percentage' | 'flat_fee' | 'per_mile';
-  dispatcherCommissionRate?: number;
+  // Tax ID fields (SSN or EIN for Owner Operators)
+  taxIdType?: 'ssn' | 'ein'; // Owner Operators can choose EIN
+  ssn?: string; // Social Security Number (for employees/company drivers)
+  ein?: string; // Employer Identification Number (for Owner Operators with business)
+  // Dispatcher-specific fields (when employeeType === 'dispatcher')
+  isExternal?: boolean;
+  companyName?: string;
+  defaultCommissionType?: 'percentage' | 'flat_fee' | 'per_mile';
+  defaultCommissionRate?: number;
+  // Metadata
+  createdAt?: string;
+  updatedAt?: string;
+  notes?: string;
 }
 
-export type NewEmployeeInput = Omit<Employee, 'id'>;
-export type NewDriverInput = NewEmployeeInput; // Legacy alias for backward compatibility
-export type Driver = Employee; // Legacy alias for backward compatibility
+export type NewEmployeeInput = Omit<Employee, 'id' | 'createdAt' | 'updatedAt'>;
 
-export type InvoiceStatus = 'pending' | 'paid' | 'overdue' | 'draft';
+// Legacy Driver interface (for backward compatibility)
+export interface Driver extends Employee {
+  employeeType: 'driver';
+  type: DriverType;
+}
+
+export type NewDriverInput = Omit<Driver, 'id' | 'createdAt' | 'updatedAt'>;
+
+export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+export interface Task {
+  id: string;
+  tenantId?: string; // For multi-tenant support
+
+  // What this task is attached to
+  entityType: 'load' | 'invoice' | 'settlement' | 'driver' | 'expense' | 'truck' | 'customer';
+  entityId: string;
+
+  // Workflow identity (prevents duplicates)
+  ruleId?: string;          // workflow rule that created it
+  templateKey?: string;     // e.g. "LOAD_ASSIGN_DRIVER"
+  dedupeKey: string;        // e.g. `${tenantId}:load:${loadId}:LOAD_ASSIGN_DRIVER`
+
+  title: string;
+  description?: string;
+
+  status: TaskStatus;
+  priority: TaskPriority;
+
+  dueAt?: string;           // ISO (renamed from dueDate for consistency)
+  createdAt: string;        // ISO
+  updatedAt: string;        // ISO
+
+  assignedTo?: string;      // Employee ID / userId
+  createdBy?: string;       // userId
+  completedAt?: string;
+  completedBy?: string;
+
+  // optional
+  tags?: string[];
+  blockers?: string[];      // list of missing requirements (e.g., "POD_REQUIRED", "BOL_REQUIRED")
+  metadata?: Record<string, any>;
+
+  // Legacy fields (for backward compatibility)
+  type?: 'load_created' | 'load_dispatched' | 'load_delivered' | 'invoice_overdue' | 'pod_request' | 'rate_confirmation' | 'custom';
+  dueDate?: string;         // Alias for dueAt
+}
+
+export type NewTaskInput = Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'dedupeKey'>;
+
+// Workflow Event Types
+export type WorkflowEventType =
+  | 'LOAD_CREATED'
+  | 'LOAD_STATUS_CHANGED'
+  | 'LOAD_DELIVERED'
+  | 'INVOICE_CREATED'
+  | 'INVOICE_OVERDUE'
+  | 'PAYMENT_POSTED'
+  | 'DOCUMENT_UPLOADED'
+  | 'SETTLEMENT_CREATED';
+
+export interface WorkflowEvent {
+  id: string;
+  tenantId?: string;
+  type: WorkflowEventType;
+  entityType: string;
+  entityId: string;
+  occurredAt: string;
+  payload?: Record<string, any>;
+  eventKey: string; // e.g. `${type}:${entityType}:${entityId}:${occurredAt}`
+}
+
+// Workflow Rule Types
+export interface WorkflowRule {
+  id: string;
+  tenantId?: string;
+  name: string;
+  isEnabled: boolean;
+  eventType: WorkflowEventType;
+
+  // optional filter conditions
+  filter?: {
+    loadStatusIn?: string[];
+    customerIdIn?: string[];
+    driverTypeIn?: ('company' | 'owner_operator')[];
+    requiresFactoring?: boolean;
+  };
+
+  // tasks to create
+  actions: Array<{
+    type: 'CREATE_TASK';
+    templateKey: string;          // stable key
+    title: string;
+    description?: string;
+    priority: TaskPriority;
+    dueOffsetMinutes?: number;    // due = eventTime + offset
+    assignTo?: 'DISPATCH' | 'ACCOUNTING' | 'OWNER' | 'LOAD_DRIVER' | 'CREATOR';
+    tags?: string[];
+    blockers?: Array<'POD_REQUIRED' | 'BOL_REQUIRED' | 'RATECON_REQUIRED'>;
+  }>;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InvoiceStatus = 'pending' | 'paid' | 'partial' | 'overdue' | 'draft';
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  date: string;
+  method: 'ACH' | 'Check' | 'Wire' | 'Credit' | 'Factoring' | 'Other';
+  reference?: string;
+  notes?: string;
+  createdAt: string;
+  createdBy?: string;
+}
 
 export interface Invoice {
   id: string;
   invoiceNumber: string;
+  // Broker info (primary billing party)
+  brokerId?: string;
+  brokerName?: string;
+  // Legacy customer fields (kept for backward compatibility, prefer broker fields)
   customerId?: string;
   customerName: string;
   loadId?: string; // Legacy field for single load
@@ -217,10 +362,11 @@ export interface Invoice {
   date: string;
   dueDate?: string;
   paidAt?: string;
-  // Payment fields
-  paidAmount?: number; // Amount paid by broker
-  paymentMethod?: string; // Payment method (e.g., "ACH", "Check", "Wire")
-  paymentReference?: string; // Payment reference number (e.g., "ACH-123456")
+  // Payment fields (legacy - use payments array instead)
+  paidAmount?: number; // Total paid (sum of payments) - computed field
+  paymentMethod?: string; // Legacy field
+  paymentReference?: string; // Legacy field
+  payments?: Payment[]; // Payment history (preferred)
   // Factoring fields
   isFactored?: boolean;
   factoringCompanyId?: string;
@@ -235,23 +381,33 @@ export interface Invoice {
 export interface Settlement {
   id: string;
   settlementNumber?: string;
-  type?: 'driver' | 'dispatcher' | 'worker';
-  driverId?: string;
-  dispatcherId?: string;
-  workerId?: string;
-  driverName: string;
-  loadId?: string;
-  loadIds?: string[];
+  type: 'driver' | 'dispatcher';
+  driverId?: string; // For driver settlements
+  dispatcherId?: string; // For dispatcher settlements
+  payeeId?: string; // Generic payee ID (legacy support)
+  payeeName?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  date?: string; // Settlement date
+  // Loads
+  loadId?: string; // Legacy: single load
+  loadIds?: string[]; // Array of load IDs
   loads?: Array<{
     loadId: string;
     basePay?: number;
     detention?: number;
-    tonu?: number;
     layover?: number;
-    dispatchFee?: number;
+    tonu?: number;
   }>;
-  expenseIds?: string[];
+  // Financial
   grossPay: number;
+  totalDeductions?: number;
+  netPay?: number;
+  otherEarnings?: Array<{
+    type: string;
+    description?: string;
+    amount: number;
+  }>;
   deductions?: {
     insurance?: number;
     ifta?: number;
@@ -262,38 +418,64 @@ export interface Settlement {
     parking?: number;
     form2290?: number;
     eld?: number;
-    tolls?: number;
+    toll?: number;
     irp?: number;
     ucr?: number;
     escrow?: number;
-    occAcc?: number;
-    uniform?: number;
-    tonu?: number; // TONU deduction
-    layover?: number; // Layover deduction
-    detention?: number; // Detention deduction
+    occupationalAccident?: number;
     other?: number;
   };
-  totalDeductions?: number;
-  fuelDeduction?: number;
-  otherDeduction?: number;
-  otherEarnings?: Array<{
-    type: string;
-    description: string;
-    amount: number;
-  }>;
-  netPay: number;
-  totalMiles?: number;
-  status: 'pending' | 'processed' | 'paid';
-  date?: string;
-  periodStart?: string;
-  periodEnd?: string;
+  paymentMethod?: string;
+  checkNumber?: string;
+  notes?: string;
+  // Payment status tracking
+  status?: 'draft' | 'paid' | 'void'; // Settlement status
+  paidAt?: string; // Date when settlement was marked as paid
   createdAt?: string;
-  period?: {
-    start: string;
-    end: string;
-    display: string;
-  };
+  updatedAt?: string;
 }
+
+export interface Truck {
+  id: string;
+  truckNumber: string;
+  vin?: string;
+  year?: number;
+  make?: string;
+  model?: string;
+  ownerType: 'owned' | 'leased' | 'financed' | 'owner_operator';
+  driverId?: string; // Current assigned driver
+  status: 'available' | 'in_transit' | 'maintenance' | 'inactive';
+  insuranceExpiry?: string;
+  registrationExpiry?: string;
+  lastInspectionDate?: string;
+  nextInspectionDate?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type NewTruckInput = Omit<Truck, 'id' | 'createdAt' | 'updatedAt'>;
+
+export interface Trailer {
+  id: string;
+  trailerNumber: string;
+  type?: string; // 'Dry Van', 'Reefer', 'Flatbed', etc.
+  vin?: string;
+  year?: number;
+  make?: string;
+  model?: string;
+  ownerType: 'owned' | 'leased' | 'financed';
+  status: 'available' | 'in_use' | 'maintenance' | 'inactive';
+  insuranceExpiry?: string;
+  registrationExpiry?: string;
+  lastInspectionDate?: string;
+  nextInspectionDate?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type NewTrailerInput = Omit<Trailer, 'id' | 'createdAt' | 'updatedAt'>;
 
 export interface Expense {
   id: string;
@@ -311,113 +493,60 @@ export interface Expense {
   receipt?: string;
   vendor?: string;
   paidBy?: 'company' | 'owner_operator' | 'tracked_only';
-  settlementId?: string; // Linked to Settlement
+  expenseLedger?: {
+    totalAmount: number;
+    amountPaid: number;
+    remainingBalance: number;
+    status: 'active' | 'paid' | 'cancelled';
+    createdAt: string;
+    lastUpdated: string;
+  };
   createdAt?: string;
   updatedAt?: string;
 }
 
-export type NewExpenseInput = Omit<Expense, 'id'>;
+export type NewExpenseInput = Omit<Expense, 'id' | 'createdAt' | 'updatedAt'>;
 
-export interface KPIMetrics {
-  revenue: number;
-  activeLoads: number;
-  activeDrivers: number;
-  profit: number;
-  revenueChange: number;
-  loadsChange: number;
-  driversChange: number;
-  profitChange: number;
-}
-
-export interface ChartDataPoint {
-  name: string;
-  value: number;
-}
-
-export type TruckStatus = 'available' | 'in_transit' | 'maintenance' | 'repair' | 'out_of_service';
-export type TruckOwnership = 'owned' | 'leased' | 'financed' | 'owner_operator';
-export type InsurancePaidBy = 'company' | 'owner_operator';
-
-export interface Truck {
-  id: string;
-  number: string;
-  licensePlate: string;
-  make: string;
-  model: string;
-  year: number;
-  vin: string;
-  status: TruckStatus;
-  ownership: TruckOwnership;
-  currentMileage?: number;
-  assignedDriver?: string;
-  lastServiceDate?: string;
-  registrationExpiry?: string;
-  inspectionDueDate?: string;
-  cabCardRenewalDate?: string;
-  // Financial fields
-  monthlyPayment?: number;
-  purchasePrice?: number;
-  leaseEndDate?: string;
-  payoffAmount?: number;
-  ownerOperatorDriverId?: string;
-  // Insurance fields
-  insurancePaidBy?: InsurancePaidBy;
-  monthlyInsuranceCost?: number;
-  insuranceExpirationDate?: string;
-  insuranceCertificateUrl?: string;
-  notes?: string;
-}
-
-export type NewTruckInput = Omit<Truck, 'id'>;
-
-// Trailer
-export type TrailerStatus = 'available' | 'in_use' | 'maintenance' | 'repair' | 'out_of_service';
-export type TrailerType = 'dry_van' | 'reefer' | 'flatbed' | 'step_deck' | 'lowboy' | 'tanker' | 'other';
-
-export interface Trailer {
-  id: string;
-  number: string; // Trailer number (e.g., "TRL-001")
-  licensePlate: string;
-  type: TrailerType;
-  make?: string;
-  model?: string;
-  year?: number;
-  vin?: string;
-  status: TrailerStatus;
-  currentMileage?: number;
-  assignedTruckId?: string; // Currently assigned truck (can be changed)
-  lastServiceDate?: string;
-  registrationExpiry?: string;
-  inspectionDueDate?: string;
-  // Insurance (if trailer has separate insurance)
-  insurancePaidBy?: InsurancePaidBy;
-  monthlyInsuranceCost?: number;
-  insuranceExpirationDate?: string;
-  notes?: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export type NewTrailerInput = Omit<Trailer, 'id'>;
-
-// Factoring Company
 export interface FactoringCompany {
   id: string;
   name: string;
-  contactName?: string;
-  phone?: string;
-  email?: string;
-  feePercentage?: number; // Typical fee percentage (2-5%)
+  aliases?: string[]; // Alternative names for search
+  searchKey: string; // Normalized combined text for searching
+  prefixes: string[]; // Prefix array for fast autocomplete
+  feePercentage?: number; // Factoring fee percentage (e.g., 2.5 for 2.5%)
+  paymentTerms?: string; // Payment terms (e.g., "Net 30", "Same Day")
   address?: string;
   city?: string;
   state?: string;
   zipCode?: string;
+  phone?: string;
+  email?: string;
+  contactPerson?: string;
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export type NewFactoringCompanyInput = Omit<FactoringCompany, 'id'>;
+export type NewFactoringCompanyInput = Omit<FactoringCompany, 'id' | 'searchKey' | 'prefixes' | 'createdAt' | 'updatedAt'>;
+
+export interface Broker {
+  id: string;
+  name: string;
+  aliases?: string[]; // Alternative names (e.g., ["TQL", "Total Quality Logistics"])
+  searchKey: string; // Normalized combined text for searching
+  prefixes: string[]; // Prefix array for fast autocomplete (e.g., ["T", "TQ", "TQL", "TOT", "TOTA", ...])
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type NewBrokerInput = Omit<Broker, 'id' | 'searchKey' | 'prefixes'>;
 
 // Customer type (for broker identification)
 export type CustomerType = 'customer' | 'broker' | 'shipper' | 'consignee';
@@ -442,3 +571,105 @@ export interface Dispatcher {
 }
 
 export type NewDispatcherInput = Omit<Dispatcher, 'id'>;
+
+export interface IFTAStateMiles {
+  id: string;
+  loadId: string;
+  state: string; // State code (e.g., "OH", "IL")
+  miles: number;
+  date: string; // Trip date
+  truckId?: string;
+  driverId?: string;
+  createdAt?: string;
+}
+
+export interface IFTAFuelPurchase {
+  id: string;
+  date: string;
+  state: string; // State where fuel was purchased
+  gallons: number;
+  cost: number;
+  truckId?: string;
+  driverId?: string;
+  vendor?: string;
+  receiptNumber?: string;
+  odometerReading?: number;
+  createdAt?: string;
+}
+
+export interface IFTAReport {
+  id: string;
+  quarter: 'Q1' | 'Q2' | 'Q3' | 'Q4';
+  year: number;
+  stateMiles: Record<string, number>; // State code -> total miles
+  fuelPurchases: Record<string, { gallons: number; cost: number }>; // State code -> fuel data
+  mpg: number; // Overall MPG
+  taxDue: Record<string, number>; // State code -> tax due/credit
+  status: 'draft' | 'filed' | 'paid';
+  filedDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KPIMetrics {
+  revenue: number;
+  revenueChange?: number;
+  profit: number;
+  profitChange?: number;
+  activeLoads: number;
+  loadsChange?: number;
+  activeDrivers: number;
+  driversChange?: number;
+  completedLoads?: number;
+  onTimeDelivery?: number; // Percentage
+  trucks?: number;
+  trucksChange?: number;
+}
+
+/**
+ * Company Profile - Single Source of Truth for Company Customization
+ * 
+ * This is the comprehensive company profile used throughout the app
+ * for branding, PDFs, invoices, and UI theming.
+ */
+export interface CompanyProfile {
+  tenantId: string;
+
+  // Company Identity
+  companyName: string;
+  legalName?: string;
+  tagline?: string;
+
+  // Address
+  address1: string;
+  address2?: string;
+  city: string;
+  state: string;
+  zip: string;
+  country?: string;
+
+  // Contact
+  phone?: string;
+  email?: string;
+  website?: string;
+
+  // Regulatory
+  mcNumber?: string;
+  dotNumber?: string;
+  ein?: string;
+
+  // Branding
+  logoUrl?: string;        // URL to logo (Firebase Storage or external)
+  primaryColor?: string;   // hex e.g. #1D4ED8
+  accentColor?: string;    // hex e.g. #0EA5E9
+
+  // Document Settings
+  invoicePrefix?: string;  // e.g. "INV" (defaults to "INV")
+  settlementPrefix?: string; // e.g. "SET" (defaults to "SET")
+  defaultFooterText?: string; // Custom footer text for PDFs
+
+  // Metadata
+  updatedAt: string;
+  createdAt?: string;
+  isSetupComplete?: boolean; // True after initial setup wizard
+}

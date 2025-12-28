@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Download, Printer, RefreshCw, Eye, Trash2, DollarSign, Users, Clock, Calculator, Search } from 'lucide-react';
+import { Plus, Download, Printer, RefreshCw, Eye, Trash2, DollarSign, Users, Clock, Calculator, Search, X, Truck, MapPin, Calendar } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { Settlement, Load, LoadStatus, Employee } from '../types';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { validatePayPercentage } from '../services/utils';
 import { generateSettlementPDF } from '../services/settlementPDF';
+import { calculateDriverPay } from '../services/businessLogic';
+import { formatDateOnly } from '../utils/dateOnly';
 
 type SettlementType = 'driver' | 'dispatcher';
 
 const Settlements: React.FC = () => {
   const { settlements, drivers, loads, addSettlement, updateSettlement, deleteSettlement, updateLoad, employees } = useTMS();
-  const { company } = useCompany();
+  const { companyProfile } = useCompany();
   const [settlementType, setSettlementType] = useState<SettlementType>('driver');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -29,6 +31,8 @@ const Settlements: React.FC = () => {
   const [driverFilter, setDriverFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [weekFilter, setWeekFilter] = useState<string>('');
+  const [showAllDeliveredLoads, setShowAllDeliveredLoads] = useState<boolean>(false);
+  const [previewSettlement, setPreviewSettlement] = useState<Settlement | null>(null);
 
   // Helper functions (defined before useMemo and useEffect)
   const getWeekNumber = (date: Date): number => {
@@ -103,10 +107,13 @@ const Settlements: React.FC = () => {
         try {
           // Check if load belongs to the selected payee (driver or dispatcher)
           const isPayee = settlementType === 'driver' 
-            ? load.driverId === selectedDriverId 
-            : load.dispatcherId === selectedDispatcherId;
+            ? load.driverId === currentPayeeId 
+            : load.dispatcherId === currentPayeeId;
           
-          if (!isPayee) return false;
+          if (!isPayee) {
+            console.log(`Load ${load.loadNumber} filtered out: Not assigned to selected ${settlementType}`);
+            return false;
+          }
           
           const isDelivered = load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed;
           if (!isDelivered) {
@@ -115,21 +122,41 @@ const Settlements: React.FC = () => {
           }
           
           // Check delivery date (try multiple fields like HTML does)
-          const deliveryDateStr = load.deliveryDate || load.pickupDate || '';
+          // More flexible: check deliveryDate, pickupDate, or created date
+          const deliveryDateStr = load.deliveryDate || load.pickupDate || load.createdAt || '';
+          
+          // If showAllDeliveredLoads is true, skip date filtering
+          if (showAllDeliveredLoads) {
+            console.log(`Load ${load.loadNumber} PASSED filters (showing all delivered loads)`);
+            return true;
+          }
+          
+          // If no date at all, exclude the load (unless showAllDeliveredLoads is true)
           if (!deliveryDateStr) {
-            console.log(`Load ${load.loadNumber} filtered out: No delivery date or pickup date`);
+            console.log(`Load ${load.loadNumber} filtered out: No delivery date, pickup date, or created date`);
             return false;
           }
           
-          const deliveryDate = new Date(deliveryDateStr);
+          // Parse date - handle both date strings and ISO strings
+          let deliveryDate = new Date(deliveryDateStr);
           if (isNaN(deliveryDate.getTime())) {
-            console.log(`Load ${load.loadNumber} filtered out: Invalid date format: ${deliveryDateStr}`);
-            return false;
+            // Try parsing as date-only string (YYYY-MM-DD)
+            const dateOnly = deliveryDateStr.split('T')[0];
+            deliveryDate = new Date(dateOnly);
+            if (isNaN(deliveryDate.getTime())) {
+              console.log(`Load ${load.loadNumber} filtered out: Invalid date format: ${deliveryDateStr}`);
+              return false;
+            }
           }
           
-          const inPeriod = deliveryDate >= weekStart && deliveryDate <= weekEnd;
+          // Normalize dates to start of day for comparison (avoid timezone issues)
+          const deliveryDateOnly = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate());
+          const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+          const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+          
+          const inPeriod = deliveryDateOnly >= weekStartOnly && deliveryDateOnly <= weekEndOnly;
           if (!inPeriod) {
-            console.log(`Load ${load.loadNumber} filtered out: Date ${deliveryDate.toISOString()} not in period ${weekStart.toISOString()} - ${weekEnd.toISOString()}`);
+            console.log(`Load ${load.loadNumber} filtered out: Date ${deliveryDateOnly.toISOString().split('T')[0]} not in period ${weekStartOnly.toISOString().split('T')[0]} - ${weekEndOnly.toISOString().split('T')[0]}`);
             return false;
           }
           
@@ -138,14 +165,15 @@ const Settlements: React.FC = () => {
           return true;
         } catch (error) {
           console.warn('Error processing load:', load.id, error);
-          return false;
+          // On error, still include the load - let user decide
+          return true;
         }
       });
     } catch (error) {
       console.error('Error calculating available loads:', error);
       return [];
     }
-  }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType]);
+  }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads]);
 
   // Calculate settlement totals with earnings breakdown
   const settlementTotals = useMemo(() => {
@@ -218,28 +246,27 @@ const Settlements: React.FC = () => {
           layoverPay = load.driverLayoverPay || 0;
           tonuPay = (load as any).tonuFee || 0;
         } else {
-          // Calculate on the fly if not stored
-          let payPercentage = 1; // Default
+          // Calculate using centralized businessLogic function (NO FALLBACKS)
           if (driver) {
-            if (driver.type === 'OwnerOperator' || driver.employeeType === 'owner_operator') {
-              // Owner Operator: use payPercentage or rateOrSplit
-              const rawPercentage = driver.payPercentage || driver.rateOrSplit || 0;
-              payPercentage = validatePayPercentage(rawPercentage, driver.type);
-            } else {
-              // Company driver: use their specific percentage (e.g., 35%)
-              // NOT 100% - company drivers get a percentage of the rate
-              const rawPercentage = driver.payPercentage || driver.rateOrSplit || 0;
-              payPercentage = rawPercentage > 0 ? (rawPercentage / 100) : 1; // Default to 100% only if no percentage set
+            // Use centralized calculateDriverPay - NO hardcoded fallbacks
+            basePay = calculateDriverPay(load, driver);
+            // Accessorials: 100% pass-through to driver
+            detentionPay = load.detentionAmount || 0;
+            layoverPay = load.layoverAmount || 0;
+            tonuPay = (load as any).tonuFee || 0;
+            
+            // If driver pay is 0 and should be calculated, warn
+            if (basePay === 0 && load.rate && load.rate > 0) {
+              console.warn(`[Settlements] Driver ${driver.firstName} ${driver.lastName} has no payment profile configured. Pay = 0 for load ${load.loadNumber}.`);
             }
+          } else {
+            // No driver - pay is 0 (NO default to 100%)
+            basePay = 0;
+            detentionPay = 0;
+            layoverPay = 0;
+            tonuPay = 0;
+            console.warn(`[Settlements] No driver assigned to load ${load.loadNumber}. Pay = 0.`);
           }
-          
-          // Base pay: percentage of base rate
-          basePay = load.rate * payPercentage;
-          
-          // Accessorials: 100% pass-through to driver
-          detentionPay = load.detentionAmount || 0;
-          layoverPay = load.layoverAmount || 0;
-          tonuPay = (load as any).tonuFee || 0;
         }
         
         // Total gross pay for this load (base + all accessorials)
@@ -395,7 +422,7 @@ const Settlements: React.FC = () => {
   }, [selectedDriverId, drivers]);
 
   // Generate settlement
-  const handleGenerateSettlement = () => {
+  const handleGenerateSettlement = async () => {
     const currentPayeeId = settlementType === 'driver' ? selectedDriverId : selectedDispatcherId;
     if (!currentPayeeId || selectedLoads.length === 0) {
       alert(`Please select a ${settlementType} and at least one load`);
@@ -485,9 +512,15 @@ const Settlements: React.FC = () => {
     
     // Mark loads as settled - but note: users can delete and recreate settlements
     // When a settlement is deleted, the settlementId is cleared from loads automatically
-    selectedLoads.forEach(loadId => {
-      updateLoad(loadId, { settlementId });
-    });
+    // Use for...of loop to properly handle async/await
+    for (const loadId of selectedLoads) {
+      try {
+        await updateLoad(loadId, { settlementId });
+      } catch (error: any) {
+        console.error('Error linking settlement to load:', error);
+        // Continue even if linking fails - settlement is still created
+      }
+    }
 
     setIsModalOpen(false);
     setSelectedDriverId('');
@@ -553,7 +586,7 @@ const Settlements: React.FC = () => {
         </div>
         <button
           onClick={() => setIsModalOpen(true)}
-          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+          className="btn-primary px-6 py-3 rounded-lg flex items-center gap-2"
         >
           <Plus size={18} />
           Generate Settlement
@@ -837,14 +870,18 @@ const Settlements: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
-                        <button className="text-blue-600 hover:text-blue-800" title="View">
+                        <button 
+                          onClick={() => setPreviewSettlement(settlement)}
+                          className="text-blue-600 hover:text-blue-800" 
+                          title="View Details"
+                        >
                           <Eye size={18} />
                         </button>
                         <button 
                           onClick={() => {
                             if (payee) {
                               try {
-                                generateSettlementPDF(settlement, payee, loads, settlements, company);
+                                generateSettlementPDF(settlement, payee, loads, settlements, companyProfile);
                               } catch (error) {
                                 console.error('Error generating PDF:', error);
                                 alert('Error generating PDF. Please try again.');
@@ -875,10 +912,10 @@ const Settlements: React.FC = () => {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setIsModalOpen(false)}>
           <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4 rounded-t-xl flex justify-between items-center">
-              <h3 className="text-xl font-semibold">Generate {settlementType === 'driver' ? 'Driver' : 'Dispatcher'} Settlement</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-white hover:text-gray-200 text-2xl leading-none">
-                ×
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+              <h2 className="text-lg font-semibold text-slate-900">Generate {settlementType === 'driver' ? 'Driver' : 'Dispatcher'} Settlement</h2>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={20} />
               </button>
             </div>
 
@@ -889,12 +926,56 @@ const Settlements: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-blue-800 mb-1">Select Week</label>
-                    <input
-                      type="week"
-                      value={selectedWeek}
-                      onChange={(e) => setSelectedWeek(e.target.value)}
-                      className="w-full border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
-                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedWeek) {
+                            const [year, week] = selectedWeek.split('-W');
+                            const weekNum = parseInt(week);
+                            const yearNum = parseInt(year);
+                            let newWeek = weekNum - 1;
+                            let newYear = yearNum;
+                            if (newWeek < 1) {
+                              newWeek = 52;
+                              newYear = yearNum - 1;
+                            }
+                            setSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                          }
+                        }}
+                        className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
+                        title="Previous Week"
+                      >
+                        ←
+                      </button>
+                      <input
+                        type="week"
+                        value={selectedWeek}
+                        onChange={(e) => setSelectedWeek(e.target.value)}
+                        className="flex-1 border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedWeek) {
+                            const [year, week] = selectedWeek.split('-W');
+                            const weekNum = parseInt(week);
+                            const yearNum = parseInt(year);
+                            let newWeek = weekNum + 1;
+                            let newYear = yearNum;
+                            if (newWeek > 52) {
+                              newWeek = 1;
+                              newYear = yearNum + 1;
+                            }
+                            setSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                          }
+                        }}
+                        className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
+                        title="Next Week"
+                      >
+                        →
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-blue-800 mb-1">Period</label>
@@ -1295,16 +1376,39 @@ const Settlements: React.FC = () => {
               {((settlementType === 'driver' && selectedDriverId) || (settlementType === 'dispatcher' && selectedDispatcherId)) && availableLoads.length === 0 && (
                 <div className="text-center py-8">
                   <div className="bg-yellow-50 text-yellow-800 p-4 rounded-lg inline-block max-w-2xl">
-                    <p className="font-semibold mb-2">No unpaid delivered loads found for this {settlementType === 'driver' ? 'driver' : 'dispatcher'} in the selected period.</p>
+                    <p className="font-semibold mb-2">No delivered loads found for this {settlementType === 'driver' ? 'driver' : 'dispatcher'} in the selected period.</p>
                     <p className="text-sm mb-2">To see loads here, they must:</p>
                     <ul className="text-sm text-left list-disc list-inside space-y-1">
                       <li>Be assigned to this {settlementType === 'driver' ? 'driver' : 'dispatcher'}</li>
                       <li>Have status "Delivered" or "Completed"</li>
                       <li>Have a delivery date or pickup date within the selected week</li>
-                      {settlementType === 'driver' && <li>Not already be included in another settlement</li>}
                     </ul>
+                    <div className="mt-4">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllDeliveredLoads(!showAllDeliveredLoads)}
+                        className="btn-primary px-4 py-2 rounded-lg text-sm font-medium"
+                      >
+                        {showAllDeliveredLoads ? 'Filter by Week' : 'Show All Delivered Loads'}
+                      </button>
+                    </div>
                     <p className="text-xs mt-3 text-yellow-700">Check the browser console (F12) for detailed filtering information.</p>
                   </div>
+                </div>
+              )}
+              
+              {/* Toggle to show all delivered loads */}
+              {((settlementType === 'driver' && selectedDriverId) || (settlementType === 'dispatcher' && selectedDispatcherId)) && availableLoads.length > 0 && (
+                <div className="mb-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={showAllDeliveredLoads}
+                      onChange={(e) => setShowAllDeliveredLoads(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                    />
+                    Show all delivered loads (ignore week filter)
+                  </label>
                 </div>
               )}
 
@@ -1318,11 +1422,245 @@ const Settlements: React.FC = () => {
                 <button
                   onClick={handleGenerateSettlement}
                   disabled={((settlementType === 'driver' && !selectedDriverId) || (settlementType === 'dispatcher' && !selectedDispatcherId)) || selectedLoads.length === 0}
-                  className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn-primary px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Generate Settlement
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settlement Preview Modal */}
+      {previewSettlement && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPreviewSettlement(null)}>
+          <div 
+            className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Settlement Details</h2>
+                <p className="text-sm text-slate-500">{previewSettlement.settlementNumber}</p>
+              </div>
+              <button
+                onClick={() => setPreviewSettlement(null)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X size={20} className="text-slate-500" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Status & Summary Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-slate-50 rounded-lg p-4">
+                  <p className="text-xs text-slate-500 uppercase font-medium">Status</p>
+                  <span className={`inline-block mt-1 px-2 py-1 text-xs rounded-full ${getStatusBadge(previewSettlement.status)}`}>
+                    {(previewSettlement.status || 'pending').charAt(0).toUpperCase() + (previewSettlement.status || 'pending').slice(1)}
+                  </span>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-4">
+                  <p className="text-xs text-blue-600 uppercase font-medium">Gross Pay</p>
+                  <p className="text-lg font-bold text-blue-700">${(previewSettlement.grossPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-red-50 rounded-lg p-4">
+                  <p className="text-xs text-red-600 uppercase font-medium">Deductions</p>
+                  <p className="text-lg font-bold text-red-700">-${(previewSettlement.totalDeductions || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-green-50 rounded-lg p-4">
+                  <p className="text-xs text-green-600 uppercase font-medium">Net Pay</p>
+                  <p className="text-lg font-bold text-green-700">${(previewSettlement.netPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+
+              {/* Payee & Period Info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase flex items-center gap-2">
+                    <Users size={16} />
+                    Payee Information
+                  </h3>
+                  <div className="bg-slate-50 rounded-lg p-4 space-y-2">
+                    {(() => {
+                      const payee = previewSettlement.driverId 
+                        ? drivers.find(d => d.id === previewSettlement.driverId)
+                        : employees.find(e => e.id === previewSettlement.dispatcherId);
+                      return payee ? (
+                        <>
+                          <p className="font-medium text-slate-900">{payee.firstName} {payee.lastName}</p>
+                          <p className="text-sm text-slate-500">
+                            {previewSettlement.driverId ? 'Driver' : 'Dispatcher'} • 
+                            Pay Rate: {payee.payType === 'percentage' ? `${((payee.payRate || 0) * 100).toFixed(0)}%` : `$${payee.payRate?.toFixed(2) || '0.00'}/mi`}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-slate-500">Payee information not found</p>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase flex items-center gap-2">
+                    <Calendar size={16} />
+                    Period
+                  </h3>
+                  <div className="bg-slate-50 rounded-lg p-4 space-y-2">
+                    <p className="font-medium text-slate-900">
+                      {previewSettlement.periodStart && previewSettlement.periodEnd
+                        ? `${formatDateOnly(previewSettlement.periodStart)} - ${formatDateOnly(previewSettlement.periodEnd)}`
+                        : previewSettlement.weekNumber
+                          ? `Week ${previewSettlement.weekNumber}`
+                          : previewSettlement.date
+                            ? formatDateOnly(previewSettlement.date)
+                            : 'N/A'}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      Created: {previewSettlement.createdAt ? formatDateOnly(previewSettlement.createdAt) : 'N/A'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Deductions Breakdown */}
+              {previewSettlement.deductions && Object.keys(previewSettlement.deductions).length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase">Deductions Breakdown</h3>
+                  <div className="bg-red-50 rounded-lg p-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      {Object.entries(previewSettlement.deductions).map(([key, value]) => (
+                        value && Number(value) > 0 ? (
+                          <div key={key} className="flex justify-between">
+                            <span className="text-sm text-slate-600 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
+                            <span className="text-sm font-medium text-red-600">-${Number(value).toFixed(2)}</span>
+                          </div>
+                        ) : null
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Loads in Settlement */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-slate-700 uppercase flex items-center gap-2">
+                  <Truck size={16} />
+                  Loads ({(previewSettlement.loadIds?.length || (previewSettlement.loadId ? 1 : 0))})
+                </h3>
+                <div className="border border-slate-200 rounded-lg overflow-hidden">
+                  <table className="min-w-full divide-y divide-slate-200">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Load #</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Route</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Miles</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Rate</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Pay</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {(() => {
+                        const loadIds = previewSettlement.loadIds || (previewSettlement.loadId ? [previewSettlement.loadId] : []);
+                        const settlementLoads = loads.filter(l => loadIds.includes(l.id));
+                        
+                        if (settlementLoads.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-4 text-center text-sm text-slate-500">
+                                No loads found for this settlement
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return settlementLoads.map(load => {
+                          const payee = previewSettlement.driverId 
+                            ? drivers.find(d => d.id === previewSettlement.driverId)
+                            : employees.find(e => e.id === previewSettlement.dispatcherId);
+                          const driverPay = payee 
+                            ? calculateDriverPay(load.grandTotal || load.rate || 0, load.miles || 0, payee.payType, payee.payRate || 0)
+                            : 0;
+                          
+                          return (
+                            <tr key={load.id} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 text-sm font-medium text-blue-600">{load.loadNumber}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600">
+                                <div className="flex items-center gap-1">
+                                  <MapPin size={12} className="text-green-500" />
+                                  {load.originCity}, {load.originState}
+                                  <span className="text-slate-400 mx-1">→</span>
+                                  <MapPin size={12} className="text-red-500" />
+                                  {load.destCity}, {load.destState}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-slate-600 text-right">{(load.miles || 0).toLocaleString()}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600 text-right">${(load.grandTotal || load.rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                              <td className="px-4 py-3 text-sm font-medium text-green-600 text-right">${driverPay.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                    </tbody>
+                    <tfoot className="bg-slate-100">
+                      <tr>
+                        <td colSpan={2} className="px-4 py-3 text-sm font-medium text-slate-700">Total</td>
+                        <td className="px-4 py-3 text-sm font-medium text-slate-700 text-right">
+                          {(previewSettlement.totalMiles || 0).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-medium text-slate-700 text-right">
+                          ${(() => {
+                            const loadIds = previewSettlement.loadIds || (previewSettlement.loadId ? [previewSettlement.loadId] : []);
+                            return loads
+                              .filter(l => loadIds.includes(l.id))
+                              .reduce((sum, l) => sum + (l.grandTotal || l.rate || 0), 0)
+                              .toLocaleString('en-US', { minimumFractionDigits: 2 });
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-green-700 text-right">
+                          ${(previewSettlement.grossPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              {/* Notes */}
+              {previewSettlement.notes && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase">Notes</h3>
+                  <div className="bg-slate-50 rounded-lg p-4">
+                    <p className="text-sm text-slate-600">{previewSettlement.notes}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="sticky bottom-0 bg-white border-t border-slate-200 px-6 py-4 flex justify-end gap-3">
+              <button
+                onClick={() => setPreviewSettlement(null)}
+                className="px-4 py-2 text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  const payee = previewSettlement.driverId 
+                    ? drivers.find(d => d.id === previewSettlement.driverId)
+                    : employees.find(e => e.id === previewSettlement.dispatcherId);
+                  if (payee) {
+                    generateSettlementPDF(previewSettlement, payee, loads, settlements, companyProfile);
+                  }
+                }}
+                className="btn-primary px-4 py-2 rounded-lg flex items-center gap-2"
+              >
+                <Printer size={16} />
+                Print PDF
+              </button>
             </div>
           </div>
         </div>

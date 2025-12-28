@@ -5,7 +5,10 @@ import {
   Truck, 
   Users, 
   TrendingUp, 
-  MoreHorizontal
+  MoreHorizontal,
+  CheckSquare,
+  AlertCircle,
+  Clock
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -21,9 +24,12 @@ import {
 } from 'recharts';
 import StatsCard from '../components/StatsCard';
 import AddLoadModal from '../components/AddLoadModal';
+import CompactAlertsWidget from '../components/CompactAlertsWidget';
+import CompactTasksWidget from '../components/CompactTasksWidget';
 import { LoadStatus } from '../types';
 import { useTMS } from '../context/TMSContext';
 import { calculateCompanyRevenue } from '../services/utils';
+import { calculateDriverPay } from '../services/businessLogic';
 
 import { PageType } from '../App';
 
@@ -32,7 +38,7 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
-  const { loads, kpis, addLoad, drivers, invoices, settlements, expenses, factoringCompanies } = useTMS();
+  const { loads, kpis, addLoad, drivers, invoices, settlements, expenses, factoringCompanies, tasks } = useTMS();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   // Calculate real revenue trends from loads (last 6 months)
@@ -117,11 +123,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const COLORS = ['#94a3b8', '#facc15', '#3b82f6', '#10b981', '#a855f7', '#ef4444'];
 
   // Calculate Net Profit using the same logic as Reports page
+  // IMPORTANT: Only count loads delivered in CURRENT MONTH (not when settlements were created)
   const netProfitData = useMemo(() => {
-    // Only count delivered/completed loads for revenue
-    const revenueLoads = loads.filter(l => 
-      l.status === LoadStatus.Delivered || l.status === LoadStatus.Completed
-    );
+    // Get current month date range
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    // Only count delivered/completed loads for revenue that were delivered THIS MONTH
+    const revenueLoads = loads.filter(l => {
+      const isDelivered = l.status === LoadStatus.Delivered || l.status === LoadStatus.Completed;
+      if (!isDelivered) return false;
+      
+      // Filter by delivery date (not settlement creation date)
+      const deliveryDate = new Date(l.deliveryDate || l.pickupDate || '');
+      if (isNaN(deliveryDate.getTime())) return false;
+      return deliveryDate >= monthStart && deliveryDate <= monthEnd;
+    });
 
     // Calculate total revenue (using grandTotal if available, otherwise rate)
     let totalRevenue = 0;
@@ -142,42 +160,68 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     });
 
     // Calculate total driver pay from settlements
+    // IMPORTANT: Only count settlements where ALL loads were delivered in CURRENT MONTH
+    // Settlement creation date does NOT matter - only load delivery dates matter
     let totalDriverPay = 0;
-    settlements.forEach(settlement => {
-      if (settlement.type === 'driver' || !settlement.type) {
-        const payeeId = (settlement as any).payeeId || settlement.driverId;
-        const driver = drivers.find(d => d.id === payeeId);
-        if (driver) {
-          if (driver.type === 'OwnerOperator') {
-            // O/O: use grossPay
-            totalDriverPay += settlement.grossPay || 0;
-          } else {
-            // Company driver: use netPay
-            totalDriverPay += settlement.netPay || 0;
+    
+    // Get settlements that only contain loads delivered in current month
+    const currentMonthSettlements = settlements.filter(settlement => {
+      if (settlement.type !== 'driver' && settlement.type) return false;
+      
+      // Get all load IDs from this settlement
+      const settlementLoadIds: string[] = [];
+      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
+      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
+      if (settlement.loads) {
+        settlement.loads.forEach(l => {
+          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
+            settlementLoadIds.push(l.loadId);
           }
+        });
+      }
+
+      // Only include settlement if ALL its loads are in revenueLoads (delivered in current month)
+      if (settlementLoadIds.length === 0) return false;
+      return settlementLoadIds.every(loadId => 
+        revenueLoads.some(load => load.id === loadId)
+      );
+    });
+
+    currentMonthSettlements.forEach(settlement => {
+      const payeeId = (settlement as any).payeeId || settlement.driverId;
+      const driver = drivers.find(d => d.id === payeeId);
+      if (driver) {
+        if (driver.type === 'OwnerOperator') {
+          // O/O: use grossPay
+          totalDriverPay += settlement.grossPay || 0;
+        } else {
+          // Company driver: use netPay
+          totalDriverPay += settlement.netPay || 0;
         }
       }
     });
 
-    // If no settlements, estimate from loads
+    // If no settlements, estimate from loads using driver's actual payment rate from profile
     if (settlements.length === 0) {
       revenueLoads.forEach(load => {
         if (!load.driverId) return;
         const driver = drivers.find(d => d.id === load.driverId);
         if (!driver) return;
 
-        if (driver.type === 'OwnerOperator') {
-          const payPercentage = (driver.rateOrSplit || driver.payPercentage || 88) / 100;
-          totalDriverPay += (load.rate || 0) * payPercentage;
-        } else {
-          // Company driver: use driverTotalGross if available, otherwise estimate
-          totalDriverPay += load.driverTotalGross || load.driverBasePay || load.rate || 0;
-        }
+        // Use centralized business logic (NO hardcoded fallbacks)
+        const driverPay = calculateDriverPay(load, driver);
+        totalDriverPay += driverPay;
       });
     }
 
     // Calculate company expenses (same logic as Reports)
+    // Only count expenses from CURRENT MONTH
     const companyExpenses = expenses.filter(exp => {
+      // Filter by expense date (not creation date) - must be in current month
+      const expDate = new Date(exp.date || exp.createdAt || '');
+      if (isNaN(expDate.getTime())) return false;
+      if (expDate < monthStart || expDate > monthEnd) return false;
+      
       // Must be paid by company
       if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
         return false;
@@ -279,7 +323,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           </button>
           <button 
             onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-sm shadow-blue-200 transition-colors flex items-center gap-2"
+            className="btn-primary px-4 py-2 rounded-lg font-medium shadow-sm transition-colors flex items-center gap-2"
           >
             <Truck size={18} />
             <span>New Load</span>
@@ -319,7 +363,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         />
       </div>
 
-      {/* Charts Section */}
+      {/* Row 2: Trends (PRIMARY CONTENT) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Revenue Chart */}
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
@@ -418,7 +462,29 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* Recent Activity Table */}
+      {/* Row 3: Alerts + Tasks (SMALL, CONTROLLED) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <CompactAlertsWidget
+          loads={loads}
+          invoices={invoices}
+          onNavigate={(entityType, entityId) => {
+            if (onNavigate) {
+              if (entityType === 'load') {
+                sessionStorage.setItem('selectedLoadId', entityId);
+                onNavigate('Loads' as PageType);
+              } else if (entityType === 'invoice') {
+                onNavigate('AccountReceivables' as PageType);
+              }
+            }
+          }}
+        />
+        <CompactTasksWidget
+          tasks={tasks || []}
+          onNavigate={onNavigate}
+        />
+      </div>
+
+      {/* Row 4: Recent Loads Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-200 flex items-center justify-between">
           <h2 className="text-lg font-bold text-slate-900">Recent Loads</h2>
@@ -463,7 +529,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                         onNavigate('Loads' as PageType);
                       }
                     }}
-                    className="hover:bg-blue-50 cursor-pointer transition-colors"
+                    className="hover:bg-slate-50 cursor-pointer transition-colors"
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="font-medium text-blue-600 hover:text-blue-700">{load.loadNumber}</span>
@@ -475,9 +541,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-sm text-slate-600">
-                        <span className="font-medium text-slate-900">{load.originCity}</span>
+                        <span className="font-medium text-slate-900 capitalize">{load.originCity || 'N/A'}</span>
                         <span className="text-slate-400">→</span>
-                        <span className="font-medium text-slate-900">{load.destCity}</span>
+                        <span className="font-medium text-slate-900 capitalize">{load.destCity || 'N/A'}</span>
                       </div>
                     </td>
                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">

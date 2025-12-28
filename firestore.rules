@@ -2,57 +2,237 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper function to get tenant ID from request
-    function getTenantId() {
-      return request.auth != null ? request.auth.token.tenantId : null;
+    // Helper function: Get user role from users collection
+    function getUserRole(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.role;
     }
     
-    // Helper function to check if user is admin
-    function isAdmin() {
-      return request.auth != null && request.auth.token.admin == true;
+    // Helper function: Check if user is admin
+    function isAdmin(uid) {
+      return getUserRole(uid) == 'admin';
     }
     
-    // Helper function to check if user belongs to tenant
-    function belongsToTenant(tenantId) {
-      return request.auth != null && request.auth.token.tenantId == tenantId;
+    // Helper function: Check tenant membership (new membership model)
+    function isTenantMember(tenantId, uid) {
+      let membership = get(/databases/$(database)/documents/users/$(uid)/memberships/$(tenantId));
+      return membership.exists && membership.data.active == true;
     }
     
-    // Tenant collection - only admins can create/update
+    // Helper function: Check if user can access tenant
+    function canAccessTenant(tenantId, uid) {
+      return request.auth != null && 
+        request.auth.uid == uid &&
+        isTenantMember(tenantId, uid);
+    }
+    
+    // Users collection (global)
+    match /users/{userId} {
+      // Users can read their own document
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Users can create their own document on first login (with default role)
+      allow create: if request.auth != null &&
+        request.auth.uid == userId &&
+        request.resource.data.email == request.auth.token.email &&
+        request.resource.data.role == 'viewer' && // Default role for new users
+        request.resource.data.tenants.size() == 0; // No tenants initially
+
+      // Only admins can update other users OR change sensitive fields
+      allow update: if request.auth != null && (
+        // Admin can update anything
+        isAdmin(request.auth.uid) ||
+        // Users can update only their own displayName and non-sensitive fields
+        (request.auth.uid == userId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']))
+      );
+
+      // Only admins can delete users
+      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+    }
+    
+    // User memberships (new model: users/{uid}/memberships/{tenantId})
+    match /users/{uid}/memberships/{tenantId} {
+      // Users can read their own memberships
+      allow read: if request.auth != null && request.auth.uid == uid;
+      
+      // Only admins can manage memberships (must be admin of the target tenant)
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
+    }
+    
+    // Tenant documents (for tenant metadata)
     match /tenants/{tenantId} {
-      allow read: if request.auth != null && 
-                     (belongsToTenant(tenantId) || isAdmin());
-      allow create, update, delete: if isAdmin();
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
     }
     
-    // Tenant data collections - isolated per tenant
+    // Company Profile
+    match /tenants/{tenantId}/settings/companyProfile {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'owner');
+    }
+    
+    // Counters (read-only for all, write only for system/admins)
+    match /tenants/{tenantId}/counters/{counterId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
+    }
+    
+    // Loads
     match /tenants/{tenantId}/loads/{loadId} {
-      allow read, write: if belongsToTenant(tenantId);
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      
+      allow create: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      
+      allow update: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid); // Only admins can delete
+      
+      // Load adjustments
+      match /adjustments/{adjId} {
+        allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+        allow create: if request.auth != null && 
+          canAccessTenant(tenantId, request.auth.uid) &&
+          (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher' || getUserRole(request.auth.uid) == 'accountant');
+        allow update: if request.auth != null && 
+          canAccessTenant(tenantId, request.auth.uid) &&
+          isAdmin(request.auth.uid); // Only admins can approve/reject
+      }
     }
     
-    match /tenants/{tenantId}/drivers/{driverId} {
-      allow read, write: if belongsToTenant(tenantId);
-    }
-    
+    // Invoices
     match /tenants/{tenantId}/invoices/{invoiceId} {
-      allow read, write: if belongsToTenant(tenantId);
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow update: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid); // Only admins can delete
     }
     
-    match /tenants/{tenantId}/expenses/{expenseId} {
-      allow read, write: if belongsToTenant(tenantId);
-    }
-    
+    // Settlements
     match /tenants/{tenantId}/settlements/{settlementId} {
-      allow read, write: if belongsToTenant(tenantId);
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow update: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid); // Only admins can delete
     }
     
+    // Employees/Drivers
+    match /tenants/{tenantId}/employees/{employeeId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow update: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid); // Only admins can delete
+    }
+    
+    // Trucks
     match /tenants/{tenantId}/trucks/{truckId} {
-      allow read, write: if belongsToTenant(tenantId);
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
     }
     
-    // Deny all other access
-    match /{document=**} {
-      allow read, write: if false;
+    // Trailers
+    match /tenants/{tenantId}/trailers/{trailerId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
+    }
+    
+    // Expenses
+    match /tenants/{tenantId}/expenses/{expenseId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid);
+      allow update: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow delete: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
+    }
+    
+    // Audit Logs (read-only, no updates/deletes)
+    match /tenants/{tenantId}/auditLogs/{logId} {
+      allow read: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      allow create: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      // NO updates or deletes - audit logs are immutable
+      allow update, delete: if false;
+    }
+    
+    // Workflow Rules
+    match /tenants/{tenantId}/workflowRules/{ruleId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        isAdmin(request.auth.uid);
+    }
+    
+    // Tasks
+    match /tenants/{tenantId}/tasks/{taskId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow update: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      // FIXED: Use resource.data (existing doc) not request.resource.data (undefined on delete)
+      allow delete: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || resource.data.assignedTo == request.auth.uid);
+    }
+    
+    // Brokers
+    match /tenants/{tenantId}/brokers/{brokerId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+    }
+    
+    // Factoring Companies
+    match /tenants/{tenantId}/factoringCompanies/{companyId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null && 
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
     }
   }
 }
-

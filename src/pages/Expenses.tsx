@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2 } from 'lucide-react';
+import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2, X } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { Expense } from '../types';
 
@@ -103,7 +103,7 @@ const Expenses: React.FC = () => {
           </button>
           <button 
             onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+            className="btn-primary px-4 py-2 rounded-lg flex items-center gap-2"
           >
             <Plus size={18} />
             <span>Add Expense</span>
@@ -306,17 +306,17 @@ const Expenses: React.FC = () => {
           setEditingExpenseId(null);
         }}>
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4 rounded-t-xl flex justify-between items-center">
-              <h3 className="text-xl font-semibold">{isEditModalOpen ? 'Edit Expense' : 'Add New Expense'}</h3>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-xl">
+              <h2 className="text-lg font-semibold text-slate-900">{isEditModalOpen ? 'Edit Expense' : 'Add New Expense'}</h2>
               <button 
                 onClick={() => {
                   setIsAddModalOpen(false);
                   setIsEditModalOpen(false);
                   setEditingExpenseId(null);
                 }}
-                className="text-white hover:text-gray-200 text-2xl leading-none"
+                className="text-slate-400 hover:text-slate-600 transition-colors"
               >
-                ×
+                <X size={20} />
               </button>
             </div>
             <form onSubmit={(e) => {
@@ -519,7 +519,7 @@ const Expenses: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="btn-primary px-4 py-2 rounded-lg transition-colors"
                 >
                   {isEditModalOpen ? 'Update Expense' : 'Save Expense'}
                 </button>

@@ -46,7 +46,10 @@ const AddDriverModal: React.FC<AddDriverModalProps> = ({ isOpen, onClose, onSubm
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 md:p-0"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-xl md:rounded-xl shadow-xl w-full max-w-lg mx-4 md:mx-4 animate-in fade-in zoom-in duration-200 h-full md:h-auto max-h-[90vh] md:max-h-[90vh] overflow-y-auto">
+      <div 
+        className="bg-white rounded-xl md:rounded-xl shadow-xl w-full max-w-lg mx-4 md:mx-4 animate-in fade-in zoom-in duration-200 h-full md:h-auto max-h-[90vh] md:max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900">Onboard New Driver</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">

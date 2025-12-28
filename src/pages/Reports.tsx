@@ -3,6 +3,8 @@ import { BarChart3, DollarSign, MapPin, Package, TrendingUp, Download, Printer, 
 import { useTMS } from '../context/TMSContext';
 import { LoadStatus, DriverType } from '../types';
 import { calculateCompanyRevenue } from '../services/utils';
+import { calculateDriverPay } from '../services/businessLogic';
+import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
@@ -49,23 +51,61 @@ const Reports: React.FC = () => {
   const filteredLoads = useMemo(() => {
     if (!periodStart) return loads;
     return loads.filter(load => {
-      const date = new Date(load.deliveryDate || load.pickupDate || '');
+      // Use local date parsing to avoid timezone shift bug
+      const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
       return date >= periodStart && date <= periodEnd;
     });
   }, [loads, periodStart, periodEnd]);
 
+  // Filter settlements by the delivery dates of their loads, NOT by settlement creation date
+  // Settlements are payment records and can be created later or in advance
+  // Revenue is based on when loads were delivered, not when settlements were created
   const filteredSettlements = useMemo(() => {
     if (!periodStart) return settlements;
     return settlements.filter(settlement => {
-      const date = new Date(settlement.createdAt || settlement.date || '');
-      return date >= periodStart && date <= periodEnd;
+      // Get all load IDs from this settlement
+      const settlementLoadIds: string[] = [];
+      if (settlement.loadId) {
+        settlementLoadIds.push(settlement.loadId);
+      }
+      if (settlement.loadIds && settlement.loadIds.length > 0) {
+        settlementLoadIds.push(...settlement.loadIds);
+      }
+      if (settlement.loads && settlement.loads.length > 0) {
+        settlement.loads.forEach(loadItem => {
+          if (loadItem.loadId && !settlementLoadIds.includes(loadItem.loadId)) {
+            settlementLoadIds.push(loadItem.loadId);
+          }
+        });
+      }
+
+      // Check if ANY of the loads in this settlement were delivered in the period
+      // If no loads found, exclude this settlement (can't determine period)
+      if (settlementLoadIds.length === 0) {
+        return false;
+      }
+
+      // Find the loads and check their delivery dates
+      const settlementLoads = loads.filter(l => settlementLoadIds.includes(l.id));
+      if (settlementLoads.length === 0) {
+        return false; // Loads not found, exclude settlement
+      }
+
+      // Include settlement if ANY of its loads were delivered in the period
+      return settlementLoads.some(load => {
+        // Use local date parsing to avoid timezone shift bug
+        const deliveryDate = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
+        if (isNaN(deliveryDate.getTime())) return false;
+        return deliveryDate >= periodStart && deliveryDate <= periodEnd;
+      });
     });
-  }, [settlements, periodStart, periodEnd]);
+  }, [settlements, loads, periodStart, periodEnd]);
 
   const filteredExpenses = useMemo(() => {
     if (!periodStart) return expenses;
     return expenses.filter(expense => {
-      const date = new Date(expense.date || expense.createdAt || '');
+      // Use local date parsing to avoid timezone shift bug
+      const date = parseDateOnlyLocal(expense.date || expense.createdAt || '');
       return date >= periodStart && date <= periodEnd;
     });
   }, [expenses, periodStart, periodEnd]);
@@ -109,13 +149,36 @@ const Reports: React.FC = () => {
     const loadsCompleted = revenueLoads.length;
 
     // Driver pay breakdown
+    // IMPORTANT: Only count settlements where ALL loads were delivered in the period
+    // Settlement creation date does NOT matter - only load delivery dates matter
     let companyDriverPay = 0;
     let ownerOperatorPay = 0;
     let ownerAsDriverPay = 0;
     let isEstimated = false;
 
-    if (filteredSettlements.length > 0) {
-      filteredSettlements.forEach(settlement => {
+    // Get settlements that only contain loads delivered in this period
+    const periodSettlements = filteredSettlements.filter(settlement => {
+      // Get all load IDs from this settlement
+      const settlementLoadIds: string[] = [];
+      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
+      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
+      if (settlement.loads) {
+        settlement.loads.forEach(l => {
+          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
+            settlementLoadIds.push(l.loadId);
+          }
+        });
+      }
+
+      // Only include settlement if ALL its loads are in revenueLoads (delivered in period)
+      if (settlementLoadIds.length === 0) return false;
+      return settlementLoadIds.every(loadId => 
+        revenueLoads.some(load => load.id === loadId)
+      );
+    });
+
+    if (periodSettlements.length > 0) {
+      periodSettlements.forEach(settlement => {
         const driver = drivers.find(d => d.id === settlement.driverId);
         if (!driver) return;
 
@@ -127,15 +190,15 @@ const Reports: React.FC = () => {
         }
       });
     } else {
-      // Estimate from loads
+      // Estimate from loads using driver's actual payment rate from profile
       isEstimated = true;
       revenueLoads.forEach(load => {
         if (!load.driverId) return;
         const driver = drivers.find(d => d.id === load.driverId);
         if (!driver) return;
 
-        const payPercentage = driver.type === 'OwnerOperator' ? (driver.rateOrSplit / 100) : 1;
-        const driverPay = load.rate * payPercentage;
+        // Use centralized business logic (NO hardcoded fallbacks)
+        const driverPay = calculateDriverPay(load, driver);
 
         if (driver.type === 'OwnerOperator') {
           ownerOperatorPay += driverPay;
@@ -284,11 +347,11 @@ const Reports: React.FC = () => {
 
     // Note: dispatcherCost, netProfit, and profitMargin will be calculated after dispatcherReports is defined
 
-    // Monthly revenue
+    // Monthly revenue (use local date parsing to avoid timezone bug)
     const monthlyRevenue = Array(12).fill(0);
     const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     revenueLoads.forEach(load => {
-      const date = new Date(load.deliveryDate || load.pickupDate || '');
+      const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
       const month = date.getMonth();
       if (!isNaN(month)) {
         monthlyRevenue[month] += load.rate || 0;
@@ -868,12 +931,12 @@ const Reports: React.FC = () => {
                   {reportData.monthlyRevenue.labels.map((label, i) => {
                     const revenue = reportData.monthlyRevenue.values[i];
                     const monthLoads = filteredLoads.filter(l => {
-                      const date = new Date(l.deliveryDate || l.pickupDate || '');
+                      const date = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
                       return date.getMonth() === i;
                     }).length;
                     const monthMiles = filteredLoads
                       .filter(l => {
-                        const date = new Date(l.deliveryDate || l.pickupDate || '');
+                        const date = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
                         return date.getMonth() === i;
                       })
                       .reduce((sum, l) => sum + (l.miles || 0), 0);
@@ -945,7 +1008,8 @@ const Reports: React.FC = () => {
                       monthEnd.setHours(23, 59, 59, 999);
 
                       const monthExpenses = filteredExpenses.filter(exp => {
-                        const expDate = new Date(exp.date || exp.createdAt || '');
+                        // Use local date parsing to avoid timezone bug
+                        const expDate = parseDateOnlyLocal(exp.date || exp.createdAt || '');
                         return expDate >= monthStart && expDate <= monthEnd;
                       });
 

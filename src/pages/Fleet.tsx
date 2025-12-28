@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, Truck, CheckCircle, Wrench, Search, Edit, Trash2, X, Calculator, Package } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { Truck as TruckType, TruckStatus, TruckOwnership, InsurancePaidBy, NewTruckInput, Trailer, TrailerStatus, TrailerType, NewTrailerInput } from '../types';
+import { useDebounce } from '../utils/debounce';
 
 type ViewType = 'trucks' | 'trailers';
 
@@ -13,6 +14,7 @@ const Fleet: React.FC = () => {
   const [editingTrailer, setEditingTrailer] = useState<Trailer | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [profitDateFrom, setProfitDateFrom] = useState<string>(() => {
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -26,27 +28,27 @@ const Fleet: React.FC = () => {
   const filteredTrucks = useMemo(() => {
     return trucks.filter(truck => {
       const matchesStatus = !statusFilter || truck.status === statusFilter;
-      const matchesSearch = !searchTerm ||
-        truck.number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.make.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        truck.licensePlate.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = !debouncedSearchTerm ||
+        truck.number.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        truck.make.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        truck.model.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        truck.licensePlate.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
     });
-  }, [trucks, statusFilter, searchTerm]);
+  }, [trucks, statusFilter, debouncedSearchTerm]);
 
   // Filter trailers
   const filteredTrailers = useMemo(() => {
     return trailers.filter(trailer => {
       const matchesStatus = !statusFilter || trailer.status === statusFilter;
-      const matchesSearch = !searchTerm ||
-        trailer.number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        trailer.licensePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (trailer.make && trailer.make.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (trailer.model && trailer.model.toLowerCase().includes(searchTerm.toLowerCase()));
+      const matchesSearch = !debouncedSearchTerm ||
+        trailer.number.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        trailer.licensePlate.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        (trailer.make && trailer.make.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+        (trailer.model && trailer.model.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
       return matchesStatus && matchesSearch;
     });
-  }, [trailers, statusFilter, searchTerm]);
+  }, [trailers, statusFilter, debouncedSearchTerm]);
 
   // Overview stats for trucks
   const truckStats = useMemo(() => {
@@ -233,7 +235,7 @@ const Fleet: React.FC = () => {
             }
             setIsModalOpen(true);
           }}
-          className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+          className="btn-primary px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
         >
           <Plus size={20} />
           Add {activeView === 'trucks' ? 'Truck' : 'Trailer'}
@@ -703,7 +705,10 @@ const TrailerModal: React.FC<TrailerModalProps> = ({ trailer, trucks, onClose, o
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      <div 
+        className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center">
           <h2 className="text-xl font-bold text-slate-900">{trailer ? 'Edit Trailer' : 'Add New Trailer'}</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
@@ -959,7 +964,7 @@ const TrailerModal: React.FC<TrailerModalProps> = ({ trailer, trucks, onClose, o
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              className="btn-primary px-6 py-2 rounded-lg transition-colors"
             >
               {trailer ? 'Update Trailer' : 'Create Trailer'}
             </button>
@@ -1024,14 +1029,17 @@ const TruckModal: React.FC<TruckModalProps> = ({ truck, onClose, onSave }) => {
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div 
+        className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4 flex justify-between items-center">
-          <h3 className="text-xl font-semibold">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+          <h2 className="text-lg font-semibold text-slate-900">
             {truck ? `Edit Truck ${truck.number}` : 'Add New Vehicle'}
-          </h3>
-          <button onClick={onClose} className="text-white hover:text-slate-200">
-            <X size={24} />
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+            <X size={20} />
           </button>
         </div>
 

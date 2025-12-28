@@ -3,6 +3,7 @@ import { Plus, Filter, Download, Search, Edit, Trash2, Eye, MoreHorizontal, X, C
 import { useTMS } from '../context/TMSContext';
 import { LoadStatus, Load, NewLoadInput } from '../types';
 import AddLoadModal from '../components/AddLoadModal';
+import { useDebounce } from '../utils/debounce';
 
 const Loads: React.FC = () => {
   const { loads, drivers, addLoad, updateLoad, deleteLoad } = useTMS();
@@ -10,16 +11,17 @@ const Loads: React.FC = () => {
   const [editingLoad, setEditingLoad] = useState<Load | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [driverFilter, setDriverFilter] = useState<string>('');
-  const [customerFilter, setCustomerFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
   // Check for selected load from Dashboard navigation
   useEffect(() => {
+    if (!loads || !Array.isArray(loads)) return;
     const selectedLoadId = sessionStorage.getItem('selectedLoadId');
     if (selectedLoadId) {
-      const load = loads.find(l => l.id === selectedLoadId);
+      const load = loads.find(l => l && l.id === selectedLoadId);
       if (load) {
         setEditingLoad(load);
         setIsModalOpen(true);
@@ -32,26 +34,22 @@ const Loads: React.FC = () => {
     }
   }, [loads]);
 
-  // Get unique customers from loads
-  const customers = useMemo(() => {
-    const unique = new Set(loads.map(l => l.customerName));
-    return Array.from(unique).sort();
-  }, [loads]);
 
   // Filter loads
   const filteredLoads = useMemo(() => {
+    if (!loads || !Array.isArray(loads)) return [];
     return loads.filter(load => {
+      if (!load) return false;
       const matchesStatus = !statusFilter || load.status === statusFilter;
       const matchesDriver = !driverFilter || load.driverId === driverFilter;
-      const matchesCustomer = !customerFilter || load.customerName === customerFilter;
-      const matchesSearch = !searchTerm ||
-        load.loadNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        load.originCity.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        load.destCity.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        load.customerName.toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesStatus && matchesDriver && matchesCustomer && matchesSearch;
+      const matchesSearch = !debouncedSearchTerm ||
+        (load.loadNumber && load.loadNumber.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+        (load.originCity && load.originCity.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+        (load.destCity && load.destCity.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+        (load.brokerName && load.brokerName.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
+      return matchesStatus && matchesDriver && matchesSearch;
     });
-  }, [loads, statusFilter, driverFilter, customerFilter, searchTerm]);
+  }, [loads, statusFilter, driverFilter, debouncedSearchTerm]);
 
   // Pagination
   const totalPages = Math.ceil(filteredLoads.length / itemsPerPage);
@@ -78,8 +76,9 @@ const Loads: React.FC = () => {
   };
 
   // Quick status update handler
-  const handleQuickStatusUpdate = (loadId: string, newStatus: LoadStatus) => {
-    const load = loads.find(l => l.id === loadId);
+  const handleQuickStatusUpdate = async (loadId: string, newStatus: LoadStatus) => {
+    if (!loads || !Array.isArray(loads)) return;
+    const load = loads.find(l => l && l.id === loadId);
     if (!load) return;
 
     // For destructive statuses, ask for confirmation
@@ -105,7 +104,13 @@ const Loads: React.FC = () => {
       ]
     };
 
-    updateLoad(loadId, updatedLoad);
+    try {
+      await updateLoad(loadId, updatedLoad);
+    } catch (error: any) {
+      // Show user-friendly error message for locked loads
+      alert(error.message || 'Cannot update this load. It may be locked after delivery.');
+      console.error('Load status update error:', error);
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -125,11 +130,11 @@ const Loads: React.FC = () => {
 
   const handleExport = () => {
     const csv = [
-      ['Load #', 'Status', 'Customer', 'Driver', 'Origin', 'Destination', 'Rate', 'Miles', 'Rate/Mile'].join(','),
+      ['Load #', 'Status', 'Broker', 'Driver', 'Origin', 'Destination', 'Rate', 'Miles', 'Rate/Mile'].join(','),
       ...filteredLoads.map(load => [
         load.loadNumber,
         load.status,
-        load.customerName,
+        load.brokerName || '',
         load.driverName || 'Unassigned',
         `${load.originCity}, ${load.originState}`,
         `${load.destCity}, ${load.destState}`,
@@ -160,7 +165,7 @@ const Loads: React.FC = () => {
             setEditingLoad(null);
             setIsModalOpen(true);
           }}
-          className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+          className="btn-primary px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
         >
           <Plus size={20} />
           Create New Load
@@ -201,22 +206,6 @@ const Loads: React.FC = () => {
                 <option key={driver.id} value={driver.id}>
                   {driver.firstName} {driver.lastName}
                 </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Customer</label>
-            <select
-              value={customerFilter}
-              onChange={(e) => {
-                setCustomerFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="">All Customers</option>
-              {customers.map(customer => (
-                <option key={customer} value={customer}>{customer}</option>
               ))}
             </select>
           </div>
@@ -262,10 +251,10 @@ const Loads: React.FC = () => {
                   Load #
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Origin → Destination
+                  Status
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Customer
+                  Origin → Destination
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
                   Broker
@@ -283,9 +272,6 @@ const Loads: React.FC = () => {
                   Factored
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
@@ -293,7 +279,7 @@ const Loads: React.FC = () => {
             <tbody className="bg-white divide-y divide-slate-200">
               {paginatedLoads.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={9} className="px-6 py-12 text-center text-slate-500">
                     No loads found. Create a new load to get started.
                   </td>
                 </tr>
@@ -307,6 +293,29 @@ const Loads: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
+                      <select
+                        value={load.status}
+                        onChange={(e) => handleQuickStatusUpdate(load.id, e.target.value as LoadStatus)}
+                        className={`text-xs font-medium px-2.5 py-1 rounded-full border focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all cursor-pointer ${
+                          load.status === LoadStatus.Available ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                          load.status === LoadStatus.Dispatched ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                          load.status === LoadStatus.InTransit ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                          load.status === LoadStatus.Delivered ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          load.status === LoadStatus.Completed ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                          load.status === LoadStatus.Cancelled ? 'bg-red-50 text-red-700 border-red-200' :
+                          load.status === LoadStatus.TONU ? 'bg-orange-50 text-orange-700 border-orange-200' :
+                          'bg-slate-100 text-slate-700 border-slate-300'
+                        }`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {Object.values(LoadStatus).map(status => (
+                          <option key={status} value={status}>
+                            {status.replace('_', ' ').toUpperCase()}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-slate-900">
                         {load.originCity}, {load.originState}
                       </div>
@@ -314,9 +323,6 @@ const Loads: React.FC = () => {
                         → {load.destCity}, {load.destState}
                       </div>
                       <div className="text-xs text-slate-400">{load.miles} miles</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
-                      {load.customerName}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
                       {load.brokerName ? (
@@ -381,9 +387,6 @@ const Loads: React.FC = () => {
                         <span className="text-slate-400">—</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(load.status)}
-                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center gap-2">
                         <button
@@ -395,7 +398,7 @@ const Loads: React.FC = () => {
                         </button>
                         <button
                           onClick={() => {
-                            alert(`Load #${load.loadNumber}\nStatus: ${load.status}\nCustomer: ${load.customerName}\nDriver: ${load.driverName || 'Unassigned'}\nRate: ${formatCurrency(load.rate)}\nMiles: ${load.miles}`);
+                            alert(`Load #${load.loadNumber}\nStatus: ${load.status}\nBroker: ${load.brokerName || 'N/A'}\nDriver: ${load.driverName || 'Unassigned'}\nRate: ${formatCurrency(load.rate)}\nMiles: ${load.miles}`);
                           }}
                           className="text-green-600 hover:text-green-900"
                           title="View"
@@ -468,14 +471,28 @@ const Loads: React.FC = () => {
           setIsModalOpen(false);
           setEditingLoad(null);
         }}
-        onSubmit={(loadData: NewLoadInput) => {
+        onSubmit={async (loadData: NewLoadInput) => {
           if (editingLoad) {
-            updateLoad(editingLoad.id, loadData);
+            try {
+              // Extract adjustment reason if provided (from adjustment workflow)
+              const adjustmentReason = (loadData as any).adjustmentReason;
+              // Remove adjustmentReason from loadData before saving
+              const cleanLoadData = { ...loadData };
+              delete (cleanLoadData as any).adjustmentReason;
+              
+              await updateLoad(editingLoad.id, cleanLoadData, adjustmentReason);
+              setIsModalOpen(false);
+              setEditingLoad(null);
+            } catch (error: any) {
+              // Show user-friendly error message
+              alert(error.message || 'Failed to update load. Please check the error and try again.');
+              console.error('Load update error:', error);
+            }
           } else {
             addLoad(loadData);
+            setIsModalOpen(false);
+            setEditingLoad(null);
           }
-          setIsModalOpen(false);
-          setEditingLoad(null);
         }}
         editingLoad={editingLoad}
       />

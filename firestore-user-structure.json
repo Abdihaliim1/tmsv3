@@ -1,0 +1,26 @@
+{
+  "collection": "users",
+  "documentId": "HpizRZ3WfgbdsYaMlrVHKmY6d4k2",
+  "fields": {
+    "email": {
+      "type": "string",
+      "value": "YOUR_EMAIL_HERE"
+    },
+    "displayName": {
+      "type": "string",
+      "value": "Admin User"
+    },
+    "role": {
+      "type": "string",
+      "value": "admin"
+    },
+    "createdAt": {
+      "type": "timestamp",
+      "value": "current_time"
+    },
+    "updatedAt": {
+      "type": "timestamp",
+      "value": "current_time"
+    }
+  }
+}

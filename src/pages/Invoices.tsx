@@ -3,12 +3,17 @@ import { FileText, DollarSign, Clock, AlertTriangle, Download, Printer, CheckCir
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { Invoice, InvoiceStatus, LoadStatus } from '../types';
+import { useTenant } from '../context/TenantContext';
+import { generateUniqueInvoiceNumber } from '../services/invoiceService';
+import { useDebounce } from '../utils/debounce';
 
 const Invoices: React.FC = () => {
   const { invoices, loads, addInvoice, updateInvoice, deleteInvoice, updateLoad } = useTMS();
   const { company } = useCompany();
+  const { activeTenantId } = useTenant();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const itemsPerPage = 10;
@@ -77,8 +82,9 @@ const Invoices: React.FC = () => {
         const dueDate = new Date();
         dueDate.setDate(dueDate.getDate() + 30); // Net 30
 
+        const tenantId = activeTenantId || 'default';
         const newInvoice: Omit<Invoice, 'id'> = {
-          invoiceNumber: `INV-${new Date().getFullYear()}-${invoices.length + 1001}`,
+          invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
           customerName: load.customerName,
           loadIds: [load.id],
           amount: load.rate,
@@ -99,12 +105,12 @@ const Invoices: React.FC = () => {
   const filteredInvoices = useMemo(() => {
     return invoices.filter(invoice => {
       const matchesStatus = !statusFilter || invoice.status === statusFilter;
-      const matchesSearch = !searchTerm ||
-        invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        invoice.customerName.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = !debouncedSearchTerm ||
+        invoice.invoiceNumber.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        invoice.customerName.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
       return matchesStatus && matchesSearch;
     });
-  }, [invoices, statusFilter, searchTerm]);
+  }, [invoices, statusFilter, debouncedSearchTerm]);
 
   // Pagination
   const totalPages = Math.ceil(filteredInvoices.length / itemsPerPage);
@@ -207,18 +213,30 @@ const Invoices: React.FC = () => {
       return;
     }
 
+    /**
+     * Escape HTML to prevent XSS
+     */
+    const escapeHtml = (unsafe: string): string => {
+      return String(unsafe)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    };
+
     const loadRows = invoiceLoads.map(load => {
       const deliveryDate = load.deliveryDate || load.pickupDate || 'N/A';
-      const origin = `${load.originCity}, ${load.originState}`;
-      const destination = `${load.destCity}, ${load.destState}`;
+      const origin = `${escapeHtml(load.originCity)}, ${escapeHtml(load.originState)}`;
+      const destination = `${escapeHtml(load.destCity)}, ${escapeHtml(load.destState)}`;
       const rateTotal = load.rate || 0;
 
       return `
         <tr>
-          <td>${load.loadNumber}</td>
-          <td>${formatDate(deliveryDate)}</td>
+          <td>${escapeHtml(load.loadNumber)}</td>
+          <td>${escapeHtml(formatDate(deliveryDate))}</td>
           <td>Freight: ${origin} to ${destination}</td>
-          <td style="text-align: right">${formatCurrency(rateTotal)}</td>
+          <td style="text-align: right">${escapeHtml(formatCurrency(rateTotal))}</td>
         </tr>
       `;
     }).join('');
@@ -227,7 +245,7 @@ const Invoices: React.FC = () => {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Invoice ${invoice.invoiceNumber}</title>
+        <title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 40px; margin: 0; }
           .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
@@ -247,21 +265,21 @@ const Invoices: React.FC = () => {
       <body>
         <div class="header">
           <div class="company-info">
-            <h1>${company.name}</h1>
+            <h1>${escapeHtml(company.name || '')}</h1>
             <p style="margin:5px 0 0 0; color:#666; font-size:12px; line-height:1.6;">
-              ${company.address ? `${company.address}<br>` : ''}${company.city && company.state ? `${company.city}, ${company.state} ${company.zip || ''}<br>` : ''}${company.phone || ''}
+              ${company.address ? `${escapeHtml(company.address)}<br>` : ''}${company.city && company.state ? `${escapeHtml(company.city)}, ${escapeHtml(company.state)} ${escapeHtml(company.zip || '')}<br>` : ''}${escapeHtml(company.phone || '')}
             </p>
           </div>
           <div class="invoice-details">
             <h2>INVOICE</h2>
-            <p><strong>Invoice #:</strong> ${invoice.invoiceNumber}</p>
-            <p><strong>Date:</strong> ${formatDate(invoice.date)}</p>
-            <p><strong>Due Date:</strong> ${formatDate(invoice.dueDate)}</p>
+            <p><strong>Invoice #:</strong> ${escapeHtml(invoice.invoiceNumber)}</p>
+            <p><strong>Date:</strong> ${escapeHtml(formatDate(invoice.date))}</p>
+            <p><strong>Due Date:</strong> ${escapeHtml(formatDate(invoice.dueDate))}</p>
           </div>
         </div>
         <div class="bill-to">
           <h3>Bill To:</h3>
-          <p><strong>${invoice.customerName}</strong></p>
+          <p><strong>${escapeHtml(invoice.customerName)}</strong></p>
         </div>
         <table>
           <thead>
@@ -277,7 +295,7 @@ const Invoices: React.FC = () => {
           </tbody>
         </table>
         <div class="total">
-          Total Due: ${formatCurrency(invoice.amount)}
+          Total Due: ${escapeHtml(formatCurrency(invoice.amount))}
         </div>
         <div style="margin-top: 50px; text-align: center; color: #666; font-size: 0.9em;">
           <p>Thank you for your business!</p>
@@ -290,12 +308,111 @@ const Invoices: React.FC = () => {
   };
 
   const handlePrint = (invoice: Invoice) => {
-    handleDownload(invoice);
+    // First, generate the invoice HTML in a new window
+    const invoiceLoads = loads.filter(l => l.id === invoice.loadId);
+    const printWindow = window.open('', '_blank');
+
+    if (!printWindow) {
+      alert('Please allow popups to print invoices');
+      return;
+    }
+
+    /**
+     * Escape HTML to prevent XSS
+     */
+    const escapeHtml = (unsafe: string): string => {
+      return String(unsafe)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    };
+
+    const loadRows = invoiceLoads.map(load => {
+      const deliveryDate = load.deliveryDate || load.pickupDate || 'N/A';
+      const origin = `${escapeHtml(load.originCity)}, ${escapeHtml(load.originState)}`;
+      const destination = `${escapeHtml(load.destCity)}, ${escapeHtml(load.destState)}`;
+      const rateTotal = load.rate || 0;
+
+      return `
+        <tr>
+          <td>${escapeHtml(load.loadNumber)}</td>
+          <td>${escapeHtml(formatDate(deliveryDate))}</td>
+          <td>Freight: ${origin} to ${destination}</td>
+          <td style="text-align: right">${escapeHtml(formatCurrency(rateTotal))}</td>
+        </tr>
+      `;
+    }).join('');
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; margin: 0; }
+          .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+          .company-info h1 { margin: 0; color: #1f2937; }
+          .invoice-details { text-align: right; }
+          .bill-to { margin-bottom: 30px; }
+          .bill-to h3 { margin-bottom: 10px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+          th { background-color: #f8f9fa; font-weight: bold; }
+          .total { margin-top: 20px; text-align: right; font-size: 1.2em; font-weight: bold; }
+          @media print {
+            body { padding: 20px; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="company-info">
+            <h1>${escapeHtml(company.name || '')}</h1>
+            <p style="margin:5px 0 0 0; color:#666; font-size:12px; line-height:1.6;">
+              ${company.address ? `${escapeHtml(company.address)}<br>` : ''}${company.city && company.state ? `${escapeHtml(company.city)}, ${escapeHtml(company.state)} ${escapeHtml(company.zip || '')}<br>` : ''}${escapeHtml(company.phone || '')}
+            </p>
+          </div>
+          <div class="invoice-details">
+            <h2>INVOICE</h2>
+            <p><strong>Invoice #:</strong> ${escapeHtml(invoice.invoiceNumber)}</p>
+            <p><strong>Date:</strong> ${escapeHtml(formatDate(invoice.date))}</p>
+            <p><strong>Due Date:</strong> ${escapeHtml(formatDate(invoice.dueDate))}</p>
+          </div>
+        </div>
+        <div class="bill-to">
+          <h3>Bill To:</h3>
+          <p><strong>${escapeHtml(invoice.customerName)}</strong></p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Load #</th>
+              <th>Date</th>
+              <th>Description</th>
+              <th style="text-align: right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${loadRows}
+          </tbody>
+        </table>
+        <div class="total">
+          Total Due: ${escapeHtml(formatCurrency(invoice.amount))}
+        </div>
+        <div style="margin-top: 50px; text-align: center; color: #666; font-size: 0.9em;">
+          <p>Thank you for your business!</p>
+        </div>
+      </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+
+    // Wait for content to load, then print the invoice window
     setTimeout(() => {
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.print();
-      }
+      printWindow.print();
     }, 500);
   };
 

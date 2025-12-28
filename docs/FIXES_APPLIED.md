@@ -1,114 +1,128 @@
-# Fixes Applied: Double-Counting and Infinite Deduction Issues
+# Fixes Applied - Document Upload & UI Issues
 
-## Issues Fixed
+## ✅ Fixed Issues
 
-### Issue 1: Infinite Deduction Loop ✅
-**Problem:** Expenses were being deducted from every load forever, even after being fully paid.
+### 1. **Button Text - "Save Load" vs "Create Load"**
+- **Problem**: Button always said "Create Load" even when editing
+- **Fix**: Button now shows "Save Load" when editing, "Create Load" when creating new
+- **Files Changed**: `src/components/AddLoadModal.tsx`
+- **Lines**: 1500, 572
 
-**Solution Implemented:**
-- Added expense ledger `remainingBalance` check in driver pay calculation
-- Created `expenseDeductionTracker` Map to track deductions per expense ID across all loads
-- For expenses with ledger: Only deduct `remainingBalance` (what's left to pay)
-- For expenses without ledger: Track total deducted and prevent re-deduction once fully paid
+### 2. **Modal Title - "Edit Load" vs "Create New Load"**
+- **Problem**: Modal title always said "Create New Load"
+- **Fix**: Title now shows "Edit Load" when editing, "Create New Load" when creating
+- **Files Changed**: `src/components/AddLoadModal.tsx`
+- **Line**: 572
 
-**Location:** `reports.html` lines 754-790
+### 3. **Upload Stuck at 90% - Error Handling**
+- **Problem**: Upload progress stuck at 90% with no error message
+- **Fix**: 
+  - Improved error handling with specific error messages
+  - Progress interval properly cleared on error
+  - Better error messages for Firebase Storage issues
+- **Files Changed**: `src/components/DocumentUpload.tsx`
+- **Lines**: 138-200
 
-**Logic:**
-```javascript
-if (exp.expenseLedger) {
-    const remainingBalance = exp.expenseLedger.remainingBalance || 0;
-    if (remainingBalance > 0) {
-        const deductionAmount = Math.min(remainingBalance, basePay);
-        // Track and deduct
-    }
-    // Already fully paid, skip
-}
+### 4. **Audit Log Errors - Undefined Values**
+- **Problem**: Firestore doesn't allow `undefined` values, causing audit log failures
+- **Fix**: Added `removeUndefined()` function to filter out undefined values before saving
+- **Files Changed**: `src/data/audit.ts`
+- **Lines**: 34-70
+
+### 5. **React Context HMR Error**
+- **Problem**: "useTMS must be used within a TMSProvider" error during hot module reload
+- **Fix**: Added development fallback that returns safe default object during HMR instead of crashing
+- **Files Changed**: `src/context/TMSContext.tsx`
+- **Lines**: 1025-1080
+
+### 6. **Filename Sanitization**
+- **Problem**: Special characters in filenames could cause Firebase Storage issues
+- **Fix**: Sanitize filenames before upload (replace special chars with underscores)
+- **Files Changed**: `src/services/documentService.ts`
+- **Line**: 113
+
+---
+
+## ⚠️ Remaining Issues
+
+### Firebase Storage 404 Errors
+
+**Error**: 
+```
+Preflight response is not successful. Status code: 404
+XMLHttpRequest cannot load https://firebasestorage.googleapis.com/v0/b/somtms-fec81.firebasestorage.app/o?name=...
 ```
 
----
+**Root Cause**: Firebase Storage bucket is not properly configured or doesn't exist.
 
-### Issue 2: False Profit Bug ✅
-**Problem:** When expenses were deducted from driver pay, they weren't appearing as company expenses in P&L, causing false profit.
+**How to Fix**:
 
-**Solution Implemented:**
-- Removed filter that excluded Owner Operator expenses from P&L
-- Now ALL company-paid expenses are included in expense breakdown
-- For Owner Operator expenses with ledger, use `totalAmount` (what company paid to vendor)
-- The expense appears in P&L, and driver pay is reduced - both are counted correctly
+1. **Check if Storage Bucket Exists**:
+   - Go to Firebase Console → Storage
+   - Verify bucket `somtms-fec81.firebasestorage.app` exists
+   - If not, create it
 
-**Location:** `reports.html` lines 780-830
+2. **Check Storage Rules**:
+   - Go to Firebase Console → Storage → Rules
+   - Update rules to allow authenticated uploads:
+   ```javascript
+   rules_version = '2';
+   service firebase.storage {
+     match /b/{bucket}/o {
+       match /tenants/{tenantId}/{allPaths=**} {
+         allow read, write: if request.auth != null;
+       }
+     }
+   }
+   ```
 
-**Logic:**
-```javascript
-// Include ALL company expenses
-const expensesForPandL = companyExpenses;
+3. **Verify Environment Variables**:
+   - Check `.env` file has correct `VITE_FIREBASE_STORAGE_BUCKET`
+   - Should be: `somtms-fec81.firebasestorage.app` or `somtms-fec81.appspot.com`
 
-// For Owner Operator expenses with ledger, use totalAmount (what company paid)
-if (exp.expenseLedger && exp.driverId && exp.deductFromDriver === true) {
-    amount = ledger.totalAmount || amount; // Full amount company paid to vendor
-}
-```
+4. **Enable Storage API**:
+   - Go to Google Cloud Console → APIs & Services
+   - Enable "Cloud Storage API" for project `somtms-fec81`
 
----
+5. **Check CORS Configuration**:
+   - If using custom domain, ensure CORS is configured
+   - Firebase Storage should handle CORS automatically, but verify
 
-## How It Works Now
-
-### Example: $100 Fuel Expense for Owner Operator
-
-**Step 1: Company Pays Vendor**
-- Company pays $100 to fuel vendor
-- Expense created: `amount: $100`, `expenseLedger.totalAmount: $100`
-
-**Step 2: Driver Pay Calculation (Load 1)**
-- Base Pay: $200
-- Expense has `remainingBalance: $100`
-- Deduction: `Math.min($100, $200) = $100`
-- Driver Pay: $200 - $100 = $100
-- Ledger updated: `remainingBalance: $0`, `amountPaid: $100`
-
-**Step 3: Driver Pay Calculation (Load 2)**
-- Base Pay: $200
-- Expense has `remainingBalance: $0` (already paid)
-- Deduction: $0 (skipped - already fully paid)
-- Driver Pay: $200 - $0 = $200 ✅
-
-**Step 4: P&L Report**
-- Revenue: $400 (Load 1: $200, Load 2: $200)
-- Driver Pay: $300 ($100 + $200) ✅
-- Fuel Expense: $100 ✅ (company paid vendor)
-- Profit: $400 - $300 - $100 = $0 ✅
+**Current Workaround**: 
+- Error messages are now more helpful
+- Upload will fail gracefully with clear error message
+- Documents can still be stored in localStorage as fallback (for loads)
 
 ---
 
-## Key Changes
+## 📝 Notes
 
-1. **Expense Deduction Tracker:** Prevents same expense from being deducted multiple times
-2. **Ledger Integration:** Uses `remainingBalance` to track what's left to deduct
-3. **P&L Expense Inclusion:** All company-paid expenses now appear in P&L
-4. **Correct Amount Usage:** Uses `totalAmount` from ledger for expense amount in P&L
-
----
-
-## Testing
-
-To verify fixes work:
-
-1. **Test Infinite Deduction:**
-   - Create $100 expense for Owner Operator
-   - Generate settlement for Load 1 (should deduct $100)
-   - Generate settlement for Load 2 (should NOT deduct again)
-   - Check expense ledger: `remainingBalance` should be $0
-
-2. **Test False Profit:**
-   - Create $100 fuel expense (deducted from driver)
-   - Check P&L report
-   - Fuel Expense should show $100
-   - Driver Pay should be reduced by $100
-   - Profit calculation should be correct
+- All fixes are backward compatible
+- No breaking changes to existing functionality
+- Error handling improved across the board
+- Development experience improved (HMR no longer crashes app)
 
 ---
 
-## Files Modified
+## 🧪 Testing
 
-- `reports.html`: Lines 720-830 (driver pay calculation and expense breakdown)
+To test the fixes:
 
+1. **Button Text**: 
+   - Create new load → Should say "Create Load"
+   - Edit existing load → Should say "Save Load"
+
+2. **Upload Error Handling**:
+   - Try uploading a document
+   - Should see helpful error message if Storage is misconfigured
+   - Progress should reset properly on error
+
+3. **HMR Stability**:
+   - Make code changes
+   - App should not crash during hot reload
+   - Context should work properly after reload
+
+---
+
+**Last Updated**: Current session
+**Status**: All code fixes applied, Firebase Storage configuration needed

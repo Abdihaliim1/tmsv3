@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest",
+    "test:ui": "vitest --ui"
   },
   "keywords": [
     "transportation",
@@ -33,14 +35,20 @@
   },
   "homepage": "https://github.com/yourusername/tms-pro#readme",
   "dependencies": {
+    "@sentry/react": "^10.32.1",
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.3.1",
     "firebase": "^9.22.1",
     "jspdf": "^3.0.4",
     "lucide-react": "^0.555.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^3.5.1"
+    "recharts": "^3.5.1",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@typescript-eslint/eslint-plugin": "^6.14.0",
@@ -50,10 +58,12 @@
     "eslint": "^8.55.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "jsdom": "^27.4.0",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vitest": "^1.6.1"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,0 +1,52 @@
+{
+  "tenants": {
+    "sars-logistics": {
+      "id": "sars-logistics",
+      "name": "Sars Logistics LLC",
+      "status": "active",
+      "createdAt": "2025-01-26T00:00:00.000Z",
+      "updatedAt": "2025-01-26T00:00:00.000Z"
+    },
+    "ats-freight": {
+      "id": "ats-freight",
+      "name": "ATS Freight LLC",
+      "status": "active",
+      "createdAt": "2025-01-26T00:00:00.000Z",
+      "updatedAt": "2025-01-26T00:00:00.000Z"
+    },
+    "sample-freight": {
+      "id": "sample-freight",
+      "name": "Sample Freight LLC",
+      "status": "active",
+      "createdAt": "2025-01-26T00:00:00.000Z",
+      "updatedAt": "2025-01-26T00:00:00.000Z"
+    }
+  },
+  "memberships": {
+    "HpizRZ3WfgbdsYaMlrVHKmY6d4k2": {
+      "sars-logistics": {
+        "tenantId": "sars-logistics",
+        "tenantName": "Sars Logistics LLC",
+        "role": "admin",
+        "active": true,
+        "joinedAt": "2025-01-26T00:00:00.000Z"
+      },
+      "ats-freight": {
+        "tenantId": "ats-freight",
+        "tenantName": "ATS Freight LLC",
+        "role": "admin",
+        "active": true,
+        "joinedAt": "2025-01-26T00:00:00.000Z"
+      },
+      "sample-freight": {
+        "tenantId": "sample-freight",
+        "tenantName": "Sample Freight LLC",
+        "role": "admin",
+        "active": true,
+        "joinedAt": "2025-01-26T00:00:00.000Z"
+      }
+    }
+  }
+}
+
+

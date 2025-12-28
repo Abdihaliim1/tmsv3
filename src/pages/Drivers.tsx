@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Download } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType } from '../types';
+import { useDebounce } from '../utils/debounce';
 
 const Drivers: React.FC = () => {
   const { employees, drivers, loads, trucks, addEmployee, updateEmployee, deleteEmployee, addDriver, updateDriver, deleteDriver } = useTMS();
@@ -10,6 +11,7 @@ const Drivers: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [paymentFilter, setPaymentFilter] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -21,14 +23,14 @@ const Drivers: React.FC = () => {
       const matchesStatus = !statusFilter || employee.status === statusFilter;
       const matchesType = !employeeTypeFilter || employee.employeeType === employeeTypeFilter;
       const matchesPayment = !paymentFilter || employee.payment?.type === paymentFilter;
-      const matchesSearch = !searchTerm ||
-        employee.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        employee.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (employee.employeeNumber || employee.driverNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (employee.license?.number || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = !debouncedSearchTerm ||
+        employee.firstName.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        employee.lastName.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        (employee.employeeNumber || employee.driverNumber || '').toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        (employee.license?.number || '').toLowerCase().includes(debouncedSearchTerm.toLowerCase());
       return matchesStatus && matchesType && matchesPayment && matchesSearch;
     });
-  }, [employees, statusFilter, employeeTypeFilter, paymentFilter, searchTerm]);
+  }, [employees, statusFilter, employeeTypeFilter, paymentFilter, debouncedSearchTerm]);
 
   // Pagination
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
@@ -166,7 +168,7 @@ const Drivers: React.FC = () => {
             setEditingDriver(null);
             setIsModalOpen(true);
           }}
-          className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+          className="btn-primary px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
         >
           <Plus size={20} />
           Add New Employee
@@ -564,6 +566,8 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
       fuel: driver?.deductionPreferences?.fuel || false,
       insurance: driver?.deductionPreferences?.insurance || false,
       maintenance: driver?.deductionPreferences?.maintenance || false,
+      ifta: driver?.deductionPreferences?.ifta || false,
+      eld: driver?.deductionPreferences?.eld || false,
       other: driver?.deductionPreferences?.other || false,
     },
     employment: {
@@ -680,20 +684,23 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div 
+        className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-800 text-white px-6 py-4 flex justify-between items-center">
-          <h3 className="text-xl font-semibold">
-            {driver ? `Edit Driver - ${driver.driverNumber}` : 'Add New Driver'}
-          </h3>
-          <button onClick={onClose} className="text-white hover:text-slate-200">
-            <X size={24} />
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+          <h2 className="text-lg font-semibold text-slate-900">
+            {driver ? `Edit Employee` : 'Add New Employee'}
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+            <X size={20} />
           </button>
         </div>
 
         {/* Form */}
         <div className="overflow-y-auto p-6 flex-1">
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form id="employee-form" onSubmit={handleSubmit} className="space-y-6">
             {/* Basic Information */}
             <div className="border-t pt-6">
               <h4 className="text-lg font-semibold text-slate-900 mb-4">Basic Information</h4>
@@ -860,15 +867,45 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">SSN</label>
-                  <input
-                    type="text"
-                    name="ssn"
-                    value={formData.ssn}
-                    onChange={handleChange}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
-                  />
+                {/* Tax ID Section - SSN or EIN for Owner Operators */}
+                <div className="col-span-1 md:col-span-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {driverType === 'OwnerOperator' && (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Tax ID Type</label>
+                        <select
+                          name="taxIdType"
+                          value={formData.taxIdType || 'ssn'}
+                          onChange={handleChange}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="ssn">Social Security Number (SSN)</option>
+                          <option value="ein">Employer Identification Number (EIN)</option>
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Owner Operators with a registered business can use EIN instead of SSN
+                        </p>
+                      </div>
+                    )}
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">
+                        {driverType === 'OwnerOperator' && formData.taxIdType === 'ein' ? 'EIN' : 'SSN'}
+                      </label>
+                      <input
+                        type="text"
+                        name={driverType === 'OwnerOperator' && formData.taxIdType === 'ein' ? 'ein' : 'ssn'}
+                        value={driverType === 'OwnerOperator' && formData.taxIdType === 'ein' ? (formData.ein || '') : (formData.ssn || '')}
+                        onChange={handleChange}
+                        placeholder={driverType === 'OwnerOperator' && formData.taxIdType === 'ein' ? 'XX-XXXXXXX' : 'XXX-XX-XXXX'}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">
+                        {driverType === 'OwnerOperator' && formData.taxIdType === 'ein' 
+                          ? 'Business Tax ID (9 digits: XX-XXXXXXX)' 
+                          : 'Social Security Number (9 digits: XXX-XX-XXXX)'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">Phone *</label>
@@ -1126,19 +1163,26 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
               <div className="border-t pt-6">
                 <h4 className="text-lg font-semibold text-slate-900 mb-4">Deduction Preferences (Owner Operator Only)</h4>
                 <p className="text-sm text-slate-600 mb-4">Select which expenses should be deducted from settlement.</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {(['fuel', 'insurance', 'maintenance', 'other'] as const).map(pref => (
-                    <div key={pref} className="flex items-center p-3 bg-slate-50 rounded-lg">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {([
+                    { key: 'fuel', label: 'Fuel', description: 'Fuel card deductions' },
+                    { key: 'insurance', label: 'Insurance', description: 'Cargo/liability insurance' },
+                    { key: 'maintenance', label: 'Maintenance', description: 'Truck repairs/service' },
+                    { key: 'ifta', label: 'IFTA', description: 'International Fuel Tax Agreement' },
+                    { key: 'eld', label: 'ELD', description: 'Electronic Logging Device' },
+                    { key: 'other', label: 'Other', description: 'Miscellaneous deductions' },
+                  ] as const).map(pref => (
+                    <div key={pref.key} className="flex items-start p-3 bg-slate-50 rounded-lg">
                       <input
                         type="checkbox"
-                        name={`deductionPreferences.${pref}`}
-                        checked={formData.deductionPreferences?.[pref] || false}
+                        name={`deductionPreferences.${pref.key}`}
+                        checked={formData.deductionPreferences?.[pref.key] || false}
                         onChange={handleChange}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded"
+                        className="h-4 w-4 mt-1 text-blue-600 focus:ring-blue-500 border-slate-300 rounded"
                       />
                       <label className="ml-3 block text-sm text-slate-900">
-                        <span className="font-medium capitalize">{pref}</span>
-                        <span className="text-slate-500 block text-xs">Deduct {pref} expenses from settlement</span>
+                        <span className="font-medium">{pref.label}</span>
+                        <span className="text-slate-500 block text-xs">{pref.description}</span>
                       </label>
                     </div>
                   ))}
@@ -1223,23 +1267,25 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
               </div>
             </div>
 
-            {/* Form Actions */}
-            <div className="border-t pt-6 flex justify-end gap-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-6 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Save Employee
-              </button>
-            </div>
           </form>
+        </div>
+        
+        {/* Footer Actions */}
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="employee-form"
+            className="btn-primary px-4 py-2 text-sm font-medium rounded-lg shadow-sm transition-colors"
+          >
+            {driver ? 'Save Employee' : 'Create Employee'}
+          </button>
         </div>
       </div>
     </div>
