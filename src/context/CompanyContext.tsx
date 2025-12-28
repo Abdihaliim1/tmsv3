@@ -138,7 +138,9 @@ export const CompanyProvider: React.FC<{ children: ReactNode }> = ({ children })
           const storageKey = `tms_${tenantId}_company_profile`;
           localStorage.setItem(storageKey, JSON.stringify(profile));
           
-          console.log('[CompanyContext] Loaded from Firestore:', profile.companyName);
+          if (import.meta.env.DEV) {
+            console.log('[CompanyContext] Loaded from Firestore:', profile.companyName);
+          }
         } else {
           // No Firestore data - check localStorage cache
           const storageKey = `tms_${tenantId}_company_profile`;
@@ -151,7 +153,9 @@ export const CompanyProvider: React.FC<{ children: ReactNode }> = ({ children })
             
             // Save cached data to Firestore
             await setDoc(docRef, profile, { merge: true });
-            console.log('[CompanyContext] Migrated localStorage to Firestore');
+            if (import.meta.env.DEV) {
+              console.log('[CompanyContext] Migrated localStorage to Firestore');
+            }
           } else {
             // Check for tenant-specific defaults
             if (tenantDefaultProfiles[tenantId]) {
@@ -166,7 +170,9 @@ export const CompanyProvider: React.FC<{ children: ReactNode }> = ({ children })
               // Save to both Firestore and localStorage
               await setDoc(docRef, profile, { merge: true });
               localStorage.setItem(storageKey, JSON.stringify(profile));
-              console.log('[CompanyContext] Created default profile for tenant');
+              if (import.meta.env.DEV) {
+                console.log('[CompanyContext] Created default profile for tenant');
+              }
             } else {
               // New tenant - show setup wizard
               setCompanyProfile(getDefaultCompanyProfile(tenantId));
@@ -212,7 +218,9 @@ export const CompanyProvider: React.FC<{ children: ReactNode }> = ({ children })
       try {
         const docRef = doc(db, `tenants/${tenantId}/settings/companyProfile`);
         await setDoc(docRef, updated, { merge: true });
-        console.log('[CompanyContext] Saved to Firestore:', updated.companyName);
+        if (import.meta.env.DEV) {
+          console.log('[CompanyContext] Saved to Firestore:', updated.companyName);
+        }
       } catch (error) {
         console.error('[CompanyContext] Error saving to Firestore:', error);
         // Data is still in localStorage, so not critical

@@ -189,7 +189,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     let isMounted = true;
     
     const loadAllData = async () => {
-      console.log(`[TMSContext] Loading data from Firestore for tenant: ${tenantId}`);
+      if (import.meta.env.DEV) {
+        console.log(`[TMSContext] Loading data from Firestore for tenant: ${tenantId}`);
+      }
       setIsDataLoaded(false);
       
       try {
@@ -262,7 +264,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         }
         
         setIsDataLoaded(true);
-        console.log(`[TMSContext] Data loaded successfully for tenant: ${tenantId}`);
+        if (import.meta.env.DEV) {
+          console.log(`[TMSContext] Data loaded successfully for tenant: ${tenantId}`);
+        }
         
       } catch (error) {
         console.error('[TMSContext] Error loading data from Firestore:', error);
@@ -313,13 +317,35 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     let currentRevenue = 0;
     loads.forEach(load => {
       const driver = drivers.find(d => d.id === load.driverId);
-      const loadRate = load.rate || load.grandTotal || 0;
+      
+      // Safely extract and convert rate to number
+      let loadRate: number = 0;
+      if (load.rate !== undefined && load.rate !== null) {
+        loadRate = typeof load.rate === 'number' ? load.rate : parseFloat(String(load.rate)) || 0;
+      } else if (load.grandTotal !== undefined && load.grandTotal !== null) {
+        loadRate = typeof load.grandTotal === 'number' ? load.grandTotal : parseFloat(String(load.grandTotal)) || 0;
+      }
+      
+      // Ensure loadRate is a valid number
+      if (isNaN(loadRate) || loadRate < 0) {
+        loadRate = 0;
+      }
+      
       const revenue = calculateCompanyRevenue(loadRate, driver);
+      
       // Only add if revenue is a valid number
-      if (typeof revenue === 'number' && !isNaN(revenue) && revenue >= 0) {
+      if (typeof revenue === 'number' && !isNaN(revenue) && isFinite(revenue) && revenue >= 0) {
         currentRevenue += revenue;
       }
     });
+    
+    // Final safety check - ensure currentRevenue is always a valid number
+    if (isNaN(currentRevenue) || !isFinite(currentRevenue) || currentRevenue < 0) {
+      if (import.meta.env.DEV) {
+        console.warn('[TMSContext] Invalid revenue calculated, resetting to 0. Loads:', loads.length, 'CurrentRevenue:', currentRevenue);
+      }
+      currentRevenue = 0;
+    }
 
     const activeLoadCount = loads.filter(l => 
       [LoadStatus.Dispatched, LoadStatus.InTransit, LoadStatus.Available].includes(l.status)
@@ -330,13 +356,17 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       [LoadStatus.Delivered, LoadStatus.Completed].includes(l.status)
     ).length;
 
+    // Ensure all KPI values are valid numbers
+    const finalRevenue = isNaN(currentRevenue) || !isFinite(currentRevenue) ? 0 : currentRevenue;
+    const finalProfit = isNaN(finalRevenue * 0.15) || !isFinite(finalRevenue * 0.15) ? 0 : finalRevenue * 0.15;
+
     return {
       ...baseKPIs,
-      revenue: currentRevenue,
+      revenue: finalRevenue,
       activeLoads: activeLoadCount,
       activeDrivers: activeDriverCount,
       completedLoads: completedLoadsCount,
-      profit: currentRevenue * 0.15, // Mock 15% net margin for now
+      profit: finalProfit, // Mock 15% net margin for now
       onTimeDelivery: 95 // Mock 95% on-time delivery
     };
   }, [loads, drivers]);

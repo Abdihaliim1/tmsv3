@@ -192,38 +192,63 @@ export const calculateDistance = async (
 };
 
 export const calculateCompanyRevenue = (grossAmount: number, driver?: Driver): number => {
+  // Convert to number if it's a string
+  let amount: number;
+  if (typeof grossAmount === 'string') {
+    amount = parseFloat(grossAmount) || 0;
+  } else if (typeof grossAmount === 'number') {
+    amount = grossAmount;
+  } else {
+    amount = 0;
+  }
+  
   // Handle invalid inputs
-  if (typeof grossAmount !== 'number' || isNaN(grossAmount) || grossAmount < 0) {
+  if (isNaN(amount) || !isFinite(amount) || amount < 0) {
     return 0;
   }
 
   if (!driver) {
-    return grossAmount;
+    return amount;
   }
 
   // Company Driver: Company keeps 100% of revenue (Driver paid separately via payroll/settlement)
   if (driver.type === 'Company') {
-      return grossAmount;
+      return amount;
   }
 
   // Owner Operator: Company keeps commission only (e.g. 12% if driver gets 88%)
   if (driver.type === 'OwnerOperator') {
-      // Validate rateOrSplit
-      const rateOrSplit = driver.rateOrSplit || driver.payPercentage || 0;
-      if (typeof rateOrSplit !== 'number' || isNaN(rateOrSplit) || rateOrSplit <= 0) {
+      // Validate rateOrSplit - convert to number if needed
+      let rateOrSplit: number = 0;
+      if (driver.rateOrSplit !== undefined && driver.rateOrSplit !== null) {
+        rateOrSplit = typeof driver.rateOrSplit === 'number' 
+          ? driver.rateOrSplit 
+          : parseFloat(String(driver.rateOrSplit)) || 0;
+      } else if (driver.payPercentage !== undefined && driver.payPercentage !== null) {
+        rateOrSplit = typeof driver.payPercentage === 'number'
+          ? driver.payPercentage
+          : parseFloat(String(driver.payPercentage)) || 0;
+      }
+      
+      // Validate rateOrSplit value
+      if (isNaN(rateOrSplit) || rateOrSplit <= 0 || rateOrSplit > 100) {
         // Default to 88% if invalid (common O/O split)
-        return grossAmount * 0.12; // Company keeps 12%
+        const result = amount * 0.12; // Company keeps 12%
+        return isNaN(result) || !isFinite(result) ? 0 : result;
       }
       
       const driverSplit = rateOrSplit / 100; // e.g. 0.88
       const companyCommission = 1 - driverSplit;    // e.g. 0.12
-      const result = grossAmount * companyCommission;
+      const result = amount * companyCommission;
       
       // Ensure result is valid
-      return isNaN(result) ? 0 : result;
+      if (isNaN(result) || !isFinite(result) || result < 0) {
+        return 0;
+      }
+      return result;
   }
 
-  return grossAmount;
+  return amount;
 };
 
 export const validatePayPercentage = (percentage: number, driverType?: string): number => {

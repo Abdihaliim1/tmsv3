@@ -335,7 +335,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatsCard 
           label="Total Revenue" 
-          value={`$${kpis.revenue.toLocaleString()}`} 
+          value={`$${(isNaN(kpis.revenue) || !isFinite(kpis.revenue) ? 0 : kpis.revenue).toLocaleString()}`} 
           icon={DollarSign} 
           trend={kpis.revenueChange}
           color="green"

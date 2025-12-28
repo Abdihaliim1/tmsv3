@@ -11,7 +11,10 @@ export function initSentry() {
   const dsn = import.meta.env.VITE_SENTRY_DSN;
   
   if (!dsn) {
-    console.log('Sentry not initialized: VITE_SENTRY_DSN not set. This is optional for production.');
+    // Only log in development to reduce console noise in production
+    if (import.meta.env.DEV) {
+      console.log('Sentry not initialized: VITE_SENTRY_DSN not set. This is optional for production.');
+    }
     return;
   }
 
