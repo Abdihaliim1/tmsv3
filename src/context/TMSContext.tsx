@@ -97,7 +97,7 @@ interface TMSProviderProps {
 
 export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) => {
   // tenantId is passed from parent (avoids circular dependency with TenantContext)
-  
+
   // Get current user from Firebase Auth for tracking changes
   // Hooks must be called unconditionally at the top level
   const { user: authUser } = useAuth();
@@ -124,44 +124,44 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           activeLoads: 0,
           activeDrivers: 0,
         },
-        addLoad: () => {},
-        updateLoad: () => {},
-        deleteLoad: () => {},
-        addEmployee: () => {},
-        updateEmployee: () => {},
-        deleteEmployee: () => {},
-        addDriver: () => {},
-        updateDriver: () => {},
-        deleteDriver: () => {},
+        addLoad: () => { },
+        updateLoad: () => { },
+        deleteLoad: () => { },
+        addEmployee: () => { },
+        updateEmployee: () => { },
+        deleteEmployee: () => { },
+        addDriver: () => { },
+        updateDriver: () => { },
+        deleteDriver: () => { },
         addTruck: () => '',
-        updateTruck: () => {},
-        deleteTruck: () => {},
+        updateTruck: () => { },
+        deleteTruck: () => { },
         addTrailer: () => '',
-        updateTrailer: () => {},
-        deleteTrailer: () => {},
-        addInvoice: () => {},
-        updateInvoice: () => {},
-        deleteInvoice: () => {},
+        updateTrailer: () => { },
+        deleteTrailer: () => { },
+        addInvoice: () => { },
+        updateInvoice: () => { },
+        deleteInvoice: () => { },
         addSettlement: () => '',
-        updateSettlement: () => {},
-        deleteSettlement: () => {},
-        addExpense: () => {},
-        updateExpense: () => {},
-        deleteExpense: () => {},
-        addFactoringCompany: () => {},
-        updateFactoringCompany: () => {},
-        deleteFactoringCompany: () => {},
-        addBroker: () => {},
-        updateBroker: () => {},
-        deleteBroker: () => {},
-        addDispatcher: () => {},
-        updateDispatcher: () => {},
-        deleteDispatcher: () => {},
-        updateTaskStatus: () => {},
-        completeTask: () => {},
-        deleteTaskById: () => {},
+        updateSettlement: () => { },
+        deleteSettlement: () => { },
+        addExpense: () => { },
+        updateExpense: () => { },
+        deleteExpense: () => { },
+        addFactoringCompany: () => { },
+        updateFactoringCompany: () => { },
+        deleteFactoringCompany: () => { },
+        addBroker: () => { },
+        updateBroker: () => { },
+        deleteBroker: () => { },
+        addDispatcher: () => { },
+        updateDispatcher: () => { },
+        deleteDispatcher: () => { },
+        updateTaskStatus: () => { },
+        completeTask: () => { },
+        deleteTaskById: () => { },
         searchTerm: '',
-        setSearchTerm: () => {},
+        setSearchTerm: () => { },
       }}>
         {children}
       </TMSContext.Provider>
@@ -185,15 +185,15 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   // Load all data from Firestore when tenant changes
   useEffect(() => {
     if (!tenantId) return;
-    
+
     let isMounted = true;
-    
+
     const loadAllData = async () => {
       if (import.meta.env.DEV) {
         console.log(`[TMSContext] Loading data from Firestore for tenant: ${tenantId}`);
       }
       setIsDataLoaded(false);
-      
+
       try {
         // Load all collections in parallel
         const [
@@ -217,9 +217,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           loadFactoringCompanies(tenantId),
           loadBrokers(tenantId)
         ]);
-        
+
         if (!isMounted) return;
-        
+
         // Set all state
         setLoads(loadsData);
         setEmployees(employeesData);
@@ -230,7 +230,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         setExpenses(expensesData);
         setFactoringCompanies(fcData);
         setBrokers(brokersData);
-        
+
         // Auto-seed brokers if empty
         if (brokersData.length === 0) {
           try {
@@ -242,7 +242,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
             console.warn('Could not auto-seed brokers:', error);
           }
         }
-        
+
         // Auto-seed factoring companies if empty
         if (fcData.length === 0) {
           try {
@@ -254,7 +254,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
             console.warn('Could not auto-seed factoring companies:', error);
           }
         }
-        
+
         // Load tasks
         try {
           const tasksData = getTasks(tenantId);
@@ -262,20 +262,20 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         } catch (error) {
           console.warn('Error loading tasks:', error);
         }
-        
+
         setIsDataLoaded(true);
         if (import.meta.env.DEV) {
           console.log(`[TMSContext] Data loaded successfully for tenant: ${tenantId}`);
         }
-        
+
       } catch (error) {
         console.error('[TMSContext] Error loading data from Firestore:', error);
         setIsDataLoaded(true); // Set to true even on error to prevent infinite loading
       }
     };
-    
+
     loadAllData();
-    
+
     return () => {
       isMounted = false;
     };
@@ -312,12 +312,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   // KPIs
   const kpis = useMemo(() => {
     const baseKPIs = generateMockKPIs();
-    
+
     // Calculate real-time revenue based on driver type (Commission vs Full)
     let currentRevenue = 0;
     loads.forEach(load => {
       const driver = drivers.find(d => d.id === load.driverId);
-      
+
       // Safely extract and convert rate to number
       let loadRate: number = 0;
       if (load.rate !== undefined && load.rate !== null) {
@@ -325,20 +325,20 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       } else if (load.grandTotal !== undefined && load.grandTotal !== null) {
         loadRate = typeof load.grandTotal === 'number' ? load.grandTotal : parseFloat(String(load.grandTotal)) || 0;
       }
-      
+
       // Ensure loadRate is a valid number
       if (isNaN(loadRate) || loadRate < 0) {
         loadRate = 0;
       }
-      
+
       const revenue = calculateCompanyRevenue(loadRate, driver);
-      
+
       // Only add if revenue is a valid number
       if (typeof revenue === 'number' && !isNaN(revenue) && isFinite(revenue) && revenue >= 0) {
         currentRevenue += revenue;
       }
     });
-    
+
     // Final safety check - ensure currentRevenue is always a valid number
     if (isNaN(currentRevenue) || !isFinite(currentRevenue) || currentRevenue < 0) {
       if (import.meta.env.DEV) {
@@ -347,12 +347,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       currentRevenue = 0;
     }
 
-    const activeLoadCount = loads.filter(l => 
+    const activeLoadCount = loads.filter(l =>
       [LoadStatus.Dispatched, LoadStatus.InTransit, LoadStatus.Available].includes(l.status)
     ).length;
     const activeDriverCount = drivers.filter(d => d.status === 'active').length;
 
-    const completedLoadsCount = loads.filter(l => 
+    const completedLoadsCount = loads.filter(l =>
       [LoadStatus.Delivered, LoadStatus.Completed].includes(l.status)
     ).length;
 
@@ -363,10 +363,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     return {
       ...baseKPIs,
       revenue: finalRevenue,
+      revenueChange: baseKPIs.revenueChange || 0, // Ensure revenueChange is always a number
       activeLoads: activeLoadCount,
       activeDrivers: activeDriverCount,
       completedLoads: completedLoadsCount,
       profit: finalProfit, // Mock 15% net margin for now
+      profitChange: baseKPIs.profitChange || 0, // Ensure profitChange is always a number
       onTimeDelivery: 95 // Mock 95% on-time delivery
     };
   }, [loads, drivers]);
@@ -383,7 +385,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     // Update Loads State
     setLoads([newLoad, ...loads]);
-    
+
     // Save to Firestore
     try {
       await saveLoad(tenantId || 'default', newLoad);
@@ -430,16 +432,16 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     // --- AUTOMATION LOGIC ---
     // If load is created as "Delivered" or "Completed", automatically generate Invoice and Settlement
     if (newLoad.status === LoadStatus.Delivered || newLoad.status === LoadStatus.Completed) {
-      
+
       // 1. Auto-Generate Invoice
       const today = new Date();
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 30); // Net 30
-      
+
       // Check if load is factored
       const isFactored = newLoad.isFactored || false;
       const factoringCompany = factoringCompanies.find(fc => fc.id === newLoad.factoringCompanyId);
-      
+
       const newInvoice: Invoice = {
         id: `inv-${newLoadId}`,
         invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
@@ -467,12 +469,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           let grossPay = 0;
 
           if (driver.type === 'OwnerOperator') {
-             // Split Logic: (Load Rate - Expenses) * Split%
-             // Assuming 0 expenses for this auto-generated example
-             grossPay = newLoad.rate * (driver.rateOrSplit / 100);
+            // Split Logic: (Load Rate - Expenses) * Split%
+            // Assuming 0 expenses for this auto-generated example
+            grossPay = newLoad.rate * (driver.rateOrSplit / 100);
           } else {
-             // Company Driver: Miles * Rate
-             grossPay = newLoad.miles * driver.rateOrSplit;
+            // Company Driver: Miles * Rate
+            grossPay = newLoad.miles * driver.rateOrSplit;
           }
 
           const newSettlement: Settlement = {
@@ -506,17 +508,17 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     // For delivered loads, check if a reason is needed
     const hasAdjustmentReason = reason && reason.trim().length > 0;
-    
+
     if (isLoadLocked(oldLoad)) {
       const validation = validatePostDeliveryUpdates(oldLoad, updates);
-      
+
       // If changes require a reason but none provided, reject
       if (validation.requiresReason && !hasAdjustmentReason) {
         const errorMessage = `Changes to delivered load require a reason. Changed fields: ${validation.changedFields.join(', ')}`;
         console.error('Load update requires reason:', errorMessage);
         return Promise.reject(new Error(errorMessage));
       }
-      
+
       // Log the adjustment if reason provided
       if (hasAdjustmentReason) {
         console.log(`[ADJUSTMENT] Load ${oldLoad.loadNumber} modified. Reason: ${reason}. Fields: ${validation.changedFields.join(', ')}`);
@@ -543,7 +545,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       Object.keys(updates).forEach((key) => {
         const oldValue = (oldLoad as any)[key];
         const newValue = (updates as any)[key];
-        
+
         // Only log if value actually changed
         if (oldValue !== newValue && JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
           adjustmentEntries.push({
@@ -564,11 +566,11 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     const newAdjustmentLog = [...existingAdjustmentLog, ...adjustmentEntries];
 
     // Lock load if status changed to Delivered or Completed
-    const shouldLock = (updates.status === LoadStatus.Delivered || updates.status === LoadStatus.Completed) && 
-                       !oldLoad.isLocked;
+    const shouldLock = (updates.status === LoadStatus.Delivered || updates.status === LoadStatus.Completed) &&
+      !oldLoad.isLocked;
 
-    const updatedLoad = { 
-      ...oldLoad, 
+    const updatedLoad = {
+      ...oldLoad,
       ...updates,
       adjustmentLog: adjustmentEntries.length > 0 ? newAdjustmentLog : oldLoad.adjustmentLog,
       isLocked: shouldLock ? true : oldLoad.isLocked,
@@ -576,7 +578,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       updatedAt: new Date().toISOString()
     };
     setLoads(prev => prev.map(load => load.id === id ? updatedLoad : load));
-    
+
     // Save to Firestore
     try {
       await saveLoad(tenantId || 'default', updatedLoad);
@@ -646,7 +648,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
             isFactored: updatedLoad.isFactored,
           }
         );
-        
+
         // If status changed to Delivered, trigger delivered event
         if (updates.status === LoadStatus.Delivered || updates.status === LoadStatus.Completed) {
           const deliveredTasks = await triggerLoadDelivered(tenantId || 'default', id, {
@@ -658,7 +660,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
             setTasks(getTasks(tenantId)); // Refresh tasks
           }
         }
-        
+
         if (createdTasks.length > 0) {
           setTasks(getTasks(tenantId)); // Refresh tasks
         }
@@ -666,49 +668,49 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         console.error('Error triggering workflow for load status change:', error);
       }
     }
-    
+
     // AUTO-SYNC: Update associated invoice when load rate/amount changes
     const rateChanged = updates.rate !== undefined && updates.rate !== oldLoad.rate;
     const grandTotalChanged = updates.grandTotal !== undefined && updates.grandTotal !== oldLoad.grandTotal;
     const brokerChanged = updates.brokerName !== undefined && updates.brokerName !== oldLoad.brokerName;
-    
+
     if (rateChanged || grandTotalChanged || brokerChanged) {
       // Find invoice linked to this load
-      const linkedInvoice = invoices.find(inv => 
+      const linkedInvoice = invoices.find(inv =>
         inv.loadId === id || inv.loadIds?.includes(id) || updatedLoad.invoiceId === inv.id
       );
-      
+
       if (linkedInvoice) {
         // Recalculate invoice amount based on all linked loads
         const linkedLoadIds = linkedInvoice.loadIds || (linkedInvoice.loadId ? [linkedInvoice.loadId] : []);
         let newAmount = 0;
-        
+
         linkedLoadIds.forEach(loadId => {
-          const linkedLoad = loadId === id 
+          const linkedLoad = loadId === id
             ? updatedLoad  // Use updated load for the one we just changed
             : loads.find(l => l.id === loadId);
           if (linkedLoad) {
             newAmount += linkedLoad.grandTotal || linkedLoad.rate || 0;
           }
         });
-        
+
         const invoiceUpdates: Partial<Invoice> = {
           amount: newAmount,
           updatedAt: new Date().toISOString(),
         };
-        
+
         // Also update broker name if it changed
         if (brokerChanged && updates.brokerName) {
           invoiceUpdates.brokerName = updates.brokerName;
           invoiceUpdates.customerName = updates.brokerName; // Keep in sync
         }
-        
-        setInvoices(prev => prev.map(inv => 
-          inv.id === linkedInvoice.id 
+
+        setInvoices(prev => prev.map(inv =>
+          inv.id === linkedInvoice.id
             ? { ...inv, ...invoiceUpdates }
             : inv
         ));
-        
+
         console.log(`[INVOICE SYNC] Updated invoice ${linkedInvoice.invoiceNumber} amount to ${newAmount}`);
       }
     }
@@ -719,10 +721,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     if (!load) return;
 
     // Check for linked entities
-    const linkedInvoices = invoices.filter(inv => 
+    const linkedInvoices = invoices.filter(inv =>
       inv.loadId === id || inv.loadIds?.includes(id)
     );
-    const linkedSettlements = settlements.filter(sett => 
+    const linkedSettlements = settlements.filter(sett =>
       sett.loadId === id || sett.loadIds?.includes(id)
     );
 
@@ -730,13 +732,13 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     if (!force && (linkedInvoices.length > 0 || linkedSettlements.length > 0)) {
       const invoiceList = linkedInvoices.map(inv => inv.invoiceNumber).join(', ');
       const settlementList = linkedSettlements.map(sett => sett.settlementNumber || sett.id).join(', ');
-      
-      const message = 
+
+      const message =
         `Load ${load.loadNumber} is linked to:\n` +
         (linkedInvoices.length > 0 ? `- Invoices: ${invoiceList}\n` : '') +
         (linkedSettlements.length > 0 ? `- Settlements: ${settlementList}\n` : '') +
         '\nDeleting this load will unlink it from these entities.\n\nAre you sure you want to delete this load?';
-      
+
       if (!window.confirm(message)) {
         return; // User cancelled
       }
@@ -754,7 +756,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       }
       return inv;
     }));
-    
+
     // Unlink from settlements
     setSettlements(prev => prev.map(sett => {
       if (sett.loadId === id) {
@@ -767,10 +769,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       }
       return sett;
     }));
-    
+
     // Delete the load
     setLoads(prev => prev.filter(load => load.id !== id));
-    
+
     // Delete from Firestore
     firestoreDeleteLoad(tenantId || 'default', id).catch(error => {
       console.error('Failed to delete load from Firestore:', error);
@@ -795,15 +797,15 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
   const updateEmployee = (id: string, updates: Partial<Employee>) => {
     const employee = employees.find(e => e.id === id);
-    const updatedEmployee = employee ? { 
-      ...employee, 
+    const updatedEmployee = employee ? {
+      ...employee,
       ...updates,
       driverNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
       employeeNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
       type: updates.type || (updates.employeeType === 'owner' ? 'OwnerOperator' : 'Company') || employee.type,
       updatedAt: new Date().toISOString()
     } : null;
-    
+
     setEmployees(prev => prev.map(emp => emp.id === id ? updatedEmployee! : emp));
     if (updatedEmployee) {
       saveEmployee(tenantId || 'default', updatedEmployee).catch(e => console.error('Failed to save employee:', e));
@@ -813,30 +815,30 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const deleteEmployee = (id: string) => {
     const employee = employees.find(e => e.id === id);
     if (!employee) return;
-    
+
     // Check for linked loads
     const linkedLoads = loads.filter(load => load.driverId === id);
-    
+
     if (linkedLoads.length > 0) {
       const loadList = linkedLoads.map(l => l.loadNumber).slice(0, 5).join(', ');
       const more = linkedLoads.length > 5 ? ` and ${linkedLoads.length - 5} more` : '';
       const employeeName = `${employee.firstName} ${employee.lastName}`.trim() || 'This employee';
-      const message = 
+      const message =
         `${employeeName} is assigned to ${linkedLoads.length} load(s):\n` +
         `${loadList}${more}\n\n` +
         'Deleting this employee will unassign them from these loads.\n' +
         'Are you sure you want to delete?';
-      
+
       if (!window.confirm(message)) {
         return;
       }
-      
+
       // Unlink from loads
-      setLoads(prev => prev.map(load => 
+      setLoads(prev => prev.map(load =>
         load.driverId === id ? { ...load, driverId: undefined, driverName: undefined } : load
       ));
     }
-    
+
     setEmployees(prev => prev.filter(employee => employee.id !== id));
     firestoreDeleteEmployee(tenantId || 'default', id).catch(e => console.error('Failed to delete employee:', e));
   };
@@ -876,7 +878,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateTruck = (id: string, updates: Partial<Truck>) => {
     const truck = trucks.find(t => t.id === id);
     const updatedTruck = truck ? { ...truck, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setTrucks(prev => prev.map(t => t.id === id ? updatedTruck! : t));
     if (updatedTruck) {
       saveTruck(tenantId || 'default', updatedTruck).catch(e => console.error('Failed to save truck:', e));
@@ -886,16 +888,16 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const deleteTruck = (id: string) => {
     const truck = trucks.find(t => t.id === id);
     if (!truck) return;
-    
+
     // Check for linked loads
     const linkedLoads = loads.filter(load => load.truckId === id);
     // Check for linked drivers (drivers with this truck assigned via unitNumber)
     const linkedDrivers = employees.filter(e => e.unitNumber === truck.truckNumber);
-    
+
     if (linkedLoads.length > 0 || linkedDrivers.length > 0) {
       const loadList = linkedLoads.map(l => l.loadNumber).slice(0, 3).join(', ');
       const driverList = linkedDrivers.map(d => `${d.firstName} ${d.lastName}`).slice(0, 3).join(', ');
-      
+
       let message = `Truck ${truck.truckNumber} is linked to:\n`;
       if (linkedLoads.length > 0) {
         message += `- ${linkedLoads.length} load(s): ${loadList}${linkedLoads.length > 3 ? '...' : ''}\n`;
@@ -904,18 +906,18 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         message += `- ${linkedDrivers.length} driver(s): ${driverList}${linkedDrivers.length > 3 ? '...' : ''}\n`;
       }
       message += '\nDeleting will unlink this truck. Continue?';
-      
+
       if (!window.confirm(message)) {
         return;
       }
-      
+
       // Unlink from loads
-      setLoads(prev => prev.map(load => 
+      setLoads(prev => prev.map(load =>
         load.truckId === id ? { ...load, truckId: undefined } : load
       ));
       // Note: Drivers are linked via unitNumber matching truckNumber, not assignedTruckId
     }
-    
+
     setTrucks(prev => prev.filter(truck => truck.id !== id));
     firestoreDeleteTruck(tenantId || 'default', id).catch(e => console.error('Failed to delete truck:', e));
   };
@@ -934,7 +936,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateTrailer = (id: string, updates: Partial<Trailer>) => {
     const trailer = trailers.find(t => t.id === id);
     const updatedTrailer = trailer ? { ...trailer, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setTrailers(prev => prev.map(t => t.id === id ? updatedTrailer! : t));
     if (updatedTrailer) {
       saveTrailer(tenantId || 'default', updatedTrailer).catch(e => console.error('Failed to save trailer:', e));
@@ -944,27 +946,27 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const deleteTrailer = (id: string) => {
     const trailer = trailers.find(t => t.id === id);
     if (!trailer) return;
-    
+
     // Check for linked loads
     const linkedLoads = loads.filter(load => load.trailerId === id);
-    
+
     if (linkedLoads.length > 0) {
       const loadList = linkedLoads.map(l => l.loadNumber).slice(0, 5).join(', ');
-      const message = 
+      const message =
         `Trailer ${trailer.trailerNumber} is assigned to ${linkedLoads.length} load(s):\n` +
         `${loadList}${linkedLoads.length > 5 ? '...' : ''}\n\n` +
         'Deleting will unlink this trailer from these loads. Continue?';
-      
+
       if (!window.confirm(message)) {
         return;
       }
-      
+
       // Unlink from loads
-      setLoads(prev => prev.map(load => 
+      setLoads(prev => prev.map(load =>
         load.trailerId === id ? { ...load, trailerId: undefined } : load
       ));
     }
-    
+
     setTrailers(prev => prev.filter(trailer => trailer.id !== id));
     firestoreDeleteTrailer(tenantId || 'default', id).catch(e => console.error('Failed to delete trailer:', e));
   };
@@ -972,27 +974,27 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addInvoice = async (input: Omit<Invoice, 'id'>) => {
     // DUPLICATE PREVENTION: Check if any of the loads already have an invoice
     const loadIdsToInvoice = input.loadIds || (input.loadId ? [input.loadId] : []);
-    
+
     if (loadIdsToInvoice.length > 0) {
       // Check if any load is already invoiced
       const alreadyInvoicedLoadIds: string[] = [];
-      
+
       loadIdsToInvoice.forEach(loadId => {
         // Check if load already has invoiceId
         const load = loads.find(l => l.id === loadId);
         if (load?.invoiceId) {
           alreadyInvoicedLoadIds.push(loadId);
         }
-        
+
         // Check if any existing invoice references this load
-        const existingInvoice = invoices.find(inv => 
+        const existingInvoice = invoices.find(inv =>
           inv.loadIds?.includes(loadId) || inv.loadId === loadId
         );
         if (existingInvoice && !alreadyInvoicedLoadIds.includes(loadId)) {
           alreadyInvoicedLoadIds.push(loadId);
         }
       });
-      
+
       if (alreadyInvoicedLoadIds.length > 0) {
         console.warn('[INVOICE] Duplicate prevention: Loads already have invoices:', alreadyInvoicedLoadIds);
         // Filter out already invoiced loads
@@ -1005,7 +1007,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         input = { ...input, loadIds: filteredLoadIds };
       }
     }
-    
+
     const newInvoice: Invoice = {
       ...input,
       id: Math.random().toString(36).substr(2, 9),
@@ -1014,7 +1016,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     };
     setInvoices(prev => [newInvoice, ...prev]);
     saveInvoice(tenantId || 'default', newInvoice).catch(e => console.error('Failed to save invoice:', e));
-    
+
     // Link invoice to loads (set invoiceId on each load)
     const invoiceLoadIds = newInvoice.loadIds || (newInvoice.loadId ? [newInvoice.loadId] : []);
     if (invoiceLoadIds.length > 0) {
@@ -1047,7 +1049,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateInvoice = (id: string, updates: Partial<Invoice>) => {
     const invoice = invoices.find(inv => inv.id === id);
     const updatedInvoice = invoice ? { ...invoice, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setInvoices(prev => prev.map(inv => inv.id === id ? updatedInvoice! : inv));
     if (updatedInvoice) {
       saveInvoice(tenantId || 'default', updatedInvoice).catch(e => console.error('Failed to save invoice:', e));
@@ -1060,12 +1062,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     // Check if invoice is paid - warn but allow with confirmation
     if (!force && invoice.status === 'paid') {
-      const message = 
+      const message =
         `Invoice ${invoice.invoiceNumber} is marked as PAID.\n\n` +
         'Deleting paid invoices may affect your accounting records.\n' +
         'Consider creating a credit memo instead.\n\n' +
         'Are you sure you want to delete this paid invoice?';
-      
+
       if (!window.confirm(message)) {
         return; // User cancelled
       }
@@ -1104,7 +1106,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateSettlement = (id: string, updates: Partial<Settlement>) => {
     const settlement = settlements.find(s => s.id === id);
     const updatedSettlement = settlement ? { ...settlement, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setSettlements(prev => prev.map(s => s.id === id ? updatedSettlement! : s));
     if (updatedSettlement) {
       saveSettlement(tenantId || 'default', updatedSettlement).catch(e => console.error('Failed to save settlement:', e));
@@ -1120,8 +1122,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       ...(settlement.loadId ? [settlement.loadId] : []),
       ...(settlement.loadIds || [])
     ];
-    
-    const linkedInvoicedLoads = loads.filter(load => 
+
+    const linkedInvoicedLoads = loads.filter(load =>
       linkedLoadIds.includes(load.id) && load.invoiceId
     );
 
@@ -1131,13 +1133,13 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         .map(load => load.invoiceNumber)
         .filter(Boolean)
         .join(', ');
-      
-      const message = 
+
+      const message =
         `Settlement ${settlement.settlementNumber || id} contains loads linked to invoices:\n` +
         `- Invoice Numbers: ${invoiceList}\n\n` +
         'Deleting this settlement will unlink it from these loads.\n' +
         'Are you sure you want to delete this settlement?';
-      
+
       if (!window.confirm(message)) {
         return; // User cancelled
       }
@@ -1169,7 +1171,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateExpense = (id: string, updates: Partial<Expense>) => {
     const expense = expenses.find(e => e.id === id);
     const updatedExpense = expense ? { ...expense, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setExpenses(prev => prev.map(e => e.id === id ? updatedExpense! : e));
     if (updatedExpense) {
       saveExpense(tenantId || 'default', updatedExpense).catch(e => console.error('Failed to save expense:', e));
@@ -1185,7 +1187,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     const aliases = (input as any).aliases || [];
     const searchKey = generateSearchKey(input.name, aliases);
     const prefixes = generatePrefixes(searchKey);
-    
+
     const newCompany: FactoringCompany = {
       ...input,
       id: Math.random().toString(36).substr(2, 9),
@@ -1201,7 +1203,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const updateFactoringCompany = (id: string, updates: Partial<FactoringCompany>) => {
     const company = factoringCompanies.find(c => c.id === id);
     const updatedCompany = company ? { ...company, ...updates, updatedAt: new Date().toISOString() } : null;
-    
+
     setFactoringCompanies(prev => prev.map(c => c.id === id ? updatedCompany! : c));
     if (updatedCompany) {
       saveFactoringCompany(tenantId || 'default', updatedCompany).catch(e => console.error('Failed to save factoring company:', e));
@@ -1211,28 +1213,28 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const deleteFactoringCompany = (id: string) => {
     const company = factoringCompanies.find(c => c.id === id);
     if (!company) return;
-    
+
     // Check for linked loads
     const linkedLoads = loads.filter(load => load.factoringCompanyId === id);
-    
+
     if (linkedLoads.length > 0) {
-      const message = 
+      const message =
         `${company.name} is used in ${linkedLoads.length} load(s).\n\n` +
         'Deleting will unlink this factoring company from these loads.\n' +
         'Continue?';
-      
+
       if (!window.confirm(message)) {
         return;
       }
-      
+
       // Unlink from loads
-      setLoads(prev => prev.map(load => 
-        load.factoringCompanyId === id 
+      setLoads(prev => prev.map(load =>
+        load.factoringCompanyId === id
           ? { ...load, factoringCompanyId: undefined, factoringCompanyName: undefined }
           : load
       ));
     }
-    
+
     setFactoringCompanies(prev => prev.filter(company => company.id !== id));
     firestoreDeleteFactoringCompany(tenantId || 'default', id).catch(e => console.error('Failed to delete factoring company:', e));
   };
@@ -1241,7 +1243,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addBroker = (input: NewBrokerInput) => {
     const searchKey = generateSearchKey(input.name, input.aliases || []);
     const prefixes = generatePrefixes(searchKey);
-    
+
     const newBroker: Broker = {
       ...input,
       id: Math.random().toString(36).substr(2, 9),
@@ -1255,7 +1257,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
   const updateBroker = (id: string, updates: Partial<Broker>) => {
     let updatedBroker: Broker | null = null;
-    
+
     setBrokers(prev => prev.map(broker => {
       if (broker.id === id) {
         const updated = { ...broker, ...updates, updatedAt: new Date().toISOString() };
@@ -1269,7 +1271,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       }
       return broker;
     }));
-    
+
     if (updatedBroker) {
       saveBroker(tenantId || 'default', updatedBroker).catch(e => console.error('Failed to save broker:', e));
     }
@@ -1278,28 +1280,28 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const deleteBroker = (id: string) => {
     const broker = brokers.find(b => b.id === id);
     if (!broker) return;
-    
+
     // Check for linked loads
     const linkedLoads = loads.filter(load => load.brokerId === id);
-    
+
     if (linkedLoads.length > 0) {
-      const message = 
+      const message =
         `${broker.name} is used in ${linkedLoads.length} load(s).\n\n` +
         'Deleting will unlink this broker from these loads.\n' +
         'Continue?';
-      
+
       if (!window.confirm(message)) {
         return;
       }
-      
+
       // Unlink from loads
-      setLoads(prev => prev.map(load => 
-        load.brokerId === id 
+      setLoads(prev => prev.map(load =>
+        load.brokerId === id
           ? { ...load, brokerId: undefined, brokerName: undefined }
           : load
       ));
     }
-    
+
     setBrokers(prev => prev.filter(broker => broker.id !== id));
     firestoreDeleteBroker(tenantId || 'default', id).catch(e => console.error('Failed to delete broker:', e));
   };
@@ -1363,7 +1365,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const filteredLoads = useMemo(() => {
     if (!searchTerm) return loads;
     const lowerTerm = searchTerm.toLowerCase();
-    return loads.filter(load => 
+    return loads.filter(load =>
       load.customerName.toLowerCase().includes(lowerTerm) ||
       load.loadNumber.toLowerCase().includes(lowerTerm) ||
       load.originCity.toLowerCase().includes(lowerTerm) ||
@@ -1372,11 +1374,11 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   }, [loads, searchTerm]);
 
   return (
-    <TMSContext.Provider value={{ 
-      loads: filteredLoads, 
+    <TMSContext.Provider value={{
+      loads: filteredLoads,
       employees,
       drivers, // Computed: filtered employees
-      invoices, 
+      invoices,
       settlements,
       trucks,
       trailers,
@@ -1385,8 +1387,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       brokers,
       dispatchers, // Computed: filtered employees
       tasks,
-      kpis, 
-      addLoad, 
+      kpis,
+      addLoad,
       updateLoad,
       deleteLoad,
       addEmployee,
@@ -1457,44 +1459,44 @@ export const useTMS = () => {
           activeLoads: 0,
           activeDrivers: 0,
         },
-        addLoad: () => {},
-        updateLoad: () => {},
-        deleteLoad: () => {},
-        addEmployee: () => {},
-        updateEmployee: () => {},
-        deleteEmployee: () => {},
-        addDriver: () => {},
-        updateDriver: () => {},
-        deleteDriver: () => {},
+        addLoad: () => { },
+        updateLoad: () => { },
+        deleteLoad: () => { },
+        addEmployee: () => { },
+        updateEmployee: () => { },
+        deleteEmployee: () => { },
+        addDriver: () => { },
+        updateDriver: () => { },
+        deleteDriver: () => { },
         addTruck: () => '',
-        updateTruck: () => {},
-        deleteTruck: () => {},
+        updateTruck: () => { },
+        deleteTruck: () => { },
         addTrailer: () => '',
-        updateTrailer: () => {},
-        deleteTrailer: () => {},
-        addInvoice: () => {},
-        updateInvoice: () => {},
-        deleteInvoice: () => {},
+        updateTrailer: () => { },
+        deleteTrailer: () => { },
+        addInvoice: () => { },
+        updateInvoice: () => { },
+        deleteInvoice: () => { },
         addSettlement: () => '',
-        updateSettlement: () => {},
-        deleteSettlement: () => {},
-        addExpense: () => {},
-        updateExpense: () => {},
-        deleteExpense: () => {},
-        addFactoringCompany: () => {},
-        updateFactoringCompany: () => {},
-        deleteFactoringCompany: () => {},
-        addBroker: () => {},
-        updateBroker: () => {},
-        deleteBroker: () => {},
-        addDispatcher: () => {},
-        updateDispatcher: () => {},
-        deleteDispatcher: () => {},
-        updateTaskStatus: () => {},
-        completeTask: () => {},
-        deleteTaskById: () => {},
+        updateSettlement: () => { },
+        deleteSettlement: () => { },
+        addExpense: () => { },
+        updateExpense: () => { },
+        deleteExpense: () => { },
+        addFactoringCompany: () => { },
+        updateFactoringCompany: () => { },
+        deleteFactoringCompany: () => { },
+        addBroker: () => { },
+        updateBroker: () => { },
+        deleteBroker: () => { },
+        addDispatcher: () => { },
+        updateDispatcher: () => { },
+        deleteDispatcher: () => { },
+        updateTaskStatus: () => { },
+        completeTask: () => { },
+        deleteTaskById: () => { },
         searchTerm: '',
-        setSearchTerm: () => {},
+        setSearchTerm: () => { },
       } as TMSContextType;
     }
     throw new Error('useTMS must be used within a TMSProvider');
