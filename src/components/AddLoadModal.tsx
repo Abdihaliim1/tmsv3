@@ -18,10 +18,10 @@ interface AddLoadModalProps {
 
 const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, editingLoad }) => {
   const { employees, drivers, factoringCompanies, brokers, loads, trucks, trailers, addBroker, addFactoringCompany } = useTMS();
-  
+
   // Get dispatchers from employees
   const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
-  
+
   const initialState: NewLoadInput = {
     status: LoadStatus.Available,
     customerName: '',
@@ -109,12 +109,12 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
   const [rpm, setRpm] = useState<string>('0.00');
   const [isCalculatingMiles, setIsCalculatingMiles] = useState(false);
-  
+
   // Adjustment workflow state (for delivered loads)
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [pendingChanges, setPendingChanges] = useState<Partial<Load> | null>(null);
-  
+
   // Check if load is locked (delivered/completed)
   const isDeliveredLoad = editingLoad ? isLoadLocked(editingLoad) : false;
 
@@ -142,8 +142,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     // After adding, the broker will be in the list, so we can find and select it
     // We'll set the broker name in the form
     setTimeout(() => {
-      const addedBroker = brokers.find(b => b.name === newBroker.name) || 
-                         brokers.find(b => normalize(b.name) === normalize(newBroker.name || ''));
+      const addedBroker = brokers.find(b => b.name === newBroker.name) ||
+        brokers.find(b => normalize(b.name) === normalize(newBroker.name || ''));
       if (addedBroker) {
         handleBrokerSelect(addedBroker);
       } else {
@@ -181,8 +181,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     addFactoringCompany(newCompany);
     // After adding, the company will be in the list, so we can find and select it
     setTimeout(() => {
-      const addedCompany = factoringCompanies.find(c => c.name === newCompany.name) || 
-                          factoringCompanies.find(c => normalize(c.name) === normalize(newCompany.name || ''));
+      const addedCompany = factoringCompanies.find(c => c.name === newCompany.name) ||
+        factoringCompanies.find(c => normalize(c.name) === normalize(newCompany.name || ''));
       if (addedCompany) {
         handleFactoringCompanySelect(addedCompany);
       } else {
@@ -197,7 +197,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
   // Reset form on open or populate for editing
   useEffect(() => {
-    if(isOpen) {
+    if (isOpen) {
       if (editingLoad) {
         // Populate form with existing load data for editing
         const driver = drivers.find(d => d.id === editingLoad.driverId);
@@ -313,15 +313,15 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     if (formData.isFactored) {
       // Auto-select default factoring company if not already selected
       const defaultCompany = factoringCompanies[0]; // Use first/primary factoring company
-      const selectedCompany = formData.factoringCompanyId 
-        ? factoringCompanies.find(fc => fc.id === formData.factoringCompanyId) 
+      const selectedCompany = formData.factoringCompanyId
+        ? factoringCompanies.find(fc => fc.id === formData.factoringCompanyId)
         : defaultCompany;
-      
+
       if (selectedCompany) {
         const feePercentage = selectedCompany.feePercentage || 0;
         const fee = formData.grandTotal > 0 ? formData.grandTotal * (feePercentage / 100) : 0;
         const factoredAmount = formData.grandTotal - fee;
-        
+
         // Auto-set factored date to day after delivery if not set
         let factoredDate = formData.factoredDate;
         if (!factoredDate && formData.deliveryDate) {
@@ -329,9 +329,9 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
           deliveryPlusOne.setDate(deliveryPlusOne.getDate() + 1);
           factoredDate = deliveryPlusOne.toISOString().split('T')[0];
         }
-        
-        setFormData(prev => ({ 
-          ...prev, 
+
+        setFormData(prev => ({
+          ...prev,
           factoringCompanyId: selectedCompany.id,
           factoringCompanyName: selectedCompany.name,
           factoringFeePercent: feePercentage,
@@ -341,16 +341,16 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         }));
       } else if (formData.grandTotal > 0) {
         // No factoring company but has grandTotal - just clear
-        setFormData(prev => ({ 
-          ...prev, 
+        setFormData(prev => ({
+          ...prev,
           factoringFee: 0,
           factoredAmount: 0
         }));
       }
     } else {
       // Not factored - clear all factoring fields
-      setFormData(prev => ({ 
-        ...prev, 
+      setFormData(prev => ({
+        ...prev,
         factoringCompanyId: '',
         factoringCompanyName: '',
         factoringFee: 0,
@@ -403,31 +403,31 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         } else if (driver.payment?.type === 'per_mile') {
           driverBasePay = (formData.miles || 0) * (driver.payment.perMileRate || 0);
         }
-        
+
         // Detention is 100% pass-through to driver
         const driverDetentionPay = formData.detentionAmount || 0;
-        
+
         // Layover is also pass-through to driver
         const driverLayoverPay = formData.layoverAmount || 0;
-        
+
         // Total gross = base + detention + layover
         const driverTotalGross = driverBasePay + driverDetentionPay + driverLayoverPay;
-        
-        setFormData(prev => ({ 
-          ...prev, 
-          driverBasePay, 
-          driverDetentionPay, 
+
+        setFormData(prev => ({
+          ...prev,
+          driverBasePay,
+          driverDetentionPay,
           driverLayoverPay,
-          driverTotalGross 
+          driverTotalGross
         }));
       }
     } else {
-      setFormData(prev => ({ 
-        ...prev, 
-        driverBasePay: 0, 
+      setFormData(prev => ({
+        ...prev,
+        driverBasePay: 0,
         driverDetentionPay: 0,
         driverLayoverPay: 0,
-        driverTotalGross: 0 
+        driverTotalGross: 0
       }));
     }
   }, [formData.driverId, formData.rate, formData.miles, formData.detentionAmount, formData.layoverAmount, drivers]);
@@ -440,7 +440,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   useEffect(() => {
     if (formData.dispatcherCommissionType && formData.dispatcherCommissionRate > 0) {
       let commissionAmount = 0;
-      
+
       if (formData.dispatcherCommissionType === 'percentage') {
         // Percentage: commissionAmount = totalRate * (commissionRate / 100)
         commissionAmount = formData.rate * (formData.dispatcherCommissionRate / 100);
@@ -451,7 +451,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         // Per mile: commissionAmount = totalMiles * commissionRate
         commissionAmount = formData.miles * formData.dispatcherCommissionRate;
       }
-      
+
       setFormData(prev => ({ ...prev, dispatcherCommissionAmount: commissionAmount }));
     } else {
       setFormData(prev => ({ ...prev, dispatcherCommissionAmount: 0 }));
@@ -464,7 +464,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
       const driver2 = drivers.find(d => d.id === formData.driver2Id);
       if (driver2) {
         let driver2Earnings = 0;
-        
+
         if (formData.driver2PayType === 'percentage') {
           // Use the pay rate from form or driver's default
           const payRate = formData.driver2PayRate || driver2.payPercentage || driver2.rateOrSplit || 0;
@@ -475,7 +475,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         } else if (formData.driver2PayType === 'flat_rate') {
           driver2Earnings = formData.driver2PayRate || 0;
         }
-        
+
         setFormData(prev => ({ ...prev, driver2Earnings }));
       }
     } else {
@@ -488,7 +488,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     const driver1Pay = formData.driverTotalGross || 0;
     const driver2Pay = formData.isTeamLoad ? (formData.driver2Earnings || 0) : 0;
     const totalDriverPay = driver1Pay + driver2Pay;
-    
+
     setFormData(prev => ({ ...prev, totalDriverPay }));
   }, [formData.driverTotalGross, formData.isTeamLoad, formData.driver2Earnings]);
 
@@ -496,12 +496,12 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // For delivered loads, check if material fields are being changed (require reason)
     if (editingLoad && isDeliveredLoad) {
       // Build updates object comparing all fields
       const updates: Partial<Load> = {};
-      
+
       // Compare each field with the original load
       if (formData.rate !== editingLoad.rate) updates.rate = formData.rate;
       if (formData.miles !== editingLoad.miles) updates.miles = formData.miles;
@@ -520,10 +520,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
       if (formData.dispatcherId !== editingLoad.dispatcherId) updates.dispatcherId = formData.dispatcherId;
       if (formData.truckId !== editingLoad.truckId) updates.truckId = formData.truckId;
       if (formData.trailerId !== editingLoad.trailerId) updates.trailerId = formData.trailerId;
-      
+
       // Validate - checks if any changes require a reason
       const validation = validatePostDeliveryUpdates(editingLoad, updates);
-      
+
       // If changes require a reason, show the adjustment modal
       if (validation.requiresReason && validation.changedFields.length > 0) {
         setPendingChanges(updates);
@@ -531,19 +531,19 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         return;
       }
     }
-    
+
     // Normal submit (new load or non-material changes to delivered load)
     onSubmit(formData);
     onClose();
   };
-  
+
   // Handle adjustment confirmation
   const handleAdjustmentConfirm = () => {
     if (!adjustmentReason.trim()) {
       alert('Please provide a reason for this adjustment.');
       return;
     }
-    
+
     // Submit with adjustment reason
     // The reason will be passed to the updateLoad function which logs it
     onSubmit({ ...formData, adjustmentReason: adjustmentReason.trim() } as any);
@@ -570,12 +570,12 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   const handleDriverChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const driverId = e.target.value;
     const driver = drivers.find(d => d.id === driverId);
-    
+
     if (driver) {
       // Auto-fill Truck from driver's assigned truck
       const driverTruckId = driver.truckId || driver.currentTruckId || '';
       const driverTruck = driverTruckId ? trucks.find(t => t.id === driverTruckId) : null;
-      
+
       setFormData(prev => ({
         ...prev,
         driverId: driver.id,
@@ -585,9 +585,9 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
       }));
       setSelectedTruckId(driverTruckId);
     } else {
-      setFormData(prev => ({ 
-        ...prev, 
-        driverId: '', 
+      setFormData(prev => ({
+        ...prev,
+        driverId: '',
         driverName: '',
         truckId: undefined,
         truckNumber: undefined
@@ -604,15 +604,15 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     }
 
     setIsCalculatingMiles(true);
-    
+
     try {
       const dist = await calculateDistance(
-        formData.originCity, 
-        formData.originState, 
-        formData.destCity, 
+        formData.originCity,
+        formData.originState,
+        formData.destCity,
         formData.destState
       );
-      
+
       if (dist > 0) {
         setFormData(prev => ({ ...prev, miles: dist }));
         // Show success feedback
@@ -635,15 +635,15 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   };
 
   return (
-    <div 
+    <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity p-4 md:p-0"
       onClick={handleBackdropClick}
     >
-      <div 
+      <div
         className="bg-white rounded-xl md:rounded-xl shadow-xl w-full max-w-2xl mx-4 md:mx-4 overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] md:max-h-[90vh] h-full md:h-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        
+
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900">{editingLoad ? 'Edit Load' : 'Create New Load'}</h2>
@@ -651,7 +651,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
             <X size={20} />
           </button>
         </div>
-        
+
         {/* Delivered Load Info Banner */}
         {isDeliveredLoad && (
           <div className="bg-blue-50 border-b border-blue-200 px-6 py-3 flex items-center gap-3">
@@ -666,14 +666,14 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         {/* Form Scrollable Area */}
         <div className="overflow-y-auto p-6">
           <form id="add-load-form" onSubmit={handleSubmit} className="space-y-6">
-            
+
             {/* Section: Route */}
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <h3 className="text-sm font-medium text-slate-900 flex items-center gap-2">
                   <MapPin size={16} /> Route Details
                 </h3>
-                <button 
+                <button
                   type="button"
                   onClick={handleCalculateMiles}
                   disabled={isCalculatingMiles || !formData.originCity || !formData.originState || !formData.destCity || !formData.destState}
@@ -755,10 +755,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Trailer Number (Auto-filled)</label>
-                  <input 
-                    disabled 
-                    value={formData.trailerNumber || 'N/A'} 
-                    className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed" 
+                  <input
+                    disabled
+                    value={formData.trailerNumber || 'N/A'}
+                    className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 cursor-not-allowed"
                     placeholder="Auto-filled from selection"
                   />
                 </div>
@@ -968,9 +968,9 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                             placeholder="0.00"
                           />
                           <p className="text-xs text-slate-400 mt-0.5">
-                            {formData.fscType === 'percentage' ? '% of base rate' : 
-                             formData.fscType === 'per_mile' ? '$ per mile' : 
-                             formData.fscType === 'flat' ? 'Flat amount' : 'Select type'}
+                            {formData.fscType === 'percentage' ? '% of base rate' :
+                              formData.fscType === 'per_mile' ? '$ per mile' :
+                                formData.fscType === 'flat' ? 'Flat amount' : 'Select type'}
                           </p>
                         </div>
                         <div>
@@ -1056,10 +1056,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
               <h3 className="text-sm font-medium text-slate-900 border-b border-slate-100 pb-2">Assignment & Status</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-600">Booked By (Dispatcher) *</label>
+                  <label className="text-xs font-medium text-slate-600">Booked By (Dispatcher)</label>
                   <select
-                    name="dispatcherId" 
-                    value={formData.dispatcherId || ''} 
+                    name="dispatcherId"
+                    value={formData.dispatcherId || ''}
                     onChange={(e) => {
                       const dispatcher = dispatchers.find(d => d.id === e.target.value);
                       if (dispatcher) {
@@ -1084,10 +1084,9 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                         }));
                       }
                     }}
-                    required
                     className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                   >
-                    <option value="">Select Dispatcher...</option>
+                    <option value="">None (Self-Dispatched)</option>
                     {dispatchers.length === 0 ? (
                       <option value="" disabled>No dispatchers available. Add dispatchers in Settings.</option>
                     ) : (
@@ -1099,10 +1098,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                       ))
                     )}
                   </select>
-                  <p className="text-xs text-slate-500">Required for settlement tracking</p>
+                  <p className="text-xs text-slate-500">Optional - Leave empty if self-dispatched</p>
                 </div>
-                
-                 <div className="space-y-2">
+
+                <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Assign Driver</label>
                   <select name="driverId" value={formData.driverId} onChange={handleDriverChange} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                     <option value="">Select Driver...</option>
@@ -1165,8 +1164,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                       checked={formData.isTeamLoad || false}
                       onChange={(e) => {
                         const isTeam = e.target.checked;
-                        setFormData(prev => ({ 
-                          ...prev, 
+                        setFormData(prev => ({
+                          ...prev,
                           isTeamLoad: isTeam,
                           // Clear Driver 2 fields if unchecking team load
                           ...(isTeam ? {} : {
@@ -1186,7 +1185,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                   </div>
                   <p className="text-xs text-slate-500 pl-7">Enable for long-haul loads requiring two drivers</p>
                 </div>
-                
+
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">
                     Customer Name <span className="text-slate-400 font-normal">(Shipper/Consignee - Optional)</span>
@@ -1194,7 +1193,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                   <input name="customerName" value={formData.customerName || ''} onChange={handleChange} type="text" className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" placeholder="e.g. Midwest Distribution (Optional)" />
                 </div>
 
-                 <div className="space-y-2">
+                <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Status</label>
                   <select name="status" value={formData.status} onChange={handleChange} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                     {Object.values(LoadStatus).map(status => (
@@ -1209,12 +1208,12 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                     <div className="space-y-2 sm:col-span-2">
                       <h4 className="text-xs font-semibold text-slate-700 border-t border-slate-200 pt-3 mt-2">Driver 2 (Team Driver)</h4>
                     </div>
-                    
+
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-slate-600">Driver 2</label>
-                      <select 
-                        name="driver2Id" 
-                        value={formData.driver2Id || ''} 
+                      <select
+                        name="driver2Id"
+                        value={formData.driver2Id || ''}
                         onChange={(e) => {
                           const driver2 = drivers.find(d => d.id === e.target.value);
                           if (driver2) {
@@ -1224,7 +1223,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                               driver2Name: `${driver2.firstName} ${driver2.lastName}`,
                               // Pre-fill pay type from driver's default
                               driver2PayType: driver2.payment?.type || undefined,
-                              driver2PayRate: driver2.payment?.type === 'percentage' 
+                              driver2PayRate: driver2.payment?.type === 'percentage'
                                 ? (driver2.payPercentage || driver2.rateOrSplit || 0)
                                 : driver2.payment?.perMileRate || 0
                             }));
@@ -1249,9 +1248,9 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-slate-600">Driver 2 Pay Type</label>
-                      <select 
-                        name="driver2PayType" 
-                        value={formData.driver2PayType || ''} 
+                      <select
+                        name="driver2PayType"
+                        value={formData.driver2PayType || ''}
                         onChange={handleChange}
                         className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                       >
@@ -1269,23 +1268,23 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                         {formData.driver2PayType === 'per_mile' && ' ($/mile)'}
                         {formData.driver2PayType === 'flat_rate' && ' ($)'}
                       </label>
-                      <input 
-                        name="driver2PayRate" 
-                        value={formData.driver2PayRate || ''} 
-                        onChange={handleChange} 
-                        type="number" 
+                      <input
+                        name="driver2PayRate"
+                        value={formData.driver2PayRate || ''}
+                        onChange={handleChange}
+                        type="number"
                         step="0.01"
-                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                         placeholder="0.00"
                       />
                     </div>
 
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-slate-600">Driver 2 Earnings</label>
-                      <input 
+                      <input
                         disabled
                         value={`$${(formData.driver2Earnings || 0).toFixed(2)}`}
-                        className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 font-medium cursor-not-allowed" 
+                        className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 font-medium cursor-not-allowed"
                       />
                       <p className="text-xs text-slate-400">Auto-calculated based on pay type and rate</p>
                     </div>
@@ -1322,7 +1321,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
             {/* Section: Broker / Factoring */}
             <div className="space-y-4">
               <h3 className="text-sm font-medium text-slate-900 border-b border-slate-100 pb-2">Broker / Factoring</h3>
-              
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Broker</label>
@@ -1334,15 +1333,15 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                     placeholder="Type to search brokers (e.g., TQL, JB Hunt, CHRW)..."
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Broker Reference #</label>
-                  <input 
-                    name="brokerReference" 
-                    value={formData.brokerReference || ''} 
-                    onChange={handleChange} 
-                    type="text" 
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
+                  <input
+                    name="brokerReference"
+                    value={formData.brokerReference || ''}
+                    onChange={handleChange}
+                    type="text"
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                     placeholder="Broker's load number"
                   />
                 </div>
@@ -1383,7 +1382,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                           </div>
                         </div>
                         <p className="text-xs text-blue-600">
-                          {formData.grandTotal > 0 
+                          {formData.grandTotal > 0
                             ? `${formData.grandTotal.toFixed(2)} × ${(formData.factoringFeePercent || factoringCompanies[0]?.feePercentage || 0)}% = $${(formData.factoringFee || 0).toFixed(2)}`
                             : 'Fee will calculate when rate is entered'}
                         </p>
@@ -1402,143 +1401,143 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
             {/* Section: Dispatcher Commission */}
             {formData.dispatcherId && (
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-slate-900 border-b border-slate-100 pb-2">Dispatcher Commission</h3>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-600">External Dispatch Service?</label>
-                  <div className="flex items-center gap-3 pt-2">
-                    <input
-                      type="checkbox"
-                      id="isExternalDispatch"
-                      checked={formData.isExternalDispatch || false}
-                      onChange={(e) => setFormData(prev => ({ ...prev, isExternalDispatch: e.target.checked }))}
-                      className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                    />
-                    <label htmlFor="isExternalDispatch" className="text-sm text-slate-700">
-                      Using outside dispatch company
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium text-slate-900 border-b border-slate-100 pb-2">Dispatcher Commission</h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-600">External Dispatch Service?</label>
+                    <div className="flex items-center gap-3 pt-2">
+                      <input
+                        type="checkbox"
+                        id="isExternalDispatch"
+                        checked={formData.isExternalDispatch || false}
+                        onChange={(e) => setFormData(prev => ({ ...prev, isExternalDispatch: e.target.checked }))}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                      />
+                      <label htmlFor="isExternalDispatch" className="text-sm text-slate-700">
+                        Using outside dispatch company
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-600">Commission Type</label>
+                    <select
+                      name="dispatcherCommissionType"
+                      value={formData.dispatcherCommissionType || ''}
+                      onChange={handleChange}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    >
+                      <option value="">Select Type...</option>
+                      <option value="percentage">Percentage (%)</option>
+                      <option value="flat_fee">Flat Fee ($)</option>
+                      <option value="per_mile">Per Mile ($)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-600">
+                      Commission Rate
+                      {formData.dispatcherCommissionType === 'percentage' && ' (%)'}
+                      {formData.dispatcherCommissionType === 'flat_fee' && ' ($)'}
+                      {formData.dispatcherCommissionType === 'per_mile' && ' ($/mile)'}
                     </label>
+                    <input
+                      name="dispatcherCommissionRate"
+                      value={formData.dispatcherCommissionRate || ''}
+                      onChange={handleChange}
+                      type="number"
+                      step="0.01"
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                      placeholder="0.00"
+                    />
+                  </div>
+
+                  <div className="space-y-2 sm:col-span-2">
+                    <label className="text-xs font-medium text-slate-600">Commission Amount ($)</label>
+                    <input
+                      disabled
+                      value={`$${(formData.dispatcherCommissionAmount || 0).toFixed(2)}`}
+                      className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 font-medium cursor-not-allowed"
+                    />
+                    <p className="text-xs text-slate-500">
+                      {formData.dispatcherCommissionType === 'percentage' && 'Auto-calculated: Rate × Percentage'}
+                      {formData.dispatcherCommissionType === 'flat_fee' && 'Auto-calculated: Flat Fee Amount'}
+                      {formData.dispatcherCommissionType === 'per_mile' && 'Auto-calculated: Miles × Per Mile Rate'}
+                      {!formData.dispatcherCommissionType && 'Select commission type to calculate'}
+                    </p>
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-600">Commission Type</label>
-                  <select 
-                    name="dispatcherCommissionType" 
-                    value={formData.dispatcherCommissionType || ''} 
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  >
-                    <option value="">Select Type...</option>
-                    <option value="percentage">Percentage (%)</option>
-                    <option value="flat_fee">Flat Fee ($)</option>
-                    <option value="per_mile">Per Mile ($)</option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-600">
-                    Commission Rate
-                    {formData.dispatcherCommissionType === 'percentage' && ' (%)'}
-                    {formData.dispatcherCommissionType === 'flat_fee' && ' ($)'}
-                    {formData.dispatcherCommissionType === 'per_mile' && ' ($/mile)'}
-                  </label>
-                  <input 
-                    name="dispatcherCommissionRate" 
-                    value={formData.dispatcherCommissionRate || ''} 
-                    onChange={handleChange} 
-                    type="number" 
-                    step="0.01"
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
-                    placeholder="0.00"
-                  />
-                </div>
-
-                <div className="space-y-2 sm:col-span-2">
-                  <label className="text-xs font-medium text-slate-600">Commission Amount ($)</label>
-                  <input 
-                    disabled 
-                    value={`$${(formData.dispatcherCommissionAmount || 0).toFixed(2)}`}
-                    className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-500 font-medium cursor-not-allowed" 
-                  />
-                  <p className="text-xs text-slate-500">
-                    {formData.dispatcherCommissionType === 'percentage' && 'Auto-calculated: Rate × Percentage'}
-                    {formData.dispatcherCommissionType === 'flat_fee' && 'Auto-calculated: Flat Fee Amount'}
-                    {formData.dispatcherCommissionType === 'per_mile' && 'Auto-calculated: Miles × Per Mile Rate'}
-                    {!formData.dispatcherCommissionType && 'Select commission type to calculate'}
-                  </p>
-                </div>
               </div>
-            </div>
             )}
 
             {/* Section: Documents (only show when editing existing load) */}
             {editingLoad && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <h3 className="text-sm font-medium text-slate-900 flex items-center gap-2">
-                  <FileText size={16} /> Documents
-                </h3>
-              </div>
-              
               <div className="space-y-4">
-                {/* POD Upload */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-2">
-                    Proof of Delivery (POD) {editingLoad.status === LoadStatus.Delivered || editingLoad.status === LoadStatus.Completed ? <span className="text-red-600">* Required</span> : ''}
-                  </label>
-                  <DocumentUpload
-                    entityType="load"
-                    entityId={editingLoad.id}
-                    documentType="POD"
-                    existingDocuments={editingLoad.documents || []}
-                    onUploadComplete={() => {
-                      // Refresh load data
-                      window.location.reload();
-                    }}
-                    maxFileSize={10}
-                    acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
-                  />
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <h3 className="text-sm font-medium text-slate-900 flex items-center gap-2">
+                    <FileText size={16} /> Documents
+                  </h3>
                 </div>
 
-                {/* BOL Upload */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-2">
-                    Bill of Lading (BOL)
-                  </label>
-                  <DocumentUpload
-                    entityType="load"
-                    entityId={editingLoad.id}
-                    documentType="BOL"
-                    existingDocuments={editingLoad.documents || []}
-                    onUploadComplete={() => {
-                      window.location.reload();
-                    }}
-                    maxFileSize={10}
-                    acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
-                  />
-                </div>
+                <div className="space-y-4">
+                  {/* POD Upload */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-2">
+                      Proof of Delivery (POD) {editingLoad.status === LoadStatus.Delivered || editingLoad.status === LoadStatus.Completed ? <span className="text-red-600">* Required</span> : ''}
+                    </label>
+                    <DocumentUpload
+                      entityType="load"
+                      entityId={editingLoad.id}
+                      documentType="POD"
+                      existingDocuments={editingLoad.documents || []}
+                      onUploadComplete={() => {
+                        // Refresh load data
+                        window.location.reload();
+                      }}
+                      maxFileSize={10}
+                      acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                    />
+                  </div>
 
-                {/* Rate Confirmation Upload */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-2">
-                    Rate Confirmation
-                  </label>
-                  <DocumentUpload
-                    entityType="load"
-                    entityId={editingLoad.id}
-                    documentType="RATE_CON"
-                    existingDocuments={editingLoad.documents || []}
-                    onUploadComplete={() => {
-                      window.location.reload();
-                    }}
-                    maxFileSize={10}
-                    acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
-                  />
+                  {/* BOL Upload */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-2">
+                      Bill of Lading (BOL)
+                    </label>
+                    <DocumentUpload
+                      entityType="load"
+                      entityId={editingLoad.id}
+                      documentType="BOL"
+                      existingDocuments={editingLoad.documents || []}
+                      onUploadComplete={() => {
+                        window.location.reload();
+                      }}
+                      maxFileSize={10}
+                      acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                    />
+                  </div>
+
+                  {/* Rate Confirmation Upload */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-2">
+                      Rate Confirmation
+                    </label>
+                    <DocumentUpload
+                      entityType="load"
+                      entityId={editingLoad.id}
+                      documentType="RATE_CON"
+                      existingDocuments={editingLoad.documents || []}
+                      onUploadComplete={() => {
+                        window.location.reload();
+                      }}
+                      maxFileSize={10}
+                      acceptedFileTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
             )}
 
           </form>
@@ -1554,10 +1553,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
           </button>
         </div>
       </div>
-      
+
       {/* Adjustment Reason Modal */}
       {showAdjustmentModal && (
-        <div 
+        <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
           onClick={(e) => e.stopPropagation()}
         >
@@ -1573,7 +1572,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                 </div>
               </div>
             </div>
-            
+
             <div className="p-6 space-y-4">
               <div className="bg-slate-50 rounded-lg p-4">
                 <p className="text-sm text-slate-700 mb-2 font-medium">You're changing:</p>
@@ -1586,7 +1585,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                   ))}
                 </ul>
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   Why are you making this change? <span className="text-red-500">*</span>
@@ -1604,7 +1603,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                 </p>
               </div>
             </div>
-            
+
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
               <button
                 type="button"
