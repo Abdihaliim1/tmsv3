@@ -1,9 +1,10 @@
 name: Deploy to Google Cloud
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+  # Disabled auto-deployment until GCP secrets are configured
+  # push:
+  #   branches: [ main ]
+  workflow_dispatch:  # Manual deployment only
 
 jobs:
   deploy:
