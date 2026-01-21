@@ -17,7 +17,7 @@ import {
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { useTenant } from '../context/TenantContext';
-import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactoringCompanyInput } from '../types';
+import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactoringCompanyInput, Payment } from '../types';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
@@ -316,12 +316,21 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
 
     addInvoice(newInvoice);
 
-    // Mark loads as invoiced and factored if applicable
+    // Mark loads as invoiced, locked, and factored if applicable
+    // TruckingOffice: Once a load has been invoiced, you can no longer edit that dispatch
+    const invoicedAt = new Date().toISOString();
     selectedLoadIds.forEach(loadId => {
-      const updateData: Partial<Load> = { invoiceId: 'pending' };
+      const updateData: Partial<Load> = {
+        invoiceId: 'pending',
+        invoiceNumber: finalInvoiceNumber,
+        invoicedAt: invoicedAt,
+        isLocked: true,  // Lock the load to prevent edits (TruckingOffice style)
+        lockedAt: invoicedAt
+      };
       if (isFactored && selectedFactoringCompany) {
         updateData.isFactored = true;
         updateData.factoringCompanyId = selectedFactoringCompany.id;
+        updateData.factoringCompanyName = selectedFactoringCompany.name;
         updateData.factoringFeePercent = factoringFeePercent;
         updateData.factoringFee = (selectedLoads.find(l => l.id === loadId)?.grandTotal || 0) * (factoringFeePercent / 100);
         updateData.factoredDate = new Date().toISOString().split('T')[0];
@@ -480,6 +489,29 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
               </>
             )}
           </div>
+          {/* Remit-To Address Display (TruckingOffice style) */}
+          {isFactored && selectedFactoringCompany && (
+            <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex items-start gap-3">
+                <Building2 size={20} className="text-amber-600 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-amber-900 text-sm uppercase">Remit Payment To:</p>
+                  <p className="font-medium text-slate-900 mt-1">{selectedFactoringCompany.name}</p>
+                  {selectedFactoringCompany.address && (
+                    <p className="text-sm text-slate-600">{selectedFactoringCompany.address}</p>
+                  )}
+                  {(selectedFactoringCompany.city || selectedFactoringCompany.state || selectedFactoringCompany.zipCode) && (
+                    <p className="text-sm text-slate-600">
+                      {[selectedFactoringCompany.city, selectedFactoringCompany.state, selectedFactoringCompany.zipCode].filter(Boolean).join(', ')}
+                    </p>
+                  )}
+                  {selectedFactoringCompany.phone && (
+                    <p className="text-sm text-slate-500 mt-1">Phone: {selectedFactoringCompany.phone}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {isFactored && totalAmount > 0 && (
             <div className="mt-4 p-4 bg-blue-50 rounded-lg">
               <div className="grid grid-cols-3 gap-4 text-sm">
@@ -630,6 +662,167 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
 };
 
 // ============================================================================
+// Payment Modal - TruckingOffice Style
+// ============================================================================
+
+interface PaymentModalProps {
+  invoice: Invoice;
+  onClose: () => void;
+  onSave: (paymentData: {
+    amount: number;
+    method: string;
+    reference: string;
+    date: string;
+  }) => void;
+}
+
+const PaymentModal: React.FC<PaymentModalProps> = ({ invoice, onClose, onSave }) => {
+  const totalPaid = (invoice.payments || []).reduce((sum, p) => sum + p.amount, 0) + (invoice.paidAmount || 0);
+  const balanceDue = invoice.amount - totalPaid;
+
+  const [amount, setAmount] = useState(balanceDue.toFixed(2));
+  const [method, setMethod] = useState<string>('ACH');
+  const [reference, setReference] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+
+  const handleSubmit = () => {
+    const paymentAmount = parseFloat(amount);
+    if (isNaN(paymentAmount) || paymentAmount <= 0) {
+      alert('Please enter a valid payment amount');
+      return;
+    }
+    if (paymentAmount > balanceDue) {
+      if (!confirm(`Payment amount ($${paymentAmount.toFixed(2)}) exceeds balance due ($${balanceDue.toFixed(2)}). Continue?`)) {
+        return;
+      }
+    }
+    onSave({ amount: paymentAmount, method, reference, date });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Record Payment</h3>
+            <p className="text-sm text-slate-600">Invoice #{invoice.invoiceNumber}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Summary */}
+        <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-xs text-slate-500 uppercase">Invoice Total</p>
+              <p className="text-lg font-semibold text-slate-900">{formatCurrency(invoice.amount)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 uppercase">Already Paid</p>
+              <p className="text-lg font-semibold text-emerald-600">{formatCurrency(totalPaid)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 uppercase">Balance Due</p>
+              <p className="text-lg font-semibold text-red-600">{formatCurrency(balanceDue)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment History */}
+        {invoice.payments && invoice.payments.length > 0 && (
+          <div className="px-6 py-3 border-b border-slate-200 max-h-32 overflow-y-auto">
+            <p className="text-xs font-medium text-slate-500 uppercase mb-2">Payment History</p>
+            {invoice.payments.map((payment, idx) => (
+              <div key={payment.id || idx} className="flex justify-between text-sm py-1">
+                <span className="text-slate-600">
+                  {formatDate(payment.date)} - {payment.method}
+                  {payment.reference && <span className="text-slate-400"> ({payment.reference})</span>}
+                </span>
+                <span className="font-medium text-emerald-600">{formatCurrency(payment.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Form */}
+        <div className="px-6 py-4 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Payment Amount *</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
+              <input
+                type="number"
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full pl-8 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Payment Method *</label>
+            <select
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="ACH">ACH Transfer</option>
+              <option value="Check">Check</option>
+              <option value="Wire">Wire Transfer</option>
+              <option value="Credit">Credit Card</option>
+              <option value="Factoring">Factoring Payment</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Payment Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Reference # (optional)</label>
+            <input
+              type="text"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              placeholder="Check #, Transaction ID, etc."
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2"
+          >
+            <Check size={18} />
+            Record Payment
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
 // Invoice List View
 // ============================================================================
 
@@ -638,13 +831,14 @@ interface InvoiceListProps {
 }
 
 const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
-  const { invoices, loads, deleteInvoice, updateInvoice, updateLoad } = useTMS();
+  const { invoices, loads, factoringCompanies, deleteInvoice, updateInvoice, updateLoad } = useTMS();
   const { companyProfile } = useCompany();
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [paymentModalInvoice, setPaymentModalInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 10;
 
   useEffect(() => {
@@ -699,26 +893,48 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
     );
   };
 
-  const handleMarkAsPaid = async (invoice: Invoice) => {
-    const paidAmount = prompt('Enter paid amount:', invoice.amount.toString());
-    if (!paidAmount) return;
+  const handleMarkAsPaid = (invoice: Invoice) => {
+    setPaymentModalInvoice(invoice);
+    setOpenMenuId(null);
+  };
 
-    const paymentMethod = prompt('Payment method (ACH, Check, Wire, etc.):', 'ACH');
-    if (!paymentMethod) return;
+  const handlePaymentSave = async (paymentData: { amount: number; method: string; reference: string; date: string }) => {
+    if (!paymentModalInvoice) return;
 
-    const paymentReference = prompt('Payment reference (optional):', '');
+    const invoice = paymentModalInvoice;
+    const paidAt = new Date(paymentData.date).toISOString();
 
-    const paidAt = new Date().toISOString();
+    // Calculate total paid including this payment
+    const existingPayments = invoice.payments || [];
+    const existingPaidAmount = existingPayments.reduce((sum, p) => sum + p.amount, 0) + (invoice.paidAmount || 0);
+    const newTotalPaid = existingPaidAmount + paymentData.amount;
+
+    // Create new payment record
+    const newPayment = {
+      id: `pay_${Date.now()}`,
+      invoiceId: invoice.id,
+      amount: paymentData.amount,
+      date: paymentData.date,
+      method: paymentData.method as 'ACH' | 'Check' | 'Wire' | 'Credit' | 'Factoring' | 'Other',
+      reference: paymentData.reference || undefined,
+      createdAt: new Date().toISOString()
+    };
+
+    // Determine new status: paid if fully paid, partial if partially paid
+    const isPaidInFull = newTotalPaid >= invoice.amount * 0.99; // 99% threshold for rounding
+    const newStatus: InvoiceStatus = isPaidInFull ? 'paid' : 'partial';
+
     updateInvoice(invoice.id, {
-      status: 'paid',
-      paidAt,
-      paidAmount: parseFloat(paidAmount),
-      paymentMethod,
-      paymentReference: paymentReference || undefined
+      status: newStatus,
+      paidAt: isPaidInFull ? paidAt : undefined,
+      paidAmount: newTotalPaid,
+      paymentMethod: paymentData.method,
+      paymentReference: paymentData.reference || undefined,
+      payments: [...existingPayments, newPayment]
     });
 
-    // Update associated loads
-    if (invoice.loadIds) {
+    // Update associated loads if fully paid
+    if (isPaidInFull && invoice.loadIds) {
       for (const loadId of invoice.loadIds) {
         const load = loads.find(l => l.id === loadId);
         if (load) {
@@ -726,7 +942,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
             await updateLoad(loadId, {
               paymentReceived: true,
               paymentReceivedDate: paidAt,
-              paymentAmount: parseFloat(paidAmount)
+              paymentAmount: newTotalPaid
             });
           } catch (error) {
             console.error('Error updating load payment status:', error);
@@ -734,14 +950,19 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
         }
       }
     }
-    setOpenMenuId(null);
+
+    setPaymentModalInvoice(null);
   };
 
   const handlePrintInvoice = async (invoice: Invoice) => {
     const invoiceLoads = loads.filter(l =>
       invoice.loadIds?.includes(l.id) || l.id === invoice.loadId
     );
-    await generateInvoicePDF(invoice, invoiceLoads, companyProfile || undefined);
+    // Get factoring company if invoice is factored (TruckingOffice style - Remit-To)
+    const factoringCompany = invoice.isFactored && invoice.factoringCompanyId
+      ? factoringCompanies.find(fc => fc.id === invoice.factoringCompanyId)
+      : undefined;
+    await generateInvoicePDF(invoice, invoiceLoads, companyProfile || undefined, factoringCompany);
     setOpenMenuId(null);
   };
 
@@ -953,6 +1174,15 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
           </div>
         )}
       </div>
+
+      {/* Payment Modal */}
+      {paymentModalInvoice && (
+        <PaymentModal
+          invoice={paymentModalInvoice}
+          onClose={() => setPaymentModalInvoice(null)}
+          onSave={handlePaymentSave}
+        />
+      )}
     </div>
   );
 };

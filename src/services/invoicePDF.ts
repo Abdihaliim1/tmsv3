@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import { Invoice, Load, CompanyProfile } from '../types';
+import { Invoice, Load, CompanyProfile, FactoringCompany } from '../types';
 
 /** =========================
  *  Helpers
@@ -75,12 +75,14 @@ const getBrokerName = (invoice: Invoice, loads: Load[]): string => {
 };
 
 /**
- * Generate Invoice PDF
+ * Generate Invoice PDF - TruckingOffice Style
+ * Includes Remit-To address for factored invoices
  */
 export function generateInvoicePDF(
   invoice: Invoice,
   loads: Load[],
-  companyProfile: CompanyProfile
+  companyProfile: CompanyProfile,
+  factoringCompany?: FactoringCompany
 ): void {
   const doc = new jsPDF('p', 'mm', 'letter');
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -194,18 +196,50 @@ export function generateInvoicePDF(
   
   // Bill To (Broker)
   let y2 = y - (company.address ? 17 : 13);
-  
+
   doc.setTextColor(...COLORS.gray);
   doc.setFont(FONT, 'bold');
   doc.setFontSize(8);
   doc.text('BILL TO:', col2X, y2);
-  
+
   doc.setTextColor(...COLORS.text);
   doc.setFont(FONT, 'bold');
   doc.setFontSize(FONT_SIZES.body);
   y2 += 5;
   doc.text(brokerName, col2X, y2);
-  
+
+  // Remit-To Section (TruckingOffice style - for factored invoices)
+  if (invoice.isFactored && factoringCompany) {
+    y2 += 8;
+    doc.setFillColor(255, 251, 235); // Amber-50 equivalent
+    doc.roundedRect(col2X - 5, y2 - 3, 85, 22, 2, 2, 'F');
+    doc.setDrawColor(251, 191, 36); // Amber border
+    doc.setLineWidth(0.3);
+    doc.roundedRect(col2X - 5, y2 - 3, 85, 22, 2, 2, 'S');
+
+    doc.setTextColor(180, 83, 9); // Amber-700
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(7);
+    doc.text('REMIT PAYMENT TO:', col2X, y2 + 2);
+
+    doc.setTextColor(...COLORS.text);
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(8);
+    doc.text(factoringCompany.name, col2X, y2 + 7);
+
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(7);
+    let remitY = y2 + 11;
+    if (factoringCompany.address) {
+      doc.text(factoringCompany.address, col2X, remitY);
+      remitY += 3.5;
+    }
+    if (factoringCompany.city || factoringCompany.state || factoringCompany.zipCode) {
+      doc.text(`${factoringCompany.city || ''}, ${factoringCompany.state || ''} ${factoringCompany.zipCode || ''}`, col2X, remitY);
+    }
+    y2 += 25;
+  }
+
   // Invoice Details Box (right side)
   y2 += 10;
   doc.setFillColor(...COLORS.headerBg);
