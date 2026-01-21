@@ -362,7 +362,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
   // Computed: Drivers (filtered employees)
   const drivers = useMemo(() => {
-    return employees.filter(e => e.employeeType === 'driver' || e.employeeType === 'owner') as Driver[];
+    return employees.filter(e => e.employeeType === 'driver' || e.employeeType === 'owner_operator') as Driver[];
   }, [employees]);
 
   // Computed: Dispatchers (filtered employees)
