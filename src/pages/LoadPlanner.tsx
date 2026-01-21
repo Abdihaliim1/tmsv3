@@ -1313,14 +1313,27 @@ interface ViewPlannedLoadProps {
   onBack: () => void;
   onAddTrip: () => void;
   onBrokerTrip: () => void;
+  onDispatch: (driverId: string) => void;
 }
 
-const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack, onAddTrip, onBrokerTrip }) => {
+const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack, onAddTrip, onBrokerTrip, onDispatch }) => {
+  const { drivers, trucks } = useTMS();
+  const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [selectedTruckId, setSelectedTruckId] = useState('');
+
   const totalAccessoryFees =
     (load.fees?.accessoryFees?.detention || 0) +
     (load.fees?.accessoryFees?.lumper || 0) +
     (load.fees?.accessoryFees?.stopOff || 0) +
     (load.fees?.accessoryFees?.tarpFee || 0);
+
+  const handleDispatchClick = () => {
+    if (!selectedDriverId) {
+      alert('Please select a driver');
+      return;
+    }
+    onDispatch(selectedDriverId);
+  };
 
   return (
     <div className="space-y-6">
@@ -1375,12 +1388,40 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack,
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Driver *</label>
-                <select className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                <select
+                  value={selectedDriverId}
+                  onChange={(e) => setSelectedDriverId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
                   <option value="">Select Driver</option>
+                  {drivers.map((driver) => (
+                    <option key={driver.id} value={driver.id}>
+                      {driver.firstName} {driver.lastName} {driver.type === 'OwnerOperator' ? '(O/O)' : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
-              <button className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-                Dispatch this load to a trip
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Truck (Optional)</label>
+                <select
+                  value={selectedTruckId}
+                  onChange={(e) => setSelectedTruckId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select Truck</option>
+                  {trucks.map((truck) => (
+                    <option key={truck.id} value={truck.id}>
+                      {truck.truckNumber} - {truck.make} {truck.model}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handleDispatchClick}
+                disabled={!selectedDriverId || load.status !== 'planned'}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:bg-slate-300 disabled:cursor-not-allowed"
+              >
+                {load.status === 'planned' ? 'Dispatch this load to a trip' : `Already ${load.status.replace('_', ' ')}`}
               </button>
             </div>
           </div>
@@ -1592,7 +1633,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     addPlannedLoad(copiedLoadInput);
   }, [addPlannedLoad]);
 
-  // Handle dispatching planned load to trip
+  // Handle dispatching planned load to trip (from addTrip view)
   const handleDispatchToTrip = useCallback(async () => {
     if (!selectedLoad) return;
 
@@ -1636,6 +1677,47 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     }
   }, [selectedLoad, selectedDriverId, selectedTruckId, drivers, trucks, dispatchPlannedLoadsToTrip]);
 
+  // Handle dispatching from ViewPlannedLoad component (accepts driverId from its internal state)
+  const handleDispatchFromView = useCallback(async (driverId: string) => {
+    if (!selectedLoad) return;
+
+    const driver = drivers.find(d => d.id === driverId);
+
+    if (!driver) {
+      alert('Driver not found');
+      return;
+    }
+
+    try {
+      await dispatchPlannedLoadsToTrip(
+        [selectedLoad.id],
+        {
+          type: driver.type === 'OwnerOperator' ? 'owner_operator' : 'company',
+          driverId: driver.id,
+          driverName: `${driver.firstName} ${driver.lastName}`,
+          truckId: driver.truckId,
+          truckNumber: trucks.find(t => t.id === driver.truckId)?.truckNumber,
+          plannedLoadIds: [selectedLoad.id],
+          pickupDate: selectedLoad.pickups[0]?.pickupDate || '',
+          deliveryDate: selectedLoad.deliveries[0]?.deliveryDate || '',
+          fromCity: selectedLoad.pickups[0]?.shipper?.city || '',
+          fromState: selectedLoad.pickups[0]?.shipper?.state || '',
+          toCity: selectedLoad.deliveries[0]?.consignee?.city || '',
+          toState: selectedLoad.deliveries[0]?.consignee?.state || '',
+          totalMiles: 0, // Can be calculated later
+          revenue: selectedLoad.fees?.primaryFee || 0,
+          status: 'today',
+        }
+      );
+      setViewMode('list');
+      setSelectedLoad(null);
+      alert('Load dispatched to trip successfully! A new Trip and Load entry have been created.');
+    } catch (error) {
+      console.error('Error dispatching load:', error);
+      alert('Failed to dispatch load. Please try again.');
+    }
+  }, [selectedLoad, drivers, trucks, dispatchPlannedLoadsToTrip]);
+
   // Render based on view mode
   if (viewMode === 'add') {
     return (
@@ -1673,6 +1755,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
         onBack={() => { setViewMode('list'); setSelectedLoad(null); }}
         onAddTrip={() => navigateToTripsWithLoad([selectedLoad.id])}
         onBrokerTrip={() => alert('Broker Trip functionality coming soon')}
+        onDispatch={handleDispatchFromView}
       />
     );
   }
