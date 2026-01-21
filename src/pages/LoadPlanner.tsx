@@ -1573,9 +1573,17 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
 
+  // TruckingOffice: Load Planner is a STAGING area - only show 'planned' status loads
+  // Dispatched loads move to Trips/Loads pages
   const filteredLoads = useMemo(() => {
     return plannedLoads.filter(load => {
+      // Only show loads in 'planned' status (Step 1 of the workflow)
+      if (load.status !== 'planned') return false;
+
+      // Apply search filter
       const searchLower = searchTerm.toLowerCase();
+      if (!searchTerm) return true;
+
       return (
         load.customLoadNumber?.toLowerCase().includes(searchLower) ||
         load.systemLoadNumber.toLowerCase().includes(searchLower) ||

@@ -823,6 +823,43 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         }
       }
 
+      // AUTO-SYNC: Update associated PlannedLoad status when Load status changes (TruckingOffice workflow)
+      if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+        // Find PlannedLoad linked to this Load (via tripId or loadNumber match)
+        const linkedPlannedLoad = plannedLoads.find(pl =>
+          pl.tripId === updatedLoad.tripId ||
+          pl.customLoadNumber === updatedLoad.loadNumber ||
+          pl.systemLoadNumber === updatedLoad.loadNumber
+        );
+
+        if (linkedPlannedLoad) {
+          // Map LoadStatus to PlannedLoadStatus and currentStep
+          const statusToPlannedStatus: Record<string, { status: PlannedLoadStatus; step: number }> = {
+            [LoadStatus.Available]: { status: 'planned', step: 1 },
+            [LoadStatus.Dispatched]: { status: 'dispatched', step: 2 },
+            [LoadStatus.InTransit]: { status: 'in_transit', step: 3 },
+            [LoadStatus.Delivered]: { status: 'delivered', step: 4 },
+            [LoadStatus.DeliveredWithBOL]: { status: 'delivered_with_bol', step: 5 },
+            [LoadStatus.Invoiced]: { status: 'invoiced', step: 6 },
+            [LoadStatus.Paid]: { status: 'paid', step: 7 },
+            [LoadStatus.Completed]: { status: 'delivered', step: 4 }, // Legacy mapping
+          };
+
+          const mapping = statusToPlannedStatus[sanitizedUpdates.status];
+          if (mapping) {
+            updatePlannedLoad(linkedPlannedLoad.id, {
+              status: mapping.status,
+              currentStep: mapping.step,
+            });
+            logger.debug('[TMSContext] PlannedLoad synced with Load status', {
+              plannedLoadId: linkedPlannedLoad.id,
+              newStatus: mapping.status,
+              newStep: mapping.step,
+            });
+          }
+        }
+      }
+
       logger.info('[TMSContext] Load updated successfully', {
         tenantId,
         loadId: id,
@@ -1340,15 +1377,40 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     setInvoices(prev => [newInvoice, ...prev]);
     saveInvoice(tenantId || 'default', newInvoice).catch(e => console.error('Failed to save invoice:', e));
 
-    // Link invoice to loads (set invoiceId on each load)
+    // Link invoice to loads and update Load status to 'invoiced' (TruckingOffice Step 6)
     const invoiceLoadIds = newInvoice.loadIds || (newInvoice.loadId ? [newInvoice.loadId] : []);
     if (invoiceLoadIds.length > 0) {
+      const invoicedAt = new Date().toISOString();
       setLoads(prev => prev.map(load => {
         if (invoiceLoadIds.includes(load.id)) {
-          return { ...load, invoiceId: newInvoice.id };
+          return {
+            ...load,
+            invoiceId: newInvoice.id,
+            invoiceNumber: newInvoice.invoiceNumber,
+            invoicedAt: invoicedAt,
+            status: LoadStatus.Invoiced, // TruckingOffice Step 6
+          };
         }
         return load;
       }));
+
+      // Also update associated PlannedLoads to 'invoiced' status (TruckingOffice workflow sync)
+      invoiceLoadIds.forEach(loadId => {
+        const load = loads.find(l => l.id === loadId);
+        if (load) {
+          const linkedPlannedLoad = plannedLoads.find(pl =>
+            pl.tripId === load.tripId ||
+            pl.customLoadNumber === load.loadNumber ||
+            pl.systemLoadNumber === load.loadNumber
+          );
+          if (linkedPlannedLoad) {
+            updatePlannedLoad(linkedPlannedLoad.id, {
+              status: 'invoiced',
+              currentStep: 6,
+            });
+          }
+        }
+      });
     }
 
     // Trigger workflow for invoice created
@@ -1371,11 +1433,45 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
   const updateInvoice = (id: string, updates: Partial<Invoice>) => {
     const invoice = invoices.find(inv => inv.id === id);
-    const updatedInvoice = invoice ? { ...invoice, ...updates, updatedAt: new Date().toISOString() } : null;
+    if (!invoice) return;
 
-    setInvoices(prev => prev.map(inv => inv.id === id ? updatedInvoice! : inv));
-    if (updatedInvoice) {
-      saveInvoice(tenantId || 'default', updatedInvoice).catch(e => console.error('Failed to save invoice:', e));
+    const updatedInvoice = { ...invoice, ...updates, updatedAt: new Date().toISOString() };
+
+    setInvoices(prev => prev.map(inv => inv.id === id ? updatedInvoice : inv));
+    saveInvoice(tenantId || 'default', updatedInvoice).catch(e => console.error('Failed to save invoice:', e));
+
+    // TruckingOffice Step 7: When invoice marked as paid, update Load and PlannedLoad status
+    if (updates.status === 'paid' && invoice.status !== 'paid') {
+      const paidAt = new Date().toISOString();
+      const invoiceLoadIds = invoice.loadIds || (invoice.loadId ? [invoice.loadId] : []);
+
+      // Update Loads to 'paid' status
+      if (invoiceLoadIds.length > 0) {
+        setLoads(prev => prev.map(load => {
+          if (invoiceLoadIds.includes(load.id)) {
+            return { ...load, status: LoadStatus.Paid, paymentReceived: true, paymentReceivedDate: paidAt };
+          }
+          return load;
+        }));
+
+        // Also update PlannedLoads to 'paid' status (TruckingOffice Step 7)
+        invoiceLoadIds.forEach(loadId => {
+          const load = loads.find(l => l.id === loadId);
+          if (load) {
+            const linkedPlannedLoad = plannedLoads.find(pl =>
+              pl.tripId === load.tripId ||
+              pl.customLoadNumber === load.loadNumber ||
+              pl.systemLoadNumber === load.loadNumber
+            );
+            if (linkedPlannedLoad) {
+              updatePlannedLoad(linkedPlannedLoad.id, {
+                status: 'paid',
+                currentStep: 7,
+              });
+            }
+          }
+        });
+      }
     }
   };
 
@@ -1975,13 +2071,12 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         pickupDate: firstPickup?.pickupDate || tripData.pickupDate,
         deliveryDate: lastDelivery?.deliveryDate || tripData.deliveryDate,
 
-        // Financial
+        // Financial - Calculate complete grand total including all fees
         rate: plannedLoad.fees?.primaryFee || 0,
         miles: plannedLoad.totalMiles || tripData.totalMiles || 0,
         ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
           ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
           : 0,
-        grandTotal: plannedLoad.totalCharge || plannedLoad.fees?.primaryFee || 0,
 
         // FSC
         hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
@@ -1997,6 +2092,17 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           (plannedLoad.fees?.accessoryFees?.lumper || 0) +
           (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
           (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
+
+        // Grand Total: Primary Fee + FSC + All Accessorials - Invoice Advance
+        grandTotal: plannedLoad.totalCharge || (
+          (plannedLoad.fees?.primaryFee || 0) +
+          (plannedLoad.fees?.fscAmount || 0) +
+          (plannedLoad.fees?.accessoryFees?.detention || 0) +
+          (plannedLoad.fees?.accessoryFees?.lumper || 0) +
+          (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
+          (plannedLoad.fees?.accessoryFees?.tarpFee || 0) -
+          (plannedLoad.fees?.invoiceAdvance || 0)
+        ),
 
         // Document numbers
         bolNumber: firstPickup?.bolNumber,

@@ -10,14 +10,21 @@ import { TmsDocument } from './shared';
 // Load Status
 // ============================================================================
 
+// TruckingOffice 7-Step Workflow:
+// 1. Available/Planned -> 2. Dispatched -> 3. In Transit -> 4. Delivered
+// -> 5. Delivered w/BOL -> 6. Invoiced -> 7. Paid
+// Additional: Completed (legacy), Cancelled, TONU
 export enum LoadStatus {
-  Available = 'available',
-  Dispatched = 'dispatched',
-  InTransit = 'in_transit',
-  Delivered = 'delivered',
-  Completed = 'completed',
-  Cancelled = 'cancelled',
-  TONU = 'tonu'
+  Available = 'available',          // Step 1: Ready to dispatch
+  Dispatched = 'dispatched',        // Step 2: Assigned to driver/trip
+  InTransit = 'in_transit',         // Step 3: Driver en route (from ELD)
+  Delivered = 'delivered',          // Step 4: Load delivered (from ELD)
+  DeliveredWithBOL = 'delivered_with_bol', // Step 5: BOL documents attached
+  Invoiced = 'invoiced',            // Step 6: Invoice created
+  Paid = 'paid',                    // Step 7: Payment received
+  Completed = 'completed',          // Legacy: General completion
+  Cancelled = 'cancelled',          // Load cancelled
+  TONU = 'tonu'                     // Truck Ordered Not Used
 }
 
 // ============================================================================
