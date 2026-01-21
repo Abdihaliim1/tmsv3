@@ -447,8 +447,82 @@ export function getLatestDocument(
 ): TmsDocument | null {
   const matching = documents.filter(d => d.type === type);
   if (matching.length === 0) return null;
-  
-  return matching.reduce((latest, current) => 
+
+  return matching.reduce((latest, current) =>
     (current.version || 0) > (latest.version || 0) ? current : latest
   );
+}
+
+/**
+ * Check if a load can be invoiced
+ *
+ * A load can be invoiced if:
+ * - It has a valid status (delivered or completed)
+ * - It has not already been invoiced
+ * - It has the required documents (POD is typically required)
+ *
+ * @param load - The load to check
+ * @returns Object with canInvoice boolean and reason if not
+ */
+export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: string } {
+  // Check if load exists
+  if (!load) {
+    return { canInvoice: false, reason: 'Load not found' };
+  }
+
+  // Check if already invoiced
+  if (load.invoiceId) {
+    return { canInvoice: false, reason: 'Load already invoiced' };
+  }
+
+  // Check status - must be delivered or completed
+  const invoiceableStatuses = ['delivered', 'completed'];
+  if (!invoiceableStatuses.includes(load.status)) {
+    return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
+  }
+
+  // Check for required documents (POD is typically required for invoicing)
+  const documents = load.documents || [];
+  const hasPOD = documents.some(d => d.type === 'pod' || d.type === 'POD');
+
+  if (!hasPOD) {
+    return { canInvoice: false, reason: 'POD document required for invoicing' };
+  }
+
+  return { canInvoice: true };
+}
+
+/**
+ * Check if a load can be dispatched
+ *
+ * A load can be dispatched if:
+ * - It has a valid status (available)
+ * - It has a driver assigned
+ * - It has a truck assigned
+ *
+ * @param load - The load to check
+ * @returns Object with canDispatch boolean and reason if not
+ */
+export function canDispatchLoad(load: Load): { canDispatch: boolean; reason?: string } {
+  // Check if load exists
+  if (!load) {
+    return { canDispatch: false, reason: 'Load not found' };
+  }
+
+  // Check status - must be available
+  if (load.status !== 'available') {
+    return { canDispatch: false, reason: `Load status must be available (current: ${load.status})` };
+  }
+
+  // Check for driver
+  if (!load.driverId) {
+    return { canDispatch: false, reason: 'Driver not assigned' };
+  }
+
+  // Check for truck
+  if (!load.truckId) {
+    return { canDispatch: false, reason: 'Truck not assigned' };
+  }
+
+  return { canDispatch: true };
 }

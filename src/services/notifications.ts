@@ -403,4 +403,3 @@ export const notifications = {
     // TODO: Show toast/alert UI
   },
 };
-

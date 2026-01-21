@@ -12,20 +12,23 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, query, orderBy, doc, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
-import { 
-  Building2, 
-  Search, 
-  Users, 
-  AlertTriangle, 
-  FileWarning, 
-  Clock, 
+import { isPlatformAdmin, hasPermission } from '../services/rbac';
+import {
+  Building2,
+  Search,
+  Users,
+  AlertTriangle,
+  FileWarning,
+  Clock,
   ArrowRight,
   Shield,
+  ShieldAlert,
   Activity,
   Calendar,
   CheckCircle,
   XCircle,
-  RefreshCw
+  RefreshCw,
+  Lock
 } from 'lucide-react';
 
 interface TenantIndexEntry {
@@ -51,8 +54,8 @@ interface AdminConsoleProps {
 }
 
 const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant }) => {
-  const { user } = useAuth();
-  
+  const { user, role } = useAuth();
+
   const [tenants, setTenants] = useState<TenantIndexEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -60,10 +63,17 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
   const [globalIssues, setGlobalIssues] = useState<GlobalIssue[]>([]);
   const [isEntering, setIsEntering] = useState(false);
 
-  // Load all tenants from tenantsIndex
+  // RBAC Check - Only admins can access this page
+  const isAdmin = isPlatformAdmin(role);
+  const canManageTenants = hasPermission(role, 'admin', 'manage_tenants');
+  const canImpersonate = hasPermission(role, 'admin', 'impersonate');
+
+  // Load all tenants from tenantsIndex (only if admin)
   useEffect(() => {
-    loadTenants();
-  }, []);
+    if (isAdmin) {
+      loadTenants();
+    }
+  }, [isAdmin]);
 
   const loadTenants = async () => {
     setIsLoading(true);
@@ -191,6 +201,34 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
         return <span className="px-2 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded-full">{status}</span>;
     }
   };
+
+  // Access Denied Screen for non-admins
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <ShieldAlert className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-xl font-bold text-slate-900 mb-2">Access Denied</h1>
+          <p className="text-slate-600 mb-6">
+            You don't have permission to access the Admin Console.
+            This area is restricted to platform administrators only.
+          </p>
+          <div className="flex items-center justify-center gap-2 text-sm text-slate-500 mb-6">
+            <Lock size={14} />
+            <span>Your role: <span className="font-medium capitalize">{role}</span></span>
+          </div>
+          <button
+            onClick={() => onNavigate('Dashboard')}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Go to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -333,14 +371,16 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
                       >
                         View Details
                       </button>
-                      <button
-                        onClick={() => handleEnterCompany(tenant)}
-                        disabled={isEntering}
-                        className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50"
-                      >
-                        {isEntering ? 'Entering...' : 'Enter Company'}
-                        <ArrowRight size={16} />
-                      </button>
+                      {canImpersonate && (
+                        <button
+                          onClick={() => handleEnterCompany(tenant)}
+                          disabled={isEntering}
+                          className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {isEntering ? 'Entering...' : 'Enter Company'}
+                          <ArrowRight size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -398,15 +438,21 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
                 </div>
 
                 <div className="pt-4 border-t border-slate-200 flex gap-3">
-                  <button
-                    onClick={() => {
-                      setSelectedTenant(null);
-                      handleEnterCompany(selectedTenant);
-                    }}
-                    className="flex-1 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-                  >
-                    Enter Company <ArrowRight size={18} />
-                  </button>
+                  {canImpersonate ? (
+                    <button
+                      onClick={() => {
+                        setSelectedTenant(null);
+                        handleEnterCompany(selectedTenant);
+                      }}
+                      className="flex-1 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                    >
+                      Enter Company <ArrowRight size={18} />
+                    </button>
+                  ) : (
+                    <div className="flex-1 py-3 bg-slate-100 text-slate-500 rounded-lg flex items-center justify-center gap-2 text-sm">
+                      <Lock size={16} /> Impersonation not permitted
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

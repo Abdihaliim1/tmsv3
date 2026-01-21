@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect, useCallback } from 'react';
-import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, EmployeeType, Trailer, NewTrailerInput, Broker, NewBrokerInput } from '../types';
+import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, EmployeeType, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus } from '../types';
 import { recentLoads, generateMockKPIs, initialDrivers, initialInvoices, initialTrucks, initialTrailers, initialDispatchers } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
 // Tenant ID comes from TenantContext
 import { autoSeedBrokers } from '../services/brokerSeed';
+import { autoSeedCustomers } from '../services/customerSeed';
 import { autoSeedFactoringCompanies } from '../services/factoringCompanySeed';
 import { generateSearchKey, generatePrefixes } from '../services/brokerUtils';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
+import { generateShortId, generateStopId } from '../utils/idGenerator';
 import { triggerLoadCreated, triggerLoadStatusChanged, triggerLoadDelivered, triggerInvoiceCreated } from '../services/workflow/workflowEngine';
 import { getTasks, createTaskIfNotExists, updateTask, deleteTask } from '../services/workflow/taskService';
 import { Task } from '../types';
@@ -14,17 +16,24 @@ import { useAuth } from './AuthContext';
 import { auditCreate, auditUpdate, auditDelete, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
 import { createAdjustment } from '../services/adjustmentService';
+// Logging and error handling
+import { logger } from '../services/logger';
+import { errorHandler, ErrorSeverity } from '../services/errorHandler';
+// Security - sanitization
+import { sanitizeText } from '../security/sanitize';
 // Firestore persistence
 import {
   loadLoads, loadInvoices, loadSettlements, loadEmployees, loadTrucks, loadTrailers,
-  loadExpenses, loadFactoringCompanies, loadBrokers,
+  loadExpenses, loadFactoringCompanies, loadBrokers, loadCustomers, loadPlannedLoads, loadTrips,
   saveLoad, saveInvoice, saveSettlement, saveEmployee, saveTruck, saveTrailer,
-  saveExpense, saveFactoringCompany, saveBroker,
+  saveExpense, saveFactoringCompany, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
   deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
   deleteTruck as firestoreDeleteTruck, deleteTrailer as firestoreDeleteTrailer,
   deleteExpense as firestoreDeleteExpense, deleteFactoringCompany as firestoreDeleteFactoringCompany,
-  deleteBroker as firestoreDeleteBroker, batchSave
+  deleteBroker as firestoreDeleteBroker, deleteCustomer as firestoreDeleteCustomer,
+  deletePlannedLoad as firestoreDeletePlannedLoad, deleteTrip as firestoreDeleteTrip,
+  batchSave, subscribeToCollection
 } from '../services/firestoreService';
 
 // LocalStorage keys (tenant-aware)
@@ -44,11 +53,15 @@ interface TMSContextType {
   expenses: Expense[];
   factoringCompanies: FactoringCompany[];
   brokers: Broker[];
+  customers: CustomerEntity[]; // Unified customer database (brokers, shippers, consignees)
   dispatchers: Employee[]; // Computed: filtered employees where employeeType is dispatcher
+  plannedLoads: PlannedLoad[]; // Planned loads before dispatch
+  trips: Trip[]; // Dispatched trips
   tasks: Task[]; // Workflow tasks
   kpis: KPIMetrics;
   addLoad: (load: NewLoadInput) => void;
-  updateLoad: (id: string, load: Partial<Load>) => void;
+  updateLoad: (id: string, load: Partial<Load>, reason?: string) => void;
+  updateLoadStatus: (id: string, newStatus: LoadStatus, statusChangeInfo: StatusChangeInfo) => Promise<void>;
   deleteLoad: (id: string, force?: boolean) => void;
   addEmployee: (employee: NewEmployeeInput) => void;
   updateEmployee: (id: string, employee: Partial<Employee>) => void;
@@ -77,15 +90,32 @@ interface TMSContextType {
   addBroker: (broker: NewBrokerInput) => void;
   updateBroker: (id: string, broker: Partial<Broker>) => void;
   deleteBroker: (id: string) => void;
+  addCustomer: (customer: NewCustomerInput) => void;
+  updateCustomer: (id: string, customer: Partial<CustomerEntity>) => void;
+  deleteCustomer: (id: string) => void;
   addDispatcher: (dispatcher: NewDispatcherInput) => void;
   updateDispatcher: (id: string, dispatcher: Partial<Dispatcher>) => void;
   deleteDispatcher: (id: string) => void;
+  // Planned Load management
+  addPlannedLoad: (plannedLoad: NewPlannedLoadInput) => string;
+  updatePlannedLoad: (id: string, plannedLoad: Partial<PlannedLoad>) => void;
+  deletePlannedLoad: (id: string) => void;
+  // Trip management
+  addTrip: (trip: NewTripInput) => string;
+  updateTrip: (id: string, trip: Partial<Trip>) => void;
+  deleteTrip: (id: string) => void;
+  dispatchPlannedLoadsToTrip: (plannedLoadIds: string[], tripData: NewTripInput) => Promise<string>;
+  linkLoadToTrip: (loadId: string, tripId: string | null) => void; // Link/unlink load to trip
   // Task management
   updateTaskStatus: (taskId: string, status: Task['status']) => void;
   completeTask: (taskId: string) => void;
   deleteTaskById: (taskId: string) => void;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
+  // Cross-page navigation state for dispatching loads
+  pendingDispatchLoadIds: string[];
+  setPendingDispatchLoadIds: (loadIds: string[]) => void;
+  clearPendingDispatchLoadIds: () => void;
 }
 
 const TMSContext = createContext<TMSContextType | undefined>(undefined);
@@ -116,7 +146,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         expenses: [],
         factoringCompanies: [],
         brokers: [],
+        customers: [],
         dispatchers: [],
+        plannedLoads: [],
+        trips: [],
         tasks: [],
         kpis: {
           revenue: 0,
@@ -126,6 +159,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         },
         addLoad: () => { },
         updateLoad: () => { },
+        updateLoadStatus: async () => { },
         deleteLoad: () => { },
         addEmployee: () => { },
         updateEmployee: () => { },
@@ -154,14 +188,28 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addBroker: () => { },
         updateBroker: () => { },
         deleteBroker: () => { },
+        addCustomer: () => { },
+        updateCustomer: () => { },
+        deleteCustomer: () => { },
         addDispatcher: () => { },
         updateDispatcher: () => { },
         deleteDispatcher: () => { },
+        addPlannedLoad: () => '',
+        updatePlannedLoad: () => { },
+        deletePlannedLoad: () => { },
+        addTrip: () => '',
+        updateTrip: () => { },
+        deleteTrip: () => { },
+        dispatchPlannedLoadsToTrip: async () => '',
+        linkLoadToTrip: () => { },
         updateTaskStatus: () => { },
         completeTask: () => { },
         deleteTaskById: () => { },
         searchTerm: '',
         setSearchTerm: () => { },
+        pendingDispatchLoadIds: [],
+        setPendingDispatchLoadIds: () => { },
+        clearPendingDispatchLoadIds: () => { },
       }}>
         {children}
       </TMSContext.Provider>
@@ -178,9 +226,18 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [factoringCompanies, setFactoringCompanies] = useState<FactoringCompany[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
+  const [customers, setCustomers] = useState<CustomerEntity[]>([]);
+  const [plannedLoads, setPlannedLoads] = useState<PlannedLoad[]>([]);
+  const [trips, setTrips] = useState<Trip[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [pendingDispatchLoadIds, setPendingDispatchLoadIds] = useState<string[]>([]);
+
+  // Helper to clear pending dispatch load IDs
+  const clearPendingDispatchLoadIds = useCallback(() => {
+    setPendingDispatchLoadIds([]);
+  }, []);
 
   // Load all data from Firestore when tenant changes
   useEffect(() => {
@@ -205,7 +262,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           trailersData,
           expensesData,
           fcData,
-          brokersData
+          brokersData,
+          customersData,
+          plannedLoadsData,
+          tripsData
         ] = await Promise.all([
           loadLoads(tenantId),
           loadEmployees(tenantId),
@@ -215,7 +275,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           loadTrailers(tenantId),
           loadExpenses(tenantId),
           loadFactoringCompanies(tenantId),
-          loadBrokers(tenantId)
+          loadBrokers(tenantId),
+          loadCustomers(tenantId),
+          loadPlannedLoads(tenantId),
+          loadTrips(tenantId)
         ]);
 
         if (!isMounted) return;
@@ -230,6 +293,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         setExpenses(expensesData);
         setFactoringCompanies(fcData);
         setBrokers(brokersData);
+        setCustomers(customersData);
+        setPlannedLoads(plannedLoadsData);
+        setTrips(tripsData);
 
         // Auto-seed brokers if empty
         if (brokersData.length === 0) {
@@ -252,6 +318,19 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
             await batchSave(tenantId, 'factoringCompanies', seededFC);
           } catch (error) {
             console.warn('Could not auto-seed factoring companies:', error);
+          }
+        }
+
+        // Auto-seed customers (with broker data) if empty
+        if (customersData.length === 0) {
+          try {
+            const seededCustomers = autoSeedCustomers(tenantId);
+            setCustomers(seededCustomers);
+            // Save seeded customers to Firestore
+            await batchSave(tenantId, 'customers', seededCustomers);
+            console.log(`✅ Auto-seeded ${seededCustomers.length} customers for tenant: ${tenantId}`);
+          } catch (error) {
+            console.warn('Could not auto-seed customers:', error);
           }
         }
 
@@ -373,28 +452,42 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     };
   }, [loads, drivers]);
 
+  // Helper function to sanitize user input for loads
+  const sanitizeLoadInput = (input: Partial<Load>): Partial<Load> => {
+    const sanitized = { ...input };
+    // Sanitize text fields that might contain user input
+    if (sanitized.customerName) sanitized.customerName = sanitizeText(sanitized.customerName);
+    if (sanitized.brokerName) sanitized.brokerName = sanitizeText(sanitized.brokerName);
+    if (sanitized.brokerReference) sanitized.brokerReference = sanitizeText(sanitized.brokerReference);
+    if (sanitized.driverName) sanitized.driverName = sanitizeText(sanitized.driverName);
+    if (sanitized.dispatcherName) sanitized.dispatcherName = sanitizeText(sanitized.dispatcherName);
+    if (sanitized.originCity) sanitized.originCity = sanitizeText(sanitized.originCity);
+    if (sanitized.destCity) sanitized.destCity = sanitizeText(sanitized.destCity);
+    if (sanitized.notes) sanitized.notes = sanitizeText(sanitized.notes);
+    return sanitized;
+  };
+
   const addLoad = async (input: NewLoadInput) => {
-    const newLoadId = Math.random().toString(36).substr(2, 9);
+    // Sanitize user input before saving
+    const sanitizedInput = sanitizeLoadInput(input) as NewLoadInput;
+
+    const newLoadId = generateShortId();
     const newLoad: Load = {
-      ...input,
+      ...sanitizedInput,
       id: newLoadId,
       loadNumber: `LD-2025-${(loads.length + 301).toString()}`,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
     };
 
-    // Update Loads State
-    setLoads([newLoad, ...loads]);
+    // Optimistic Update - add to state immediately
+    setLoads(prev => [newLoad, ...prev]);
 
-    // Save to Firestore
     try {
+      // Save to Firestore
       await saveLoad(tenantId || 'default', newLoad);
-    } catch (error) {
-      console.error('Failed to save load to Firestore:', error);
-    }
 
-    // Audit logging
-    try {
+      // Audit logging
       const actorUid = authUser?.uid || 'system';
       const actorRole = authUser?.role || 'viewer';
       await auditCreate(
@@ -406,12 +499,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         newLoad,
         `Created load ${newLoad.loadNumber}`
       );
-    } catch (error) {
-      console.error('Failed to write audit log:', error);
-    }
 
-    // Trigger workflow for load created
-    try {
+      // Trigger workflow for load created
       const createdTasks = await triggerLoadCreated(tenantId || 'default', newLoad.id, {
         loadNumber: newLoad.loadNumber,
         driverId: newLoad.driverId,
@@ -425,8 +514,29 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       if (createdTasks.length > 0) {
         setTasks(getTasks(tenantId)); // Refresh tasks
       }
+
+      logger.info('[TMSContext] Load created successfully', {
+        tenantId,
+        loadId: newLoadId,
+        loadNumber: newLoad.loadNumber,
+      });
+
     } catch (error) {
-      console.error('Error triggering workflow for load creation:', error);
+      // Rollback optimistic update on error
+      setLoads(prev => prev.filter(l => l.id !== newLoadId));
+
+      errorHandler.handle(
+        error,
+        {
+          operation: 'create load',
+          tenantId: tenantId || 'default',
+          userId: authUser?.uid,
+          metadata: { loadNumber: newLoad.loadNumber },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+
+      throw error; // Re-throw so caller knows it failed
     }
 
     // --- AUTOMATION LOGIC ---
@@ -502,6 +612,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       return Promise.reject(new Error('Load not found'));
     }
 
+    // Sanitize user input in updates before processing
+    const sanitizedUpdates = sanitizeLoadInput(updates);
+
     // Get current user for audit logging
     const actorUid = authUser?.uid || 'system';
     const actorRole = authUser?.role || 'viewer';
@@ -510,7 +623,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     const hasAdjustmentReason = reason && reason.trim().length > 0;
 
     if (isLoadLocked(oldLoad)) {
-      const validation = validatePostDeliveryUpdates(oldLoad, updates);
+      const validation = validatePostDeliveryUpdates(oldLoad, sanitizedUpdates);
 
       // If changes require a reason but none provided, reject
       if (validation.requiresReason && !hasAdjustmentReason) {
@@ -519,8 +632,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         return Promise.reject(new Error(errorMessage));
       }
 
-      // Log the adjustment if reason provided
-      if (hasAdjustmentReason) {
+      // Log the adjustment if reason provided (development only)
+      if (hasAdjustmentReason && import.meta.env.DEV) {
         console.log(`[ADJUSTMENT] Load ${oldLoad.loadNumber} modified. Reason: ${reason}. Fields: ${validation.changedFields.join(', ')}`);
       }
     }
@@ -542,14 +655,14 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       const timestamp = new Date().toISOString();
 
       // Compare each field in updates
-      Object.keys(updates).forEach((key) => {
+      Object.keys(sanitizedUpdates).forEach((key) => {
         const oldValue = (oldLoad as any)[key];
-        const newValue = (updates as any)[key];
+        const newValue = (sanitizedUpdates as any)[key];
 
         // Only log if value actually changed
         if (oldValue !== newValue && JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
           adjustmentEntries.push({
-            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateStopId(),
             timestamp,
             changedBy,
             field: key,
@@ -566,79 +679,280 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     const newAdjustmentLog = [...existingAdjustmentLog, ...adjustmentEntries];
 
     // Lock load if status changed to Delivered or Completed
-    const shouldLock = (updates.status === LoadStatus.Delivered || updates.status === LoadStatus.Completed) &&
+    const shouldLock = (sanitizedUpdates.status === LoadStatus.Delivered || sanitizedUpdates.status === LoadStatus.Completed) &&
       !oldLoad.isLocked;
 
     const updatedLoad = {
       ...oldLoad,
-      ...updates,
+      ...sanitizedUpdates,
       adjustmentLog: adjustmentEntries.length > 0 ? newAdjustmentLog : oldLoad.adjustmentLog,
       isLocked: shouldLock ? true : oldLoad.isLocked,
       lockedAt: shouldLock ? new Date().toISOString() : oldLoad.lockedAt,
       updatedAt: new Date().toISOString()
     };
+
+    // Optimistic Update
     setLoads(prev => prev.map(load => load.id === id ? updatedLoad : load));
 
-    // Save to Firestore
     try {
+      // Save to Firestore
       await saveLoad(tenantId || 'default', updatedLoad);
+
+      // Audit logging (non-blocking)
+      try {
+        if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+          await auditStatusChange(
+            tenantId || 'default',
+            actorUid,
+            actorRole,
+            'load',
+            id,
+            oldLoad.status,
+            sanitizedUpdates.status as string,
+            `Load ${oldLoad.loadNumber} status changed from ${oldLoad.status} to ${sanitizedUpdates.status}`
+          );
+        } else if (adjustmentEntries.length > 0) {
+          await auditAdjustment(
+            tenantId || 'default',
+            actorUid,
+            actorRole,
+            'load',
+            id,
+            oldLoad,
+            updatedLoad,
+            reason || 'Adjustment to delivered load',
+            `Adjusted load ${oldLoad.loadNumber}`
+          );
+        } else {
+          await auditUpdate(
+            tenantId || 'default',
+            actorUid,
+            actorRole,
+            'load',
+            id,
+            oldLoad,
+            updatedLoad,
+            `Updated load ${oldLoad.loadNumber}`
+          );
+        }
+      } catch (auditError) {
+        logger.warn('[TMSContext] Failed to write audit log', { error: auditError, loadId: id });
+      }
+
+      // Trigger workflow for status changes (non-blocking)
+      if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+        try {
+          const createdTasks = await triggerLoadStatusChanged(
+            tenantId || 'default',
+            id,
+            oldLoad.status,
+            sanitizedUpdates.status as string,
+            {
+              loadNumber: updatedLoad.loadNumber,
+              driverId: updatedLoad.driverId,
+              dispatcherId: updatedLoad.dispatcherId,
+              customerName: updatedLoad.customerName,
+              brokerName: updatedLoad.brokerName,
+              isFactored: updatedLoad.isFactored,
+            }
+          );
+
+          if (sanitizedUpdates.status === LoadStatus.Delivered || sanitizedUpdates.status === LoadStatus.Completed) {
+            const deliveredTasks = await triggerLoadDelivered(tenantId || 'default', id, {
+              loadNumber: updatedLoad.loadNumber,
+              driverId: updatedLoad.driverId,
+              deliveryDate: updatedLoad.deliveryDate,
+            });
+            if (deliveredTasks.length > 0) {
+              setTasks(getTasks(tenantId));
+            }
+          }
+
+          if (createdTasks.length > 0) {
+            setTasks(getTasks(tenantId));
+          }
+        } catch (workflowError) {
+          logger.warn('[TMSContext] Error triggering workflow', { error: workflowError, loadId: id });
+        }
+      }
+
+      // AUTO-SYNC: Update associated invoice when load rate/amount changes
+      const rateChanged = sanitizedUpdates.rate !== undefined && sanitizedUpdates.rate !== oldLoad.rate;
+      const grandTotalChanged = sanitizedUpdates.grandTotal !== undefined && sanitizedUpdates.grandTotal !== oldLoad.grandTotal;
+      const brokerChanged = sanitizedUpdates.brokerName !== undefined && sanitizedUpdates.brokerName !== oldLoad.brokerName;
+
+      if (rateChanged || grandTotalChanged || brokerChanged) {
+        const linkedInvoice = invoices.find(inv =>
+          inv.loadId === id || inv.loadIds?.includes(id) || updatedLoad.invoiceId === inv.id
+        );
+
+        if (linkedInvoice) {
+          const linkedLoadIds = linkedInvoice.loadIds || (linkedInvoice.loadId ? [linkedInvoice.loadId] : []);
+          let newAmount = 0;
+
+          linkedLoadIds.forEach(loadId => {
+            const linkedLoad = loadId === id
+              ? updatedLoad
+              : loads.find(l => l.id === loadId);
+            if (linkedLoad) {
+              newAmount += linkedLoad.grandTotal || linkedLoad.rate || 0;
+            }
+          });
+
+          const invoiceUpdates: Partial<Invoice> = {
+            amount: newAmount,
+            updatedAt: new Date().toISOString(),
+          };
+
+          if (brokerChanged && sanitizedUpdates.brokerName) {
+            invoiceUpdates.brokerName = sanitizedUpdates.brokerName;
+            invoiceUpdates.customerName = sanitizedUpdates.brokerName;
+          }
+
+          setInvoices(prev => prev.map(inv =>
+            inv.id === linkedInvoice.id
+              ? { ...inv, ...invoiceUpdates }
+              : inv
+          ));
+
+          logger.debug('[TMSContext] Invoice synced', {
+            invoiceNumber: linkedInvoice.invoiceNumber,
+            newAmount,
+          });
+        }
+      }
+
+      logger.info('[TMSContext] Load updated successfully', {
+        tenantId,
+        loadId: id,
+        hasStatusChange: sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status,
+        hasAdjustments: adjustmentEntries.length > 0,
+      });
+
     } catch (error) {
-      console.error('Failed to save load update to Firestore:', error);
+      // Rollback optimistic update
+      setLoads(prev => prev.map(load => load.id === id ? oldLoad : load));
+
+      errorHandler.handle(
+        error,
+        {
+          operation: 'update load',
+          tenantId: tenantId || 'default',
+          userId: authUser?.uid,
+          metadata: { loadId: id, loadNumber: oldLoad.loadNumber },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+
+      throw error;
+    }
+  };
+
+  /**
+   * Update load status with required person name and role tracking.
+   * This function should be used for all status changes to ensure proper audit trail.
+   *
+   * @param id - Load ID
+   * @param newStatus - New status to set
+   * @param statusChangeInfo - Required info: changedByName, changedByRole, optional note
+   */
+  const updateLoadStatus = async (
+    id: string,
+    newStatus: LoadStatus,
+    statusChangeInfo: StatusChangeInfo
+  ): Promise<void> => {
+    const load = loads.find(l => l.id === id);
+    if (!load) {
+      return Promise.reject(new Error('Load not found'));
     }
 
-    // Audit logging
+    // Validate required fields
+    if (!statusChangeInfo.changedByName || statusChangeInfo.changedByName.trim() === '') {
+      return Promise.reject(new Error('Name of person making the change is required'));
+    }
+
+    if (!statusChangeInfo.changedByRole) {
+      return Promise.reject(new Error('Role (admin/dispatcher/driver/viewer) is required'));
+    }
+
+    const now = new Date().toISOString();
+    const actorUid = authUser?.uid || 'system';
+
+    // Create new status history entry
+    const newStatusEntry = {
+      status: newStatus,
+      timestamp: now,
+      changedBy: statusChangeInfo.changedByName.trim(),
+      changedByRole: statusChangeInfo.changedByRole,
+      changedByUserId: actorUid,
+      note: statusChangeInfo.note?.trim() || undefined,
+    };
+
+    // Build updated status history
+    const existingHistory = load.statusHistory || [];
+    const updatedStatusHistory = [...existingHistory, newStatusEntry];
+
+    // Determine if load should be locked
+    const shouldLock = (newStatus === LoadStatus.Delivered || newStatus === LoadStatus.Completed) && !load.isLocked;
+
+    // Build the updates
+    const updates: Partial<Load> = {
+      status: newStatus,
+      statusHistory: updatedStatusHistory,
+      updatedAt: now,
+      changedBy: statusChangeInfo.changedByName.trim(),
+    };
+
+    // Add lock info if needed
+    if (shouldLock) {
+      updates.isLocked = true;
+      updates.lockedAt = now;
+    }
+
+    // Log the status change
+    logger.info('[TMSContext] Load status changed', {
+      loadId: id,
+      loadNumber: load.loadNumber,
+      oldStatus: load.status,
+      newStatus,
+      changedBy: statusChangeInfo.changedByName,
+      changedByRole: statusChangeInfo.changedByRole,
+      changedByUserId: actorUid,
+      note: statusChangeInfo.note,
+      timestamp: now,
+    });
+
+    // Optimistic update
+    const updatedLoad = { ...load, ...updates };
+    setLoads(prev => prev.map(l => l.id === id ? updatedLoad : l));
+
     try {
-      if (updates.status && updates.status !== oldLoad.status) {
-        // Status change audit
+      // Save to Firestore
+      await saveLoad(tenantId || 'default', updatedLoad);
+
+      // Audit logging
+      try {
         await auditStatusChange(
           tenantId || 'default',
           actorUid,
-          actorRole,
+          statusChangeInfo.changedByRole,
           'load',
           id,
-          oldLoad.status,
-          updates.status,
-          `Load ${oldLoad.loadNumber} status changed from ${oldLoad.status} to ${updates.status}`
+          load.status,
+          newStatus,
+          `Load ${load.loadNumber} status changed from ${load.status} to ${newStatus} by ${statusChangeInfo.changedByName} (${statusChangeInfo.changedByRole})${statusChangeInfo.note ? ` - Note: ${statusChangeInfo.note}` : ''}`
         );
-      } else if (adjustmentEntries.length > 0) {
-        // Adjustment audit
-        await auditAdjustment(
-          tenantId || 'default',
-          actorUid,
-          actorRole,
-          'load',
-          id,
-          oldLoad,
-          updatedLoad,
-          reason || 'Adjustment to delivered load',
-          `Adjusted load ${oldLoad.loadNumber}`
-        );
-      } else {
-        // Regular update audit
-        await auditUpdate(
-          tenantId || 'default',
-          actorUid,
-          actorRole,
-          'load',
-          id,
-          oldLoad,
-          updatedLoad,
-          `Updated load ${oldLoad.loadNumber}`
-        );
+      } catch (auditError) {
+        logger.warn('[TMSContext] Failed to write status change audit log', { error: auditError, loadId: id });
       }
-    } catch (error) {
-      console.error('Failed to write audit log:', error);
-      // Don't throw - audit logging should never break the app
-    }
 
-    // Trigger workflow for status changes
-    if (updates.status && updates.status !== oldLoad.status) {
+      // Trigger workflow for status changes
       try {
         const createdTasks = await triggerLoadStatusChanged(
           tenantId || 'default',
           id,
-          oldLoad.status,
-          updates.status,
+          load.status,
+          newStatus,
           {
             loadNumber: updatedLoad.loadNumber,
             driverId: updatedLoad.driverId,
@@ -649,74 +963,53 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           }
         );
 
-        // If status changed to Delivered, trigger delivered event
-        if (updates.status === LoadStatus.Delivered || updates.status === LoadStatus.Completed) {
+        if (newStatus === LoadStatus.Delivered || newStatus === LoadStatus.Completed) {
           const deliveredTasks = await triggerLoadDelivered(tenantId || 'default', id, {
             loadNumber: updatedLoad.loadNumber,
             driverId: updatedLoad.driverId,
             deliveryDate: updatedLoad.deliveryDate,
           });
           if (deliveredTasks.length > 0) {
-            setTasks(getTasks(tenantId)); // Refresh tasks
+            setTasks(getTasks(tenantId));
           }
         }
 
         if (createdTasks.length > 0) {
-          setTasks(getTasks(tenantId)); // Refresh tasks
+          setTasks(getTasks(tenantId));
         }
-      } catch (error) {
-        console.error('Error triggering workflow for load status change:', error);
+      } catch (workflowError) {
+        logger.warn('[TMSContext] Error triggering workflow for status change', { error: workflowError, loadId: id });
       }
-    }
 
-    // AUTO-SYNC: Update associated invoice when load rate/amount changes
-    const rateChanged = updates.rate !== undefined && updates.rate !== oldLoad.rate;
-    const grandTotalChanged = updates.grandTotal !== undefined && updates.grandTotal !== oldLoad.grandTotal;
-    const brokerChanged = updates.brokerName !== undefined && updates.brokerName !== oldLoad.brokerName;
+      console.log(`✅ Load ${load.loadNumber} status changed to ${newStatus} by ${statusChangeInfo.changedByName} (${statusChangeInfo.changedByRole}) at ${now}`);
 
-    if (rateChanged || grandTotalChanged || brokerChanged) {
-      // Find invoice linked to this load
-      const linkedInvoice = invoices.find(inv =>
-        inv.loadId === id || inv.loadIds?.includes(id) || updatedLoad.invoiceId === inv.id
+    } catch (error) {
+      // Rollback optimistic update
+      setLoads(prev => prev.map(l => l.id === id ? load : l));
+
+      errorHandler.handle(
+        error,
+        {
+          operation: 'update load status',
+          tenantId: tenantId || 'default',
+          userId: authUser?.uid,
+          metadata: {
+            loadId: id,
+            loadNumber: load.loadNumber,
+            oldStatus: load.status,
+            newStatus,
+            changedBy: statusChangeInfo.changedByName,
+            changedByRole: statusChangeInfo.changedByRole,
+          },
+        },
+        { severity: ErrorSeverity.HIGH }
       );
 
-      if (linkedInvoice) {
-        // Recalculate invoice amount based on all linked loads
-        const linkedLoadIds = linkedInvoice.loadIds || (linkedInvoice.loadId ? [linkedInvoice.loadId] : []);
-        let newAmount = 0;
-
-        linkedLoadIds.forEach(loadId => {
-          const linkedLoad = loadId === id
-            ? updatedLoad  // Use updated load for the one we just changed
-            : loads.find(l => l.id === loadId);
-          if (linkedLoad) {
-            newAmount += linkedLoad.grandTotal || linkedLoad.rate || 0;
-          }
-        });
-
-        const invoiceUpdates: Partial<Invoice> = {
-          amount: newAmount,
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Also update broker name if it changed
-        if (brokerChanged && updates.brokerName) {
-          invoiceUpdates.brokerName = updates.brokerName;
-          invoiceUpdates.customerName = updates.brokerName; // Keep in sync
-        }
-
-        setInvoices(prev => prev.map(inv =>
-          inv.id === linkedInvoice.id
-            ? { ...inv, ...invoiceUpdates }
-            : inv
-        ));
-
-        console.log(`[INVOICE SYNC] Updated invoice ${linkedInvoice.invoiceNumber} amount to ${newAmount}`);
-      }
+      throw error;
     }
   };
 
-  const deleteLoad = (id: string, force: boolean = false) => {
+  const deleteLoad = async (id: string, force: boolean = false) => {
     const load = loads.find(l => l.id === id);
     if (!load) return;
 
@@ -744,7 +1037,11 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       }
     }
 
-    // Proceed with deletion - unlink from invoices first
+    // Store original state for rollback
+    const originalInvoices = [...invoices];
+    const originalSettlements = [...settlements];
+
+    // Optimistic update - unlink from invoices first
     setInvoices(prev => prev.map(inv => {
       if (inv.loadId === id) {
         const updated = { ...inv };
@@ -757,7 +1054,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       return inv;
     }));
 
-    // Unlink from settlements
+    // Optimistic update - unlink from settlements
     setSettlements(prev => prev.map(sett => {
       if (sett.loadId === id) {
         const updated = { ...sett };
@@ -770,20 +1067,45 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       return sett;
     }));
 
-    // Delete the load
-    setLoads(prev => prev.filter(load => load.id !== id));
+    // Optimistic delete - remove the load
+    setLoads(prev => prev.filter(l => l.id !== id));
 
-    // Delete from Firestore
-    firestoreDeleteLoad(tenantId || 'default', id).catch(error => {
-      console.error('Failed to delete load from Firestore:', error);
-    });
+    try {
+      // Delete from Firestore
+      await firestoreDeleteLoad(tenantId || 'default', id);
+
+      logger.info('[TMSContext] Load deleted successfully', {
+        tenantId,
+        loadId: id,
+        loadNumber: load.loadNumber,
+      });
+
+    } catch (error) {
+      // Rollback all optimistic updates
+      setLoads(prev => [...prev, load]);
+      setInvoices(originalInvoices);
+      setSettlements(originalSettlements);
+
+      errorHandler.handle(
+        error,
+        {
+          operation: 'delete load',
+          tenantId: tenantId || 'default',
+          userId: authUser?.uid,
+          metadata: { loadId: id, loadNumber: load.loadNumber },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+
+      throw error;
+    }
   };
 
   // Employee functions
   const addEmployee = (input: NewEmployeeInput) => {
     const newEmployee: Employee = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       employeeNumber: input.employeeNumber || input.driverNumber || `EMP-${employees.length + 101}`,
       employeeType: input.employeeType || 'driver', // Default to driver if not specified
       // Set legacy type field based on employeeType
@@ -867,7 +1189,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addTruck = (input: NewTruckInput): string => {
     const newTruck: Truck = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       createdAt: new Date().toISOString(),
     };
     setTrucks([...trucks, newTruck]);
@@ -925,7 +1247,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addTrailer = (input: NewTrailerInput): string => {
     const newTrailer: Trailer = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       createdAt: new Date().toISOString(),
     };
     setTrailers([...trailers, newTrailer]);
@@ -1010,7 +1332,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     const newInvoice: Invoice = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       invoiceNumber: input.invoiceNumber || generateUniqueInvoiceNumber(tenantId, invoices),
       createdAt: new Date().toISOString(),
     };
@@ -1094,7 +1416,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addSettlement = (input: Omit<Settlement, 'id'>): string => {
     const newSettlement: Settlement = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       settlementNumber: input.settlementNumber || `ST-${new Date().getFullYear()}-${settlements.length + 1001}`,
       createdAt: input.createdAt || new Date().toISOString(),
     };
@@ -1160,7 +1482,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const addExpense = (input: NewExpenseInput) => {
     const newExpense: Expense = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       category: input.category || input.type,
       createdAt: new Date().toISOString(),
     };
@@ -1190,7 +1512,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     const newCompany: FactoringCompany = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       searchKey,
       prefixes,
       aliases: aliases.length > 0 ? aliases : undefined,
@@ -1246,7 +1568,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     const newBroker: Broker = {
       ...input,
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateShortId(),
       searchKey,
       prefixes,
       createdAt: new Date().toISOString(),
@@ -1304,6 +1626,488 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
 
     setBrokers(prev => prev.filter(broker => broker.id !== id));
     firestoreDeleteBroker(tenantId || 'default', id).catch(e => console.error('Failed to delete broker:', e));
+  };
+
+  // Customer functions (unified customer database)
+  const addCustomer = (input: NewCustomerInput) => {
+    const searchKey = generateSearchKey(input.name, input.aliases || []);
+    const prefixes = generatePrefixes(searchKey);
+
+    const newCustomer: CustomerEntity = {
+      ...input,
+      id: generateShortId(),
+      searchKey,
+      prefixes,
+      isActive: input.isActive !== false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setCustomers(prev => [newCustomer, ...prev]);
+    saveCustomer(tenantId || 'default', newCustomer).catch(e => console.error('Failed to save customer:', e));
+  };
+
+  const updateCustomer = (id: string, updates: Partial<CustomerEntity>) => {
+    let updatedCustomer: CustomerEntity | null = null;
+
+    setCustomers(prev => prev.map(customer => {
+      if (customer.id === id) {
+        const updated = { ...customer, ...updates, updatedAt: new Date().toISOString() };
+        // Recalculate searchKey and prefixes if name or aliases changed
+        if (updates.name || updates.aliases) {
+          updated.searchKey = generateSearchKey(updated.name, updated.aliases || []);
+          updated.prefixes = generatePrefixes(updated.searchKey);
+        }
+        updatedCustomer = updated;
+        return updated;
+      }
+      return customer;
+    }));
+
+    if (updatedCustomer) {
+      saveCustomer(tenantId || 'default', updatedCustomer).catch(e => console.error('Failed to update customer:', e));
+    }
+  };
+
+  const deleteCustomer = (id: string) => {
+    const customer = customers.find(c => c.id === id);
+    if (!customer) return;
+
+    // Check for linked loads (if customerId is used)
+    const linkedLoads = loads.filter(load => load.customerId === id);
+
+    if (linkedLoads.length > 0) {
+      const message =
+        `${customer.name} is used in ${linkedLoads.length} load(s).\n\n` +
+        'Deleting will unlink this customer from these loads.\n' +
+        'Continue?';
+
+      if (!window.confirm(message)) {
+        return;
+      }
+
+      // Unlink customer from loads
+      linkedLoads.forEach(load => {
+        updateLoad(load.id, { customerId: undefined });
+      });
+    }
+
+    setCustomers(prev => prev.filter(c => c.id !== id));
+    firestoreDeleteCustomer(tenantId || 'default', id).catch(e => console.error('Failed to delete customer:', e));
+  };
+
+  // ============================================================================
+  // Planned Load functions
+  // ============================================================================
+
+  const generatePlannedLoadNumber = (): string => {
+    const prefix = 'PL';
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 5).toUpperCase();
+    return `${prefix}-${timestamp}-${random}`;
+  };
+
+  const addPlannedLoad = (input: NewPlannedLoadInput): string => {
+    const now = new Date().toISOString();
+    const id = generateShortId();
+    const systemLoadNumber = input.systemLoadNumber || generatePlannedLoadNumber();
+
+    const newPlannedLoad: PlannedLoad = {
+      ...input,
+      id,
+      systemLoadNumber,
+      status: 'planned',
+      currentStep: 1,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: authUser?.uid || 'system',
+    };
+
+    setPlannedLoads(prev => [newPlannedLoad, ...prev]);
+    savePlannedLoad(tenantId || 'default', newPlannedLoad).catch(e => console.error('Failed to save planned load:', e));
+
+    logger.info('[TMSContext] Planned load created', { id, systemLoadNumber });
+    return id;
+  };
+
+  const updatePlannedLoad = (id: string, updates: Partial<PlannedLoad>) => {
+    let updatedPlannedLoad: PlannedLoad | null = null;
+
+    setPlannedLoads(prev => prev.map(pl => {
+      if (pl.id === id) {
+        const updated = { ...pl, ...updates, updatedAt: new Date().toISOString() };
+        updatedPlannedLoad = updated;
+        return updated;
+      }
+      return pl;
+    }));
+
+    if (updatedPlannedLoad) {
+      savePlannedLoad(tenantId || 'default', updatedPlannedLoad).catch(e => console.error('Failed to update planned load:', e));
+    }
+  };
+
+  const deletePlannedLoad = (id: string) => {
+    const plannedLoad = plannedLoads.find(pl => pl.id === id);
+    if (!plannedLoad) return;
+
+    // Don't delete if already dispatched
+    if (plannedLoad.status !== 'planned') {
+      alert('Cannot delete a planned load that has already been dispatched.');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete planned load ${plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber}?`)) {
+      return;
+    }
+
+    setPlannedLoads(prev => prev.filter(pl => pl.id !== id));
+    firestoreDeletePlannedLoad(tenantId || 'default', id).catch(e => console.error('Failed to delete planned load:', e));
+  };
+
+  // ============================================================================
+  // Trip functions
+  // ============================================================================
+
+  const generateTripNumber = (): string => {
+    const prefix = 'T';
+    const count = trips.length + 1;
+    return `${prefix}${String(count).padStart(5, '0')}`;
+  };
+
+  const addTrip = (input: NewTripInput): string => {
+    const now = new Date().toISOString();
+    const id = generateShortId();
+    const tripNumber = input.tripNumber || generateTripNumber();
+
+    // Determine trip status based on dates
+    const today = new Date().toISOString().split('T')[0];
+    let status: TripStatus = 'future';
+    if (input.pickupDate <= today && input.deliveryDate >= today) {
+      status = 'in_progress';
+    } else if (input.deliveryDate < today) {
+      status = 'past';
+    }
+
+    const newTrip: Trip = {
+      ...input,
+      id,
+      tripNumber,
+      status,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: authUser?.uid || 'system',
+    };
+
+    setTrips(prev => [newTrip, ...prev]);
+    saveTrip(tenantId || 'default', newTrip).catch(e => console.error('Failed to save trip:', e));
+
+    logger.info('[TMSContext] Trip created', { id, tripNumber });
+    return id;
+  };
+
+  const updateTrip = (id: string, updates: Partial<Trip>) => {
+    let updatedTrip: Trip | null = null;
+
+    setTrips(prev => prev.map(trip => {
+      if (trip.id === id) {
+        const updated = { ...trip, ...updates, updatedAt: new Date().toISOString() };
+        updatedTrip = updated;
+        return updated;
+      }
+      return trip;
+    }));
+
+    if (updatedTrip) {
+      saveTrip(tenantId || 'default', updatedTrip).catch(e => console.error('Failed to update trip:', e));
+
+      // Sync trip changes to associated loads
+      // Find all loads that belong to this trip and update relevant fields
+      const loadUpdates: Partial<Load> = {};
+      const now = new Date().toISOString();
+
+      // Sync driver assignment
+      if (updates.driverId !== undefined) loadUpdates.driverId = updates.driverId;
+      if (updates.driverName !== undefined) loadUpdates.driverName = updates.driverName;
+
+      // Sync equipment
+      if (updates.truckId !== undefined) loadUpdates.truckId = updates.truckId;
+      if (updates.truckNumber !== undefined) loadUpdates.truckNumber = updates.truckNumber;
+      if (updates.trailerId !== undefined) loadUpdates.trailerId = updates.trailerId;
+      if (updates.trailerNumber !== undefined) loadUpdates.trailerNumber = updates.trailerNumber;
+
+      // Sync trip number if changed
+      if (updates.tripNumber !== undefined) loadUpdates.tripNumber = updates.tripNumber;
+
+      // Sync dates
+      if (updates.pickupDate !== undefined) loadUpdates.pickupDate = updates.pickupDate;
+      if (updates.deliveryDate !== undefined) loadUpdates.deliveryDate = updates.deliveryDate;
+
+      // Only update loads if there are relevant changes
+      if (Object.keys(loadUpdates).length > 0) {
+        loadUpdates.updatedAt = now;
+
+        // Update all loads associated with this trip
+        setLoads(prev => prev.map(load => {
+          if (load.tripId === id) {
+            const updatedLoad = { ...load, ...loadUpdates };
+            // Persist the updated load
+            saveLoad(tenantId || 'default', updatedLoad).catch(e =>
+              console.error('Failed to sync load with trip update:', e)
+            );
+            return updatedLoad;
+          }
+          return load;
+        }));
+
+        logger.info('[TMSContext] Synced trip changes to associated loads', {
+          tripId: id,
+          tripNumber: updatedTrip.tripNumber,
+          updatedFields: Object.keys(loadUpdates),
+        });
+      }
+    }
+  };
+
+  const deleteTrip = (id: string) => {
+    const trip = trips.find(t => t.id === id);
+    if (!trip) return;
+
+    // Check if trip has loads
+    if (trip.plannedLoadIds.length > 0) {
+      if (!window.confirm(`Trip ${trip.tripNumber} has ${trip.plannedLoadIds.length} load(s). Deleting will unlink these loads. Continue?`)) {
+        return;
+      }
+
+      // Unlink loads from trip
+      trip.plannedLoadIds.forEach(loadId => {
+        updatePlannedLoad(loadId, {
+          tripId: undefined,
+          tripNumber: undefined,
+          status: 'planned',
+          currentStep: 1,
+        });
+      });
+    }
+
+    setTrips(prev => prev.filter(t => t.id !== id));
+    firestoreDeleteTrip(tenantId || 'default', id).catch(e => console.error('Failed to delete trip:', e));
+  };
+
+  /**
+   * Dispatch planned loads to a trip.
+   * This is the key workflow function that moves loads from "planned" to "dispatched".
+   *
+   * Workflow: Load Planner → Trips → Loads → Dispatch Board
+   *
+   * When a trip is created from planned loads:
+   * 1. Creates a Trip record
+   * 2. Updates PlannedLoad status to 'dispatched'
+   * 3. Creates Load entries for the Loads page and Dispatch Board
+   */
+  const dispatchPlannedLoadsToTrip = async (plannedLoadIds: string[], tripData: NewTripInput): Promise<string> => {
+    // Validate all loads exist and are in "planned" status
+    const loadsToDispatch = plannedLoadIds.map(id => plannedLoads.find(pl => pl.id === id)).filter(Boolean) as PlannedLoad[];
+
+    if (loadsToDispatch.length !== plannedLoadIds.length) {
+      throw new Error('One or more planned loads not found');
+    }
+
+    const nonPlannedLoads = loadsToDispatch.filter(pl => pl.status !== 'planned');
+    if (nonPlannedLoads.length > 0) {
+      throw new Error(`Cannot dispatch loads that are not in "planned" status: ${nonPlannedLoads.map(pl => pl.systemLoadNumber).join(', ')}`);
+    }
+
+    // Create the trip
+    const tripId = addTrip({
+      ...tripData,
+      plannedLoadIds,
+    });
+
+    const tripNumber = trips.find(t => t.id === tripId)?.tripNumber || tripData.tripNumber || '';
+
+    // Update each planned load and create Load entries
+    const now = new Date().toISOString();
+    for (const plannedLoad of loadsToDispatch) {
+      // Update the PlannedLoad status
+      updatePlannedLoad(plannedLoad.id, {
+        status: 'dispatched',
+        currentStep: 2,
+        tripId,
+        tripNumber,
+        driverId: tripData.driverId,
+        driverName: tripData.driverName,
+        updatedAt: now,
+      });
+
+      // Create a Load entry for the Loads page and Dispatch Board
+      // Extract first pickup and delivery info
+      const firstPickup = plannedLoad.pickups?.[0];
+      const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
+
+      const newLoad: Load = {
+        id: generateShortId(),
+        loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
+        status: LoadStatus.Dispatched,
+
+        // Customer/Broker info
+        customerName: plannedLoad.customer?.name || '',
+        customerId: plannedLoad.customerId,
+        brokerName: plannedLoad.customer?.name || '',
+
+        // Driver assignment
+        driverId: tripData.driverId,
+        driverName: tripData.driverName,
+
+        // Equipment
+        truckId: tripData.truckId,
+        truckNumber: tripData.truckNumber,
+        trailerId: tripData.trailerId,
+        trailerNumber: tripData.trailerNumber,
+
+        // Route - from first pickup to last delivery
+        originCity: firstPickup?.shipper?.city || tripData.fromCity || '',
+        originState: firstPickup?.shipper?.state || tripData.fromState || '',
+        destCity: lastDelivery?.consignee?.city || tripData.toCity || '',
+        destState: lastDelivery?.consignee?.state || tripData.toState || '',
+
+        // Dates
+        pickupDate: firstPickup?.pickupDate || tripData.pickupDate,
+        deliveryDate: lastDelivery?.deliveryDate || tripData.deliveryDate,
+
+        // Financial
+        rate: plannedLoad.fees?.primaryFee || 0,
+        miles: plannedLoad.totalMiles || tripData.totalMiles || 0,
+        ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
+          ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
+          : 0,
+        grandTotal: plannedLoad.totalCharge || plannedLoad.fees?.primaryFee || 0,
+
+        // FSC
+        hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
+        fscAmount: plannedLoad.fees?.fscAmount || 0,
+
+        // Accessorials
+        hasDetention: (plannedLoad.fees?.accessoryFees?.detention || 0) > 0,
+        detentionAmount: plannedLoad.fees?.accessoryFees?.detention || 0,
+        hasLumper: (plannedLoad.fees?.accessoryFees?.lumper || 0) > 0,
+        lumperAmount: plannedLoad.fees?.accessoryFees?.lumper || 0,
+        totalAccessorials:
+          (plannedLoad.fees?.accessoryFees?.detention || 0) +
+          (plannedLoad.fees?.accessoryFees?.lumper || 0) +
+          (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
+          (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
+
+        // Document numbers
+        bolNumber: firstPickup?.bolNumber,
+
+        // Trip Linking
+        tripId,
+        tripNumber,
+
+        // Metadata
+        createdAt: now,
+        createdBy: authUser?.uid || 'system',
+
+        // Status history
+        statusHistory: [{
+          status: LoadStatus.Dispatched,
+          timestamp: now,
+          changedBy: authUser?.displayName || authUser?.email || 'system',
+          changedByRole: 'dispatcher',
+          changedByUserId: authUser?.uid,
+          note: `Dispatched from Trip ${tripNumber}`,
+        }],
+
+        // Notes
+        notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${tripNumber}`,
+      };
+
+      // Add the load to state and persist
+      setLoads(prev => [newLoad, ...prev]);
+      saveLoad(tenantId || 'default', newLoad).catch(e =>
+        console.error('Failed to save load from dispatch:', e)
+      );
+
+      logger.info('[TMSContext] Load created from planned load dispatch', {
+        loadId: newLoad.id,
+        loadNumber: newLoad.loadNumber,
+        plannedLoadId: plannedLoad.id,
+        tripId,
+      });
+    }
+
+    logger.info('[TMSContext] Planned loads dispatched to trip', {
+      tripId,
+      tripNumber,
+      loadCount: plannedLoadIds.length,
+      loadIds: plannedLoadIds,
+    });
+
+    return tripId;
+  };
+
+  /**
+   * Link or unlink a load to/from a trip.
+   * When linking, copies trip data (driver, equipment, dates) to the load.
+   * When unlinking (tripId = null), clears the trip reference from the load.
+   */
+  const linkLoadToTrip = (loadId: string, tripId: string | null) => {
+    const load = loads.find(l => l.id === loadId);
+    if (!load) {
+      console.error('Load not found:', loadId);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let loadUpdates: Partial<Load> = { updatedAt: now };
+
+    if (tripId === null) {
+      // Unlink from trip
+      loadUpdates.tripId = undefined;
+      loadUpdates.tripNumber = undefined;
+      logger.info('[TMSContext] Load unlinked from trip', { loadId, previousTripId: load.tripId });
+    } else {
+      // Link to trip
+      const trip = trips.find(t => t.id === tripId);
+      if (!trip) {
+        console.error('Trip not found:', tripId);
+        return;
+      }
+
+      // Copy all relevant trip data to the load
+      loadUpdates = {
+        ...loadUpdates,
+        tripId: trip.id,
+        tripNumber: trip.tripNumber,
+        driverId: trip.driverId,
+        driverName: trip.driverName,
+        truckId: trip.truckId,
+        truckNumber: trip.truckNumber,
+        trailerId: trip.trailerId,
+        trailerNumber: trip.trailerNumber,
+        pickupDate: trip.pickupDate,
+        deliveryDate: trip.deliveryDate,
+      };
+
+      logger.info('[TMSContext] Load linked to trip', {
+        loadId,
+        loadNumber: load.loadNumber,
+        tripId: trip.id,
+        tripNumber: trip.tripNumber,
+      });
+    }
+
+    // Update the load
+    setLoads(prev => prev.map(l => {
+      if (l.id === loadId) {
+        const updatedLoad = { ...l, ...loadUpdates };
+        saveLoad(tenantId || 'default', updatedLoad).catch(e =>
+          console.error('Failed to save load after trip link:', e)
+        );
+        return updatedLoad;
+      }
+      return l;
+    }));
   };
 
   // Legacy dispatcher functions (dispatchers are now employees)
@@ -1385,11 +2189,15 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       expenses,
       factoringCompanies,
       brokers,
+      customers,
       dispatchers, // Computed: filtered employees
+      plannedLoads,
+      trips,
       tasks,
       kpis,
       addLoad,
       updateLoad,
+      updateLoadStatus,
       deleteLoad,
       addEmployee,
       updateEmployee,
@@ -1418,14 +2226,32 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
       addBroker,
       updateBroker,
       deleteBroker,
+      addCustomer,
+      updateCustomer,
+      deleteCustomer,
       addDispatcher, // Legacy
       updateDispatcher, // Legacy
       deleteDispatcher, // Legacy
+      // Planned Load management
+      addPlannedLoad,
+      updatePlannedLoad,
+      deletePlannedLoad,
+      // Trip management
+      addTrip,
+      updateTrip,
+      deleteTrip,
+      dispatchPlannedLoadsToTrip,
+      linkLoadToTrip,
+      // Task management
       updateTaskStatus,
       completeTask: completeTaskById,
       deleteTaskById,
       searchTerm,
-      setSearchTerm
+      setSearchTerm,
+      // Cross-page navigation state
+      pendingDispatchLoadIds,
+      setPendingDispatchLoadIds,
+      clearPendingDispatchLoadIds
     }}>
       {children}
     </TMSContext.Provider>
@@ -1451,7 +2277,10 @@ export const useTMS = () => {
         expenses: [],
         factoringCompanies: [],
         brokers: [],
+        customers: [],
         dispatchers: [],
+        plannedLoads: [],
+        trips: [],
         tasks: [],
         kpis: {
           revenue: 0,
@@ -1461,6 +2290,7 @@ export const useTMS = () => {
         },
         addLoad: () => { },
         updateLoad: () => { },
+        updateLoadStatus: async () => { },
         deleteLoad: () => { },
         addEmployee: () => { },
         updateEmployee: () => { },
@@ -1489,9 +2319,23 @@ export const useTMS = () => {
         addBroker: () => { },
         updateBroker: () => { },
         deleteBroker: () => { },
+        addCustomer: () => { },
+        updateCustomer: () => { },
+        deleteCustomer: () => { },
         addDispatcher: () => { },
         updateDispatcher: () => { },
         deleteDispatcher: () => { },
+        // Planned Load management
+        addPlannedLoad: () => '',
+        updatePlannedLoad: () => { },
+        deletePlannedLoad: () => { },
+        // Trip management
+        addTrip: () => '',
+        updateTrip: () => { },
+        deleteTrip: () => { },
+        dispatchPlannedLoadsToTrip: async () => '',
+        linkLoadToTrip: () => { },
+        // Task management
         updateTaskStatus: () => { },
         completeTask: () => { },
         deleteTaskById: () => { },

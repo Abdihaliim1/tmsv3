@@ -9,6 +9,7 @@
  */
 
 import { Invoice, Payment, InvoiceStatus } from '../types';
+import { generatePaymentId } from '../utils/idGenerator';
 
 /**
  * Validate payment amount against invoice
@@ -117,7 +118,7 @@ export function addPaymentToInvoice(
   // Create payment record
   const paymentRecord: Payment = {
     ...payment,
-    id: `pay-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: generatePaymentId(),
     invoiceId: invoice.id,
     createdAt: new Date().toISOString()
   };

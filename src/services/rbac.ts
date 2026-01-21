@@ -32,6 +32,7 @@ const PERMISSIONS: Record<UserRole, RolePermissions> = {
       { resource: 'reports', actions: ['read'] },
       { resource: 'settings', actions: ['read', 'update'] },
       { resource: 'tasks', actions: ['read', 'update', 'delete'] },
+      { resource: 'admin', actions: ['access', 'manage_tenants', 'impersonate'] },
     ],
   },
   dispatcher: {
@@ -108,9 +109,6 @@ export function getRolePermissions(role: UserRole): Permission[] {
  * Check if user can access a page/route
  */
 export function canAccessPage(role: UserRole, page: string): boolean {
-  // Admin can access everything
-  if (role === 'admin') return true;
-
   // Map pages to resources
   const pageResourceMap: Record<string, string> = {
     'Dashboard': 'loads',
@@ -124,10 +122,32 @@ export function canAccessPage(role: UserRole, page: string): boolean {
     'Tasks': 'tasks',
     'Settings': 'settings',
     'Import': 'loads',
+    'AdminConsole': 'admin',
+    // New pages for restructured navigation
+    'LoadPlanner': 'loads',
+    'Trips': 'loads',
+    'Invoices': 'invoices',
+    'ReportsCombined': 'reports',
+    'SettingsMore': 'settings',
+    'DispatchBoard': 'loads',
+    'SelectCompany': 'loads',
   };
 
   const resource = pageResourceMap[page] || page.toLowerCase();
+
+  // AdminConsole requires explicit admin access
+  if (page === 'AdminConsole') {
+    return hasPermission(role, 'admin', 'access');
+  }
+
   return hasPermission(role, resource, 'read');
+}
+
+/**
+ * Check if user is a platform admin
+ */
+export function isPlatformAdmin(role: UserRole): boolean {
+  return hasPermission(role, 'admin', 'access');
 }
 
 /**

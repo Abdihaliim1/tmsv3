@@ -1,15 +1,57 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useTMS } from '../context/TMSContext';
-import { Task, TaskStatus, TaskPriority } from '../types';
-import { CheckCircle2, Circle, AlertCircle, XCircle, Clock, Filter, Search } from 'lucide-react';
+import { useTenant } from '../context/TenantContext';
+import { Task, TaskStatus, TaskPriority, WorkflowRule } from '../types';
+import { CheckCircle2, Circle, AlertCircle, XCircle, Clock, Filter, Search, Zap, ToggleLeft, ToggleRight, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import { useDebounce } from '../utils/debounce';
+import { loadWorkflowRules, saveWorkflowRules, DEFAULT_WORKFLOW_RULES } from '../services/workflow/workflowRules';
 
 const Tasks: React.FC = () => {
   const { tasks, updateTaskStatus, completeTask, deleteTaskById, loads, invoices } = useTMS();
+  const { activeTenantId } = useTenant();
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
+  const [showAutomation, setShowAutomation] = useState(false);
+  const [workflowRules, setWorkflowRules] = useState<WorkflowRule[]>([]);
+  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
+
+  // Load workflow rules
+  useEffect(() => {
+    const rules = loadWorkflowRules(activeTenantId);
+    setWorkflowRules(rules);
+  }, [activeTenantId]);
+
+  // Toggle rule enabled/disabled
+  const toggleRule = (ruleId: string) => {
+    const updatedRules = workflowRules.map(rule =>
+      rule.id === ruleId ? { ...rule, isEnabled: !rule.isEnabled } : rule
+    );
+    setWorkflowRules(updatedRules);
+    saveWorkflowRules(activeTenantId, updatedRules);
+  };
+
+  // Reset to default rules
+  const resetToDefaults = () => {
+    if (confirm('Reset all workflow rules to defaults?')) {
+      setWorkflowRules(DEFAULT_WORKFLOW_RULES);
+      saveWorkflowRules(activeTenantId, DEFAULT_WORKFLOW_RULES);
+    }
+  };
+
+  // Toggle expanded rule
+  const toggleExpanded = (ruleId: string) => {
+    setExpandedRules(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(ruleId)) {
+        newSet.delete(ruleId);
+      } else {
+        newSet.add(ruleId);
+      }
+      return newSet;
+    });
+  };
 
   const filteredTasks = useMemo(() => {
     let filtered = tasks;
@@ -126,7 +168,135 @@ const Tasks: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">Tasks</h1>
           <p className="text-gray-600 mt-1">Manage workflow tasks and follow-ups</p>
         </div>
+        <button
+          onClick={() => setShowAutomation(!showAutomation)}
+          className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
+            showAutomation
+              ? 'bg-blue-600 text-white'
+              : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <Zap size={18} />
+          Automation Rules
+          {showAutomation ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
       </div>
+
+      {/* Automation Rules Panel */}
+      {showAutomation && (
+        <div className="bg-white rounded-lg shadow-lg border border-blue-200">
+          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-blue-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Workflow Automation Rules</h2>
+            </div>
+            <button
+              onClick={resetToDefaults}
+              className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+            >
+              <Settings size={14} />
+              Reset to Defaults
+            </button>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {workflowRules.map((rule) => (
+              <div key={rule.id} className="p-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => toggleRule(rule.id)}
+                        className="focus:outline-none"
+                      >
+                        {rule.isEnabled ? (
+                          <ToggleRight className="w-8 h-8 text-green-600" />
+                        ) : (
+                          <ToggleLeft className="w-8 h-8 text-gray-400" />
+                        )}
+                      </button>
+                      <div>
+                        <h3 className={`font-medium ${rule.isEnabled ? 'text-gray-900' : 'text-gray-500'}`}>
+                          {rule.name}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          Trigger: <span className="font-mono bg-gray-100 px-1 rounded">{rule.eventType}</span>
+                          {rule.filter?.loadStatusIn && (
+                            <span className="ml-2">
+                              Status: {rule.filter.loadStatusIn.join(', ')}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => toggleExpanded(rule.id)}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    {expandedRules.has(rule.id) ? (
+                      <ChevronUp size={20} />
+                    ) : (
+                      <ChevronDown size={20} />
+                    )}
+                  </button>
+                </div>
+
+                {/* Expanded Actions */}
+                {expandedRules.has(rule.id) && (
+                  <div className="mt-4 ml-11 space-y-3">
+                    <p className="text-sm font-medium text-gray-700">Actions:</p>
+                    {rule.actions.map((action, index) => (
+                      <div
+                        key={index}
+                        className="bg-gray-50 rounded-lg p-3 border border-gray-200"
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${
+                            action.priority === 'urgent' ? 'bg-red-100 text-red-700' :
+                            action.priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                            action.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-blue-100 text-blue-700'
+                          }`}>
+                            {action.priority}
+                          </span>
+                          <span className="font-medium text-gray-900">{action.title}</span>
+                        </div>
+                        {action.description && (
+                          <p className="text-sm text-gray-600">{action.description}</p>
+                        )}
+                        <div className="flex flex-wrap gap-2 mt-2 text-xs text-gray-500">
+                          {action.dueOffsetMinutes && (
+                            <span>Due: {action.dueOffsetMinutes < 60
+                              ? `${action.dueOffsetMinutes}m`
+                              : action.dueOffsetMinutes < 1440
+                                ? `${Math.round(action.dueOffsetMinutes / 60)}h`
+                                : `${Math.round(action.dueOffsetMinutes / 1440)}d`
+                            }</span>
+                          )}
+                          {action.assignTo && <span>Assign to: {action.assignTo}</span>}
+                          {action.tags && action.tags.length > 0 && (
+                            <span>Tags: {action.tags.join(', ')}</span>
+                          )}
+                          {action.blockers && action.blockers.length > 0 && (
+                            <span className="text-red-600">Blocked by: {action.blockers.join(', ')}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
+            <p className="text-sm text-gray-600">
+              <Zap className="w-4 h-4 inline mr-1 text-blue-600" />
+              {workflowRules.filter(r => r.isEnabled).length} of {workflowRules.length} rules enabled.
+              Tasks are automatically created when workflow events occur.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">

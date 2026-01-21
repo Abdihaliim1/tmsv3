@@ -1,14 +1,16 @@
 
 import React, { useState, useMemo } from 'react';
-import { 
-  DollarSign, 
-  Truck, 
-  Users, 
-  TrendingUp, 
+import {
+  DollarSign,
+  Truck,
+  Users,
+  TrendingUp,
   MoreHorizontal,
   CheckSquare,
   AlertCircle,
-  Clock
+  Clock,
+  Plus,
+  Calendar
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -311,7 +313,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           <p className="text-slate-500 mt-1">Welcome back, here's what's happening today.</p>
         </div>
         <div className="flex gap-3">
-          <button 
+          <button
             onClick={() => {
               if (onNavigate) {
                 onNavigate('Reports' as PageType);
@@ -321,12 +323,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           >
             View Reports
           </button>
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
+          <button
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate('LoadPlanner' as PageType);
+              }
+            }}
             className="btn-primary px-4 py-2 rounded-lg font-medium shadow-sm transition-colors flex items-center gap-2"
           >
-            <Truck size={18} />
-            <span>New Load</span>
+            <Plus size={18} />
+            <span>Add Planned Load</span>
           </button>
         </div>
       </div>

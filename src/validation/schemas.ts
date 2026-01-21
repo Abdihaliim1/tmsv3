@@ -178,9 +178,9 @@ export function safeValidate<T>(
  * @returns Array of error messages
  */
 export function getValidationErrors(error: z.ZodError): string[] {
-  return error.errors.map(err => {
-    const path = err.path.join('.');
-    return path ? `${path}: ${err.message}` : err.message;
+  return error.issues.map(issue => {
+    const path = issue.path.join('.');
+    return path ? `${path}: ${issue.message}` : issue.message;
   });
 }
 

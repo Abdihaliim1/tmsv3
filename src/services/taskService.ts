@@ -8,6 +8,7 @@
  */
 
 import { Load, Invoice, LoadStatus, Task, NewTaskInput } from '../types';
+import { generateTaskId as generateId } from '../utils/idGenerator';
 
 /**
  * Create tasks for a load based on its status
@@ -108,7 +109,7 @@ export function createTasksForInvoice(invoice: Invoice): NewTaskInput[] {
  * Generate task ID
  */
 export function generateTaskId(): string {
-  return `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return generateId();
 }
 
 

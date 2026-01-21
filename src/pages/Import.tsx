@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Download, X, CheckCircle, AlertCircle, Clock, FileText, Database, Cloud, BarChart3 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Load, Employee, Expense, Truck, LoadStatus, NewLoadInput, NewEmployeeInput, NewExpenseInput, NewTruckInput } from '../types';
+import { Load, Employee, Expense, Truck, LoadStatus, NewLoadInput, NewEmployeeInput, NewExpenseInput, NewTruckInput, NewBrokerInput } from '../types';
+import { generateLoadNumber } from '../utils/idGenerator';
 
 interface ImportHistory {
   id: string;
@@ -19,7 +20,7 @@ interface FieldMapping {
 }
 
 const Import: React.FC = () => {
-  const { loads, employees, expenses, trucks, addLoad, addEmployee, addExpense, addTruck } = useTMS();
+  const { loads, employees, expenses, trucks, brokers, addLoad, addEmployee, addExpense, addTruck, addBroker } = useTMS();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [dataType, setDataType] = useState<'loads' | 'drivers' | 'customers' | 'expenses' | 'fleet'>('loads');
   const [skipDuplicates, setSkipDuplicates] = useState(false);
@@ -164,6 +165,15 @@ const Import: React.FC = () => {
         date: ['date', 'expensedate', 'transactiondate'],
         description: ['description', 'desc', 'notes', 'memo']
       },
+      customers: {
+        name: ['name', 'customername', 'companyname', 'brokername'],
+        address: ['address', 'streetaddress', 'street'],
+        city: ['city'],
+        state: ['state'],
+        zipCode: ['zip', 'zipcode', 'postalcode'],
+        phone: ['phone', 'phonenumber', 'telephone'],
+        email: ['email', 'emailaddress']
+      },
       fleet: {
         truckNumber: ['trucknumber', 'unitnumber', 'truck'],
         make: ['make', 'manufacturer'],
@@ -234,7 +244,7 @@ const Import: React.FC = () => {
   const importRow = async (type: string, row: any, skipDup: boolean): Promise<string> => {
     try {
       if (type === 'loads') {
-        const loadNumber = row.loadNumber || `L${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const loadNumber = row.loadNumber || generateLoadNumber();
         
         if (skipDup && loads.find(l => l.loadNumber === loadNumber)) {
           return 'warning';
@@ -296,6 +306,28 @@ const Import: React.FC = () => {
 
         addExpense(newExpense);
         return 'success';
+      } else if (type === 'customers') {
+        if (!row.name) {
+          return 'Missing required field: name';
+        }
+
+        if (skipDup && brokers.find(b => b.name.toLowerCase() === row.name.toLowerCase())) {
+          return 'warning';
+        }
+
+        const newBroker: NewBrokerInput = {
+          name: row.name,
+          address: row.address || '',
+          city: row.city || '',
+          state: row.state || '',
+          zipCode: row.zipCode || '',
+          phone: row.phone || '',
+          email: row.email || '',
+          notes: row.notes || ''
+        };
+
+        addBroker(newBroker);
+        return 'success';
       } else if (type === 'fleet') {
         if (!row.truckNumber) {
           return 'Missing required field: truckNumber';
@@ -306,14 +338,16 @@ const Import: React.FC = () => {
         }
 
         const newTruck: NewTruckInput = {
-          number: row.truckNumber,
+          truckNumber: row.truckNumber,
+          number: row.truckNumber, // Alias
           licensePlate: row.licensePlate || '',
           make: row.make || '',
           model: row.model || '',
           year: parseInt(row.year || '0') || 0,
           vin: row.vin || '',
           status: 'available',
-          ownership: 'owned'
+          ownerType: 'owned',
+          ownership: 'owned' // Alias
         };
 
         addTruck(newTruck);
@@ -411,6 +445,7 @@ const Import: React.FC = () => {
       loads: [["Load Number", "Origin City", "Origin State", "Destination City", "Destination State", "Rate", "Miles", "Customer Name"]],
       drivers: [["First Name", "Last Name", "Phone", "Email", "Employee Type"]],
       expenses: [["Type", "Amount", "Date", "Description"]],
+      customers: [["Name", "Address", "City", "State", "Zip Code", "Phone", "Email"]],
       fleet: [["Truck Number", "Make", "Model", "Year", "VIN"]]
     };
 
@@ -511,6 +546,7 @@ const Import: React.FC = () => {
               >
                 <option value="loads">Loads</option>
                 <option value="drivers">Drivers</option>
+                <option value="customers">Customers / Brokers</option>
                 <option value="expenses">Expenses</option>
                 <option value="fleet">Fleet</option>
               </select>

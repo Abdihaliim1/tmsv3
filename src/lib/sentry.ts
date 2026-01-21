@@ -1,6 +1,6 @@
 /**
  * Sentry Error Monitoring Integration
- * 
+ *
  * Provides error tracking and monitoring for production.
  * Set VITE_SENTRY_DSN in your .env file to enable.
  */
@@ -9,7 +9,7 @@ import * as Sentry from "@sentry/react";
 
 export function initSentry() {
   const dsn = import.meta.env.VITE_SENTRY_DSN;
-  
+
   if (!dsn) {
     // Only log in development to reduce console noise in production
     if (import.meta.env.DEV) {
@@ -23,16 +23,15 @@ export function initSentry() {
       dsn: dsn,
       environment: import.meta.env.MODE || 'development',
       integrations: [
-        new Sentry.BrowserTracing({
-          // Set tracing origins to track performance
-          tracePropagationTargets: ["localhost", /^https:\/\/.*\.firebaseapp\.com/],
-        }),
-        new Sentry.Replay({
+        Sentry.browserTracingIntegration(),
+        Sentry.replayIntegration({
           // Session replay for debugging
           maskAllText: true,
           blockAllMedia: true,
         }),
       ],
+      // Set tracing origins to track performance
+      tracePropagationTargets: ["localhost", /^https:\/\/.*\.firebaseapp\.com/],
       // Performance Monitoring
       tracesSampleRate: import.meta.env.MODE === 'production' ? 0.1 : 1.0, // 10% in prod, 100% in dev
       // Session Replay
@@ -47,7 +46,7 @@ export function initSentry() {
           const error = hint.originalException;
           if (error instanceof Error) {
             // Don't report Firebase permission errors (user doesn't have access)
-            if (error.message.includes('permission-denied') || 
+            if (error.message.includes('permission-denied') ||
                 error.message.includes('Missing or insufficient permissions')) {
               return null;
             }

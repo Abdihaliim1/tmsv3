@@ -106,8 +106,9 @@ const Fleet: React.FC = () => {
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
 
-  const getTrailerTypeLabel = (type: TrailerType) => {
-    const labels = {
+  const getTrailerTypeLabel = (type: TrailerType | string | undefined) => {
+    if (!type) return 'Unknown';
+    const labels: Record<string, string> = {
       'dry_van': 'Dry Van',
       'reefer': 'Reefer',
       'flatbed': 'Flatbed',
@@ -144,52 +145,49 @@ const Fleet: React.FC = () => {
   };
 
   // Create insurance expense when company pays for insurance
-  const createInsuranceExpense = (truckId: string, truckData: Partial<NewTruckInput> & { number: string; monthlyInsuranceCost?: number; insurancePaidBy?: InsurancePaidBy; assignedDriver?: string; ownerOperatorDriverId?: string }) => {
+  const createInsuranceExpense = (truckId: string, truckData: Partial<NewTruckInput>) => {
+    const truckNumber = truckData.number || truckData.truckNumber || 'Unknown';
+
     // Find the driver assigned to this truck
     const driverId = truckData.assignedDriver || truckData.ownerOperatorDriverId;
     if (!driverId) {
-      console.log('[Fleet] No driver assigned to truck, skipping insurance expense creation');
-      return;
+      return; // No driver assigned, skip insurance expense creation
     }
 
     const driver = drivers.find(d => d.id === driverId);
     if (!driver) {
-      console.log('[Fleet] Driver not found, skipping insurance expense creation');
-      return;
+      return; // Driver not found, skip insurance expense creation
     }
 
     // Check if an active insurance expense already exists for this truck
-    const existingExpense = expenses.find(exp => 
-      exp.truckId === truckId && 
+    const existingExpense = expenses.find(exp =>
+      exp.truckId === truckId &&
       exp.type === 'insurance' &&
       exp.paidBy === 'company'
     );
 
-    const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
-    
     if (existingExpense) {
-      // Expense already exists, skip creation
-      console.log(`[Fleet] Insurance expense already exists for truck ${truckData.number}`);
-    } else {
-      // Create new monthly insurance expense
-      const expenseData = {
-        type: 'insurance' as const,
-        category: 'insurance',
-        amount: truckData.monthlyInsuranceCost || 0,
-        description: `Monthly Insurance - Truck ${truckData.number} (${currentMonth})`,
-        driverId: driverId,
-        driverName: `${driver.firstName} ${driver.lastName}`,
-        truckId: truckId,
-        truckNumber: truckData.number,
-        vendor: 'Insurance Provider',
-        paidBy: 'company' as const, // Company pays - this is a company expense
-        status: 'approved' as const,
-        date: new Date().toISOString(),
-      };
-
-      addExpense(expenseData);
-      console.log(`[Fleet] Created insurance expense for truck ${truckData.number}: $${truckData.monthlyInsuranceCost}/month`);
+      return; // Expense already exists, skip creation
     }
+
+    // Create new monthly insurance expense
+    const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+    const expenseData = {
+      type: 'insurance' as const,
+      category: 'insurance',
+      amount: truckData.monthlyInsuranceCost || 0,
+      description: `Monthly Insurance - Truck ${truckNumber} (${currentMonth})`,
+      driverId: driverId,
+      driverName: `${driver.firstName} ${driver.lastName}`,
+      truckId: truckId,
+      truckNumber: truckNumber,
+      vendor: 'Insurance Provider',
+      paidBy: 'company' as const, // Company pays - this is a company expense
+      status: 'approved' as const,
+      date: new Date().toISOString(),
+    };
+
+    addExpense(expenseData);
   };
 
   const calculateTruckProfitability = () => {

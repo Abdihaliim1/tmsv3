@@ -14,6 +14,7 @@ import { useAuth } from './AuthContext';
 interface TenantContextType {
   activeTenantId: string | null;
   activeTenant: Tenant | null;
+  tenant: Tenant | null; // Alias for activeTenant
   memberships: UserMembership[];
   isLoading: boolean;
   error: string | null;
@@ -274,6 +275,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       value={{
         activeTenantId,
         activeTenant,
+        tenant: activeTenant, // Alias for activeTenant
         memberships,
         isLoading,
         error,

@@ -10,6 +10,7 @@
 import { WorkflowEvent, WorkflowRule, Task, TaskPriority } from '../../types';
 import { loadWorkflowRules } from './workflowRules';
 import { createTaskIfNotExists, generateDedupeKey } from './taskService';
+import { generateEventId } from '../../utils/idGenerator';
 // Tenant ID should be passed as parameter
 
 /**
@@ -22,21 +23,23 @@ function matchesRuleFilter(rule: WorkflowRule, event: WorkflowEvent): boolean {
 
   // Check loadStatusIn filter (for LOAD_STATUS_CHANGED events)
   if (rule.filter.loadStatusIn && payload.newStatus) {
-    if (!rule.filter.loadStatusIn.includes(payload.newStatus)) {
+    const newStatus = String(payload.newStatus);
+    if (!rule.filter.loadStatusIn.includes(newStatus)) {
       return false;
     }
   }
 
   // Check customerIdIn filter
   if (rule.filter.customerIdIn && payload.customerId) {
-    if (!rule.filter.customerIdIn.includes(payload.customerId)) {
+    const customerId = String(payload.customerId);
+    if (!rule.filter.customerIdIn.includes(customerId)) {
       return false;
     }
   }
 
   // Check driverTypeIn filter
   if (rule.filter.driverTypeIn && payload.driverType) {
-    const normalized = payload.driverType.toLowerCase().replace('_', '');
+    const normalized = String(payload.driverType).toLowerCase().replace('_', '');
     if (!rule.filter.driverTypeIn.some(dt => normalized.includes(dt))) {
       return false;
     }
@@ -44,7 +47,7 @@ function matchesRuleFilter(rule: WorkflowRule, event: WorkflowEvent): boolean {
 
   // Check requiresFactoring filter
   if (rule.filter.requiresFactoring !== undefined && payload.isFactored !== undefined) {
-    if (rule.filter.requiresFactoring !== payload.isFactored) {
+    if (rule.filter.requiresFactoring !== Boolean(payload.isFactored)) {
       return false;
     }
   }
@@ -165,7 +168,7 @@ function createWorkflowEvent(
   const eventKey = `${type}:${entityType}:${entityId}:${occurredAt}`;
 
   return {
-    id: `event_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: generateEventId(),
     tenantId,
     type,
     entityType,

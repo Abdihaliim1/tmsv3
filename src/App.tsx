@@ -1,30 +1,50 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Layout from './components/Layout';
-import Dashboard from './pages/Dashboard';
-import Loads from './pages/Loads';
-import Drivers from './pages/Drivers';
-import Fleet from './pages/Fleet';
-import Expenses from './pages/Expenses';
-import Settlements from './pages/Settlements';
-import Reports from './pages/Reports';
-import AccountReceivables from './pages/AccountReceivables';
-import Import from './pages/Import';
-import Settings from './pages/Settings';
-import Login from './pages/Login';
-import Tasks from './pages/Tasks';
-import DispatchBoard from './pages/DispatchBoard';
-import AdminConsole from './pages/AdminConsole';
 import ErrorBoundary from './components/ErrorBoundary';
 import AdminModeBanner, { isAdminMode, getAdminViewingTenant, exitAdminMode } from './components/AdminModeBanner';
 import { TMSProvider } from './context/TMSContext';
 import { TenantProvider, useTenant } from './context/TenantContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './components/Toast';
 import { setupGlobalErrorHandlers } from './services/errorLogger';
 import { canAccessPage } from './services/rbac';
 
-export type PageType = 'Dashboard' | 'Loads' | 'DispatchBoard' | 'Drivers' | 'Fleet' | 'Expenses' | 'Settlements' | 'Reports' | 'AccountReceivables' | 'Tasks' | 'Import' | 'Settings' | 'SelectCompany' | 'AdminConsole';
+// Lazy load pages for code splitting - reduces initial bundle size
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Loads = lazy(() => import('./pages/Loads'));
+const Drivers = lazy(() => import('./pages/Drivers'));
+const Fleet = lazy(() => import('./pages/Fleet'));
+const Expenses = lazy(() => import('./pages/Expenses'));
+const Settlements = lazy(() => import('./pages/Settlements'));
+const Reports = lazy(() => import('./pages/Reports'));
+const AccountReceivables = lazy(() => import('./pages/AccountReceivables'));
+const Import = lazy(() => import('./pages/Import'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Login = lazy(() => import('./pages/Login'));
+const Tasks = lazy(() => import('./pages/Tasks'));
+const DispatchBoard = lazy(() => import('./pages/DispatchBoard'));
+const AdminConsole = lazy(() => import('./pages/AdminConsole'));
+const SelectCompany = lazy(() => import('./pages/SelectCompany'));
+// New pages for restructured navigation
+const LoadPlanner = lazy(() => import('./pages/LoadPlanner'));
+const Trips = lazy(() => import('./pages/Trips'));
+const Invoices = lazy(() => import('./pages/Invoices'));
+const ReportsCombined = lazy(() => import('./pages/ReportsCombined'));
+const SettingsMore = lazy(() => import('./pages/SettingsMore'));
+
+// Loading fallback component for Suspense
+const PageLoader = () => (
+  <div className="flex items-center justify-center h-64">
+    <div className="text-center">
+      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
+      <p className="text-slate-500 text-sm">Loading...</p>
+    </div>
+  </div>
+);
+
+export type PageType = 'Dashboard' | 'Loads' | 'DispatchBoard' | 'Drivers' | 'Fleet' | 'Expenses' | 'Settlements' | 'Reports' | 'AccountReceivables' | 'Tasks' | 'Import' | 'Settings' | 'SelectCompany' | 'AdminConsole' | 'LoadPlanner' | 'Trips' | 'Invoices' | 'ReportsCombined' | 'SettingsMore';
 
 // Setup global error handlers
 setupGlobalErrorHandlers();
@@ -162,22 +182,32 @@ function MainAppContent() {
   // MAIN APP RENDER
   // ========================================
   const renderPage = () => {
-    switch (currentPage) {
-      case 'Dashboard': return <Dashboard onNavigate={setCurrentPage} />;
-      case 'Loads': return <Loads />;
-      case 'DispatchBoard': return <DispatchBoard />;
-      case 'Drivers': return <Drivers />;
-      case 'Fleet': return <Fleet />;
-      case 'Expenses': return <Expenses />;
-      case 'Settlements': return <Settlements />;
-      case 'Reports': return <Reports />;
-      case 'AccountReceivables': return <AccountReceivables />;
-      case 'Tasks': return <Tasks />;
-      case 'Import': return <Import />;
-      case 'Settings': return <Settings />;
-      case 'AdminConsole': return <AdminConsole onNavigate={(page) => setCurrentPage(page as PageType)} selectTenant={selectTenant} />;
-      default: return <Dashboard onNavigate={setCurrentPage} />; 
-    }
+    const pageContent = (() => {
+      switch (currentPage) {
+        case 'Dashboard': return <Dashboard onNavigate={setCurrentPage} />;
+        case 'Loads': return <Loads onNavigate={setCurrentPage} />;
+        case 'DispatchBoard': return <DispatchBoard />;
+        case 'Drivers': return <Drivers />;
+        case 'Fleet': return <Fleet />;
+        case 'Expenses': return <Expenses />;
+        case 'Settlements': return <Settlements />;
+        case 'Reports': return <Reports />;
+        case 'AccountReceivables': return <AccountReceivables />;
+        case 'Tasks': return <Tasks />;
+        case 'Import': return <Import />;
+        case 'Settings': return <Settings />;
+        case 'SelectCompany': return <SelectCompany onNavigate={setCurrentPage} />;
+        // New pages for restructured navigation
+        case 'LoadPlanner': return <LoadPlanner onNavigate={setCurrentPage} />;
+        case 'Trips': return <Trips />;
+        case 'Invoices': return <Invoices />;
+        case 'ReportsCombined': return <ReportsCombined />;
+        case 'SettingsMore': return <SettingsMore />;
+        default: return <Dashboard onNavigate={setCurrentPage} />;
+      }
+    })();
+
+    return <Suspense fallback={<PageLoader />}>{pageContent}</Suspense>;
   };
 
   return (
@@ -220,7 +250,11 @@ function AuthGatedContent() {
 
   // Show login if not authenticated
   if (!isAuthenticated) {
-    return <Login />;
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <Login />
+      </Suspense>
+    );
   }
 
   // User is authenticated - show main app with tenant context
@@ -236,9 +270,11 @@ function AuthGatedContent() {
  */
 function App() {
   return (
-    <AuthProvider>
-      <AuthGatedContent />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <AuthGatedContent />
+      </AuthProvider>
+    </ToastProvider>
   );
 }
 

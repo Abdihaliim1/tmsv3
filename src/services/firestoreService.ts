@@ -19,7 +19,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, Broker, Dispatcher } from '../types';
+import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, Broker, Dispatcher, CustomerEntity, PlannedLoad, Trip } from '../types';
 import { logger } from './logger';
 import { errorHandler, ErrorSeverity } from './errorHandler';
 
@@ -35,6 +35,9 @@ const COLLECTIONS = {
   factoringCompanies: 'factoringCompanies',
   brokers: 'brokers',
   dispatchers: 'dispatchers',
+  customers: 'customers',
+  plannedLoads: 'plannedLoads',
+  trips: 'trips',
 } as const;
 
 type CollectionName = keyof typeof COLLECTIONS;
@@ -281,6 +284,9 @@ export const loadExpenses = (tenantId: string) => loadCollection<Expense>(tenant
 export const loadFactoringCompanies = (tenantId: string) => loadCollection<FactoringCompany>(tenantId, 'factoringCompanies');
 export const loadBrokers = (tenantId: string) => loadCollection<Broker>(tenantId, 'brokers');
 export const loadDispatchers = (tenantId: string) => loadCollection<Dispatcher>(tenantId, 'dispatchers');
+export const loadCustomers = (tenantId: string) => loadCollection<CustomerEntity>(tenantId, 'customers');
+export const loadPlannedLoads = (tenantId: string) => loadCollection<PlannedLoad>(tenantId, 'plannedLoads');
+export const loadTrips = (tenantId: string) => loadCollection<Trip>(tenantId, 'trips');
 
 // =============================================
 // Type-specific savers
@@ -296,6 +302,9 @@ export const saveExpense = (tenantId: string, expense: Expense) => saveDocument(
 export const saveFactoringCompany = (tenantId: string, fc: FactoringCompany) => saveDocument(tenantId, 'factoringCompanies', fc);
 export const saveBroker = (tenantId: string, broker: Broker) => saveDocument(tenantId, 'brokers', broker);
 export const saveDispatcher = (tenantId: string, dispatcher: Dispatcher) => saveDocument(tenantId, 'dispatchers', dispatcher);
+export const saveCustomer = (tenantId: string, customer: CustomerEntity) => saveDocument(tenantId, 'customers', customer);
+export const savePlannedLoad = (tenantId: string, plannedLoad: PlannedLoad) => saveDocument(tenantId, 'plannedLoads', plannedLoad);
+export const saveTrip = (tenantId: string, trip: Trip) => saveDocument(tenantId, 'trips', trip);
 
 // =============================================
 // Type-specific deleters
@@ -311,5 +320,8 @@ export const deleteExpense = (tenantId: string, id: string) => deleteDocument(te
 export const deleteFactoringCompany = (tenantId: string, id: string) => deleteDocument(tenantId, 'factoringCompanies', id);
 export const deleteBroker = (tenantId: string, id: string) => deleteDocument(tenantId, 'brokers', id);
 export const deleteDispatcher = (tenantId: string, id: string) => deleteDocument(tenantId, 'dispatchers', id);
+export const deleteCustomer = (tenantId: string, id: string) => deleteDocument(tenantId, 'customers', id);
+export const deletePlannedLoad = (tenantId: string, id: string) => deleteDocument(tenantId, 'plannedLoads', id);
+export const deleteTrip = (tenantId: string, id: string) => deleteDocument(tenantId, 'trips', id);
 
 

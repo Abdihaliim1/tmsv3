@@ -18,10 +18,10 @@ export interface AuditLogParams {
   entityId: string;
   action: AuditAction;
   summary: string;
-  before?: any;
-  after?: any;
+  before?: object | null;
+  after?: object | null;
   reason?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -34,7 +34,7 @@ export interface AuditLogParams {
 /**
  * Remove undefined values from an object (Firestore doesn't allow undefined)
  */
-function removeUndefined(obj: any): any {
+function removeUndefined(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
     return null;
   }
@@ -42,10 +42,11 @@ function removeUndefined(obj: any): any {
     return obj.map(removeUndefined);
   }
   if (typeof obj === 'object') {
-    const cleaned: any = {};
-    for (const key in obj) {
-      if (obj[key] !== undefined) {
-        cleaned[key] = removeUndefined(obj[key]);
+    const cleaned: Record<string, unknown> = {};
+    for (const key in obj as Record<string, unknown>) {
+      const value = (obj as Record<string, unknown>)[key];
+      if (value !== undefined) {
+        cleaned[key] = removeUndefined(value);
       }
     }
     return cleaned;
@@ -80,7 +81,7 @@ export async function writeAuditLog(params: AuditLogParams): Promise<void> {
     };
 
     // Double-check: Remove any remaining undefined values at top level
-    const finalParams: any = {};
+    const finalParams: Record<string, unknown> = {};
     for (const key in cleanedParams) {
       if (cleanedParams[key as keyof typeof cleanedParams] !== undefined) {
         finalParams[key] = cleanedParams[key as keyof typeof cleanedParams];
@@ -121,7 +122,7 @@ export async function auditCreate(
   actorRole: string,
   entityType: string,
   entityId: string,
-  entityData: any,
+  entityData: object,
   summary?: string
 ): Promise<void> {
   await writeAuditLog({
@@ -145,8 +146,8 @@ export async function auditUpdate(
   actorRole: string,
   entityType: string,
   entityId: string,
-  before: any,
-  after: any,
+  before: object,
+  after: object,
   summary?: string,
   reason?: string
 ): Promise<void> {
@@ -173,7 +174,7 @@ export async function auditDelete(
   actorRole: string,
   entityType: string,
   entityId: string,
-  entityData: any,
+  entityData: object,
   summary?: string
 ): Promise<void> {
   await writeAuditLog({
@@ -223,8 +224,8 @@ export async function auditAdjustment(
   actorRole: string,
   entityType: string,
   entityId: string,
-  before: any,
-  after: any,
+  before: object,
+  after: object,
   reason: string,
   summary?: string
 ): Promise<void> {

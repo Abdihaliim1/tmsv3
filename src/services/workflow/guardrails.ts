@@ -38,8 +38,8 @@ export function checkCanInvoice(
 
   // Check POD (use document service)
   const docCheck = canInvoiceLoad(load);
-  if (!docCheck.canInvoice) {
-    blockers.push(...docCheck.missingDocs.map(doc => `Missing ${doc.toUpperCase()}`));
+  if (!docCheck.canInvoice && docCheck.reason) {
+    blockers.push(docCheck.reason);
   }
 
   // If blocked, create a blocked task
@@ -81,9 +81,9 @@ export function checkCanDispatch(
   }
 
   // Check BOL and rate confirmation (use document service)
-  const docCheck = canDispatchLoad(load);
-  if (!docCheck.canDispatch) {
-    blockers.push(...docCheck.missingDocs.map(doc => `Missing ${doc.toUpperCase()}`));
+  const dispatchCheck = canDispatchLoad(load);
+  if (!dispatchCheck.canDispatch && dispatchCheck.reason) {
+    blockers.push(dispatchCheck.reason);
   }
 
   // Check pickup date

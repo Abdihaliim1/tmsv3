@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { Settlement, Employee, Load, FactoringCompany, CompanyProfile } from '../types';
 import { yearFromDateOnly } from '../utils/dateOnly';
+import { calculateDriverPay } from './businessLogic';
 
 /** =========================
  *  Helpers - Company Profile to PDF Info
@@ -429,7 +430,24 @@ export const generateDriverSettlementPDF = (
   const headH = drawTableHeader(doc, margin, y, loadW, loadCols);
   y += headH;
 
-  const settlementLoads = settlement.loads || [];
+  // Handle both new format (settlement.loads) and legacy format (settlement.loadIds)
+  let settlementLoads = settlement.loads || [];
+
+  // Fallback: if loads array is empty but loadIds exists, build loads array from loadIds
+  if (settlementLoads.length === 0 && settlement.loadIds && settlement.loadIds.length > 0) {
+    settlementLoads = settlement.loadIds.map(loadId => {
+      const load = loads.find(l => l.id === loadId);
+      return {
+        loadId,
+        basePay: (load as any)?.driverBasePay || 0,
+        detention: (load as any)?.driverDetentionPay || 0,
+        tonu: (load as any)?.tonuFee || 0,
+        layover: (load as any)?.driverLayoverPay || 0,
+        dispatchFee: (load as any)?.dispatcherCommissionAmount || 0
+      };
+    });
+  }
+
   let totalLoadAmount = 0;
   let totalGrossPay = 0;
 
@@ -438,7 +456,11 @@ export const generateDriverSettlementPDF = (
     if (!load) return;
 
     const loadAmount = load.rate || load.grandTotal || 0;
-    const grossPay = li.basePay || (load as any).driverBasePay || 0;
+    // Calculate driver pay: use basePay from settlement, then driverBasePay from load, then calculate dynamically
+    let grossPay = li.basePay || (load as any).driverBasePay || 0;
+    if (grossPay === 0 && driver) {
+      grossPay = calculateDriverPay(load, driver);
+    }
     totalLoadAmount += loadAmount;
     totalGrossPay += grossPay;
 

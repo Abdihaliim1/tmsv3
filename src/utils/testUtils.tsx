@@ -22,7 +22,7 @@ export function renderWithProviders(
       <TenantProvider>
         <CompanyProvider>
           <AuthProvider>
-            <TMSProvider>
+            <TMSProvider tenantId="test-tenant">
               {children}
             </TMSProvider>
           </AuthProvider>

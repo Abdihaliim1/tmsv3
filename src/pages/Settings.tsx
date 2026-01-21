@@ -1,22 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Save, Building2, Mail, Phone, Globe, FileText, AlertCircle, 
+import {
+  Save, Building2, Mail, Phone, Globe, FileText, AlertCircle,
   Upload, Image as ImageIcon, Palette, Eye, Download, RotateCcw,
-  CheckCircle, X, Loader
+  CheckCircle, X, Loader, Database, Truck
 } from 'lucide-react';
 import { useCompany } from '../context/CompanyContext';
 import { useTenant } from '../context/TenantContext';
+import { useTMS } from '../context/TMSContext';
 import { CompanyProfile } from '../types';
 import ExportMenu from '../components/ExportMenu';
+import { generateDemoLoads } from '../utils/seedData';
 
 const Settings: React.FC = () => {
   const { companyProfile, updateCompanyProfile, theme } = useCompany();
   const { tenant } = useTenant();
+  const { addLoad, loads } = useTMS();
   const [formData, setFormData] = useState<Partial<CompanyProfile>>(companyProfile);
   const [saved, setSaved] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
   const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [isLoadingDemoData, setIsLoadingDemoData] = useState(false);
+  const [demoDataLoaded, setDemoDataLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check if setup is needed
@@ -124,6 +129,38 @@ const Settings: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleLoadDemoData = async () => {
+    if (isLoadingDemoData) return;
+
+    const confirmLoad = window.confirm(
+      'This will add 20 demo loads to your system with realistic trucking data including various statuses (Available, Dispatched, In Transit, Delivered, Completed).\n\nDo you want to proceed?'
+    );
+
+    if (!confirmLoad) return;
+
+    setIsLoadingDemoData(true);
+    setDemoDataLoaded(false);
+
+    try {
+      const demoLoads = generateDemoLoads();
+
+      // Add loads with a small delay between each to avoid overwhelming the system
+      for (let i = 0; i < demoLoads.length; i++) {
+        await addLoad(demoLoads[i]);
+        // Small delay to allow state updates
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      setDemoDataLoaded(true);
+      setTimeout(() => setDemoDataLoaded(false), 5000);
+    } catch (error) {
+      console.error('Error loading demo data:', error);
+      alert('Error loading demo data. Please try again.');
+    } finally {
+      setIsLoadingDemoData(false);
+    }
   };
 
   // Setup Wizard Component
@@ -874,6 +911,63 @@ const Settings: React.FC = () => {
                 Export your data for backup or analysis. All exports are generated client-side for privacy.
               </p>
               <ExportMenu />
+            </div>
+
+            {/* Developer Tools Section */}
+            <div className="border-t border-slate-200 pt-4">
+              <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                <Database size={20} />
+                Developer Tools
+              </h3>
+              <p className="text-sm text-slate-500 mb-4">
+                Tools for testing and demo purposes. Use these to populate your system with sample data.
+              </p>
+
+              {/* Demo Data Loaded Success Message */}
+              {demoDataLoaded && (
+                <div className="mb-4 bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg flex items-center gap-2">
+                  <CheckCircle size={20} />
+                  <span>Successfully loaded 20 demo loads! Check the Loads page to view them.</span>
+                </div>
+              )}
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                <div className="flex items-start gap-4">
+                  <div className="p-3 bg-blue-100 rounded-lg">
+                    <Truck size={24} className="text-blue-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-slate-900">Load Demo Data</h4>
+                    <p className="text-sm text-slate-600 mt-1 mb-3">
+                      Add 20 realistic trucking loads with various statuses, routes, and brokers.
+                      Includes loads from major brokers like TQL, C.H. Robinson, XPO, and more.
+                    </p>
+                    <div className="flex items-center gap-4">
+                      <button
+                        type="button"
+                        onClick={handleLoadDemoData}
+                        disabled={isLoadingDemoData}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                      >
+                        {isLoadingDemoData ? (
+                          <>
+                            <Loader size={16} className="animate-spin" />
+                            Loading {loads.length > 0 ? `(${loads.length} loads)` : '...'}
+                          </>
+                        ) : (
+                          <>
+                            <Database size={16} />
+                            Load 20 Demo Loads
+                          </>
+                        )}
+                      </button>
+                      <span className="text-xs text-slate-500">
+                        Current loads: {loads.length}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Save Button */}

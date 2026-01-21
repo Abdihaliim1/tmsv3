@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FactoringCompany } from '../types';
+import { FactoringCompany, NewFactoringCompanyInput } from '../types';
 import { normalize } from '../services/brokerUtils';
 import { ChevronDown, X, Plus } from 'lucide-react';
 
@@ -7,7 +7,7 @@ interface FactoringCompanyAutocompleteProps {
   value: string; // factoringCompanyName
   onChange: (company: FactoringCompany | null) => void;
   factoringCompanies: FactoringCompany[];
-  onAddCompany?: (company: Omit<FactoringCompany, 'id'>) => void; // Callback to add new company
+  onAddCompany?: (company: NewFactoringCompanyInput) => void; // Callback to add new company
   placeholder?: string;
   className?: string;
 }
@@ -128,7 +128,7 @@ export const FactoringCompanyAutocomplete: React.FC<FactoringCompanyAutocomplete
   const handleAddNewCompany = () => {
     if (!newCompanyName.trim() || !onAddCompany) return;
     
-    const newCompany: Omit<FactoringCompany, 'id'> = {
+    const newCompany: NewFactoringCompanyInput = {
       name: newCompanyName.trim(),
     };
     

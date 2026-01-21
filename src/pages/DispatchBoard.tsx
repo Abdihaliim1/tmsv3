@@ -8,14 +8,13 @@
  * - Missing documents alerts
  */
 
-import React, { useState, useMemo } from 'react';
-import { 
-  Plus, 
-  Edit, 
-  Upload, 
-  FileText, 
-  CheckCircle2, 
-  XCircle, 
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  Plus,
+  Upload,
+  FileText,
+  CheckCircle2,
+  XCircle,
   AlertCircle,
   Truck,
   User,
@@ -26,10 +25,15 @@ import {
   FileCheck
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Load, LoadStatus } from '../types';
-import { getMissingDocuments, getRequiredDocuments } from '../services/documentService';
+import { useTenant } from '../context/TenantContext';
+import { useToast } from '../components/Toast';
+import { Load, LoadStatus, DocumentType } from '../types';
+import { getMissingDocuments } from '../services/documentService';
 import { TmsDocument } from '../types';
+import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import AddLoadModal from '../components/AddLoadModal';
+import DocumentUploadModal from '../components/DocumentUploadModal';
+import DriverAssignmentModal from '../components/DriverAssignmentModal';
 
 interface LoadCardProps {
   load: Load;
@@ -117,7 +121,9 @@ const LoadCard: React.FC<LoadCardProps> = ({
           <div className="flex items-center gap-2 mb-1">
             <span className="font-semibold text-slate-900">{load.loadNumber}</span>
             {hasMissingDocs && (
-              <AlertCircle className="w-4 h-4 text-amber-500" title="Missing documents" />
+              <span title="Missing documents">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+              </span>
             )}
           </div>
           <div className="text-xs text-slate-500">
@@ -328,9 +334,37 @@ const LoadCard: React.FC<LoadCardProps> = ({
 };
 
 const DispatchBoard: React.FC = () => {
-  const { loads, drivers, updateLoad } = useTMS();
+  const { loads, drivers, updateLoad, addInvoice } = useTMS();
+  const { activeTenantId } = useTenant();
+  const toast = useToast();
+
+  // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLoad, setEditingLoad] = useState<Load | null>(null);
+  const [isDocUploadModalOpen, setIsDocUploadModalOpen] = useState(false);
+  const [docUploadLoadId, setDocUploadLoadId] = useState<string | null>(null);
+  const [docUploadType, setDocUploadType] = useState<DocumentType>('POD');
+  const [isDriverModalOpen, setIsDriverModalOpen] = useState(false);
+  const [driverAssignLoad, setDriverAssignLoad] = useState<Load | null>(null);
+
+  // Listen for document upload events from LoadCard
+  useEffect(() => {
+    const handleUploadEvent = (event: CustomEvent<{ loadId: string; documentType: DocumentType }>) => {
+      setDocUploadLoadId(event.detail.loadId);
+      setDocUploadType(event.detail.documentType);
+      setIsDocUploadModalOpen(true);
+    };
+
+    window.addEventListener('upload-document', handleUploadEvent as EventListener);
+    return () => {
+      window.removeEventListener('upload-document', handleUploadEvent as EventListener);
+    };
+  }, []);
+
+  // Get load for document upload
+  const docUploadLoad = useMemo(() => {
+    return loads.find(l => l.id === docUploadLoadId);
+  }, [loads, docUploadLoadId]);
 
   // Group loads by status
   const loadsByStatus = useMemo(() => {
@@ -364,34 +398,70 @@ const DispatchBoard: React.FC = () => {
   const handleStatusChange = async (loadId: string, newStatus: LoadStatus) => {
     try {
       await updateLoad(loadId, { status: newStatus });
+      toast.success('Status Updated', `Load status changed to ${newStatus}`);
     } catch (error: any) {
-      // Show user-friendly error message
-      alert(error.message || 'Cannot update load status. Please check the error and try again.');
+      toast.error('Update Failed', error.message || 'Cannot update load status.');
       console.error('Load status update error:', error);
     }
   };
 
   const handleUploadPOD = (loadId: string) => {
-    const load = loads.find(l => l.id === loadId);
-    if (load) {
-      setEditingLoad(load);
-      setIsModalOpen(true);
-      // TODO: Open document upload modal
-    }
+    setDocUploadLoadId(loadId);
+    setDocUploadType('POD');
+    setIsDocUploadModalOpen(true);
   };
 
-  const handleCreateInvoice = (loadId: string) => {
-    // TODO: Navigate to invoice creation with load pre-selected
-    console.log('Create invoice for load:', loadId);
+  const handleCreateInvoice = async (loadId: string) => {
+    const load = loads.find(l => l.id === loadId);
+    if (!load) {
+      toast.error('Error', 'Load not found');
+      return;
+    }
+
+    if (load.invoiceId) {
+      toast.warning('Already Invoiced', 'This load already has an invoice');
+      return;
+    }
+
+    try {
+      // Generate invoice number
+      const invoiceNumber = await generateUniqueInvoiceNumber(activeTenantId || 'default');
+
+      // Create invoice - TMSContext automatically links the invoice to the load
+      addInvoice({
+        invoiceNumber,
+        loadIds: [loadId],
+        customerId: load.brokerId || '',
+        customerName: load.brokerName || load.customerName || 'Unknown',
+        amount: load.rate || 0,
+        status: 'pending',
+        date: new Date().toISOString().split('T')[0],
+        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days
+      });
+
+      toast.success('Invoice Created', `Invoice ${invoiceNumber} created successfully`);
+    } catch (error: any) {
+      toast.error('Invoice Failed', error.message || 'Failed to create invoice');
+      console.error('Create invoice error:', error);
+    }
   };
 
   const handleAssignDriver = (loadId: string) => {
     const load = loads.find(l => l.id === loadId);
     if (load) {
-      setEditingLoad(load);
-      setIsModalOpen(true);
-      // TODO: Open driver assignment modal
+      setDriverAssignLoad(load);
+      setIsDriverModalOpen(true);
     }
+  };
+
+  const handleDocumentUploadComplete = (document: TmsDocument) => {
+    toast.success('Document Uploaded', `${document.type.replace('_', ' ')} uploaded successfully`);
+    setIsDocUploadModalOpen(false);
+    setDocUploadLoadId(null);
+  };
+
+  const handleDriverAssigned = (driverId: string, driverName: string) => {
+    toast.success('Driver Assigned', `${driverName} assigned to load`);
   };
 
   return (
@@ -473,16 +543,46 @@ const DispatchBoard: React.FC = () => {
                 const adjustmentReason = (loadData as any).adjustmentReason;
                 const cleanLoadData = { ...loadData };
                 delete (cleanLoadData as any).adjustmentReason;
-                
+
                 await updateLoad(editingLoad.id, cleanLoadData, adjustmentReason);
+                toast.success('Load Updated', 'Load details saved successfully');
               } catch (error: any) {
-                alert(error.message || 'Failed to update load.');
+                toast.error('Update Failed', error.message || 'Failed to update load.');
                 console.error('Load update error:', error);
               }
             }
             setIsModalOpen(false);
             setEditingLoad(null);
           }}
+        />
+      )}
+
+      {/* Document Upload Modal */}
+      {isDocUploadModalOpen && docUploadLoad && (
+        <DocumentUploadModal
+          isOpen={isDocUploadModalOpen}
+          onClose={() => {
+            setIsDocUploadModalOpen(false);
+            setDocUploadLoadId(null);
+          }}
+          entityType="load"
+          entityId={docUploadLoad.id}
+          documentType={docUploadType}
+          existingDocuments={docUploadLoad.documents}
+          onUploadComplete={handleDocumentUploadComplete}
+        />
+      )}
+
+      {/* Driver Assignment Modal */}
+      {isDriverModalOpen && driverAssignLoad && (
+        <DriverAssignmentModal
+          isOpen={isDriverModalOpen}
+          onClose={() => {
+            setIsDriverModalOpen(false);
+            setDriverAssignLoad(null);
+          }}
+          load={driverAssignLoad}
+          onAssign={handleDriverAssigned}
         />
       )}
     </div>

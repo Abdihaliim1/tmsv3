@@ -416,7 +416,7 @@ const AccountReceivables: React.FC = () => {
     }
   };
 
-  const handleAddNewCompany = (newCompany: Omit<FactoringCompany, 'id'>) => {
+  const handleAddNewCompany = (newCompany: NewFactoringCompanyInput) => {
     // This will be handled by the form submission
     setSelectedCompanyName(newCompany.name || '');
   };

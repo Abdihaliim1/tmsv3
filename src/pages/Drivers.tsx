@@ -1,8 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Download } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType } from '../types';
 import { useDebounce } from '../utils/debounce';
+
+// Pure helper function - moved outside component
+const formatCurrency = (amount: number) => {
+  return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 const Drivers: React.FC = () => {
   const { employees, drivers, loads, trucks, addEmployee, updateEmployee, deleteEmployee, addDriver, updateDriver, deleteDriver } = useTMS();
@@ -62,29 +67,26 @@ const Drivers: React.FC = () => {
     return { activeEmployees, activeDrivers, activeDispatchers, onTimePercentage, avgMiles, safetyScore };
   }, [employees, loads]);
 
-  const formatCurrency = (amount: number) => {
-    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-
-  const getStatusColor = (status: EmployeeStatus) => {
-    const colors = {
+  // Memoized helper functions
+  const getStatusColor = useCallback((status: EmployeeStatus) => {
+    const colors: Record<string, string> = {
       'active': 'bg-green-100 text-green-800',
       'inactive': 'bg-gray-100 text-gray-800',
       'on_leave': 'bg-yellow-100 text-yellow-800',
       'terminated': 'bg-red-100 text-red-800',
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
-  };
+  }, []);
 
-  const getDriverTypeLabel = (type: DriverType) => {
-    const labels = {
+  const getDriverTypeLabel = useCallback((type: DriverType) => {
+    const labels: Record<string, string> = {
       'Company': 'Company Driver',
       'OwnerOperator': 'Owner Operator',
     };
     return labels[type] || type;
-  };
+  }, []);
 
-  const getPaymentDisplay = (driver: Driver) => {
+  const getPaymentDisplay = useCallback((driver: Driver) => {
     if (!driver.payment) {
       return '-';
     }
@@ -98,26 +100,28 @@ const Drivers: React.FC = () => {
       return `${formatCurrency(flatRate || 0)}/load`;
     }
     return '-';
-  };
+  }, []);
 
-  const getCurrentTruckDisplay = (truckId?: string) => {
+  const getCurrentTruckDisplay = useCallback((truckId?: string) => {
     if (!truckId) return 'No truck assigned';
     const truck = trucks.find(t => t.id === truckId);
     return truck ? `${truck.number} - ${truck.make} ${truck.model}` : 'Unknown';
-  };
+  }, [trucks]);
 
-  const handleEdit = (employee: Employee) => {
+  // Edit handler - memoized
+  const handleEdit = useCallback((employee: Employee) => {
     setEditingDriver(employee as Driver);
     setIsModalOpen(true);
-  };
+  }, []);
 
-  const handleDelete = (employeeId: string) => {
+  // Delete handler - memoized
+  const handleDelete = useCallback((employeeId: string) => {
     if (window.confirm('Are you sure you want to delete this employee?')) {
       deleteEmployee(employeeId);
     }
-  };
+  }, [deleteEmployee]);
 
-  const getEmployeeTypeLabel = (type: EmployeeType) => {
+  const getEmployeeTypeLabel = useCallback((type: EmployeeType) => {
     const labels: Record<EmployeeType, string> = {
       'driver': 'Driver',
       'dispatcher': 'Dispatcher',
@@ -129,9 +133,10 @@ const Drivers: React.FC = () => {
       'other': 'Other',
     };
     return labels[type] || type;
-  };
+  }, []);
 
-  const handleExport = () => {
+  // Export handler - memoized
+  const handleExport = useCallback(() => {
     const csv = [
       ['Employee #', 'Name', 'Employee Type', 'Status', 'Type', 'Payment Type', 'Rate', 'Phone', 'Email'].join(','),
       ...filteredEmployees.map(employee => [
@@ -153,7 +158,7 @@ const Drivers: React.FC = () => {
     link.href = url;
     link.download = `drivers-export-${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
-  };
+  }, [filteredEmployees, getEmployeeTypeLabel, getDriverTypeLabel, getPaymentDisplay]);
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
@@ -1148,7 +1153,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                   <input
                     type="checkbox"
                     name="payment.fuelSurcharge"
-                    checked={formData.payment?.fuelSurcharge || false}
+                    checked={Boolean(formData.payment?.fuelSurcharge)}
                     onChange={handleChange}
                     className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-slate-300 rounded"
                   />
@@ -1176,7 +1181,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                       <input
                         type="checkbox"
                         name={`deductionPreferences.${pref.key}`}
-                        checked={formData.deductionPreferences?.[pref.key] || false}
+                        checked={Boolean(formData.deductionPreferences?.[pref.key])}
                         onChange={handleChange}
                         className="h-4 w-4 mt-1 text-blue-600 focus:ring-blue-500 border-slate-300 rounded"
                       />

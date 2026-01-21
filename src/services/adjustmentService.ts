@@ -52,11 +52,12 @@ export async function createAdjustment(
   const adjustment: Omit<Adjustment, 'id'> = {
     loadId,
     tenantId,
-    status: requireApproval ? 'PENDING' : 'APPROVED',
+    status: requireApproval ? 'pending' : 'approved',
     patch,
     reason: reason.trim(),
     createdBy,
     createdAt: new Date().toISOString(),
+    requireApproval,
   };
 
   // Add to Firestore
@@ -97,13 +98,13 @@ export async function approveAdjustment(
 
   const adjustment = adjustmentSnap.data() as Adjustment;
 
-  if (adjustment.status !== 'PENDING') {
+  if (adjustment.status !== 'pending') {
     throw new Error(`Adjustment is already ${adjustment.status}`);
   }
 
   // Update adjustment status
   await updateDoc(adjustmentRef, {
-    status: 'APPROVED',
+    status: 'approved',
     approvedBy,
     approvedAt: serverTimestamp(),
   });
@@ -137,12 +138,12 @@ export async function rejectAdjustment(
 
   const adjustment = adjustmentSnap.data() as Adjustment;
 
-  if (adjustment.status !== 'PENDING') {
+  if (adjustment.status !== 'pending') {
     throw new Error(`Adjustment is already ${adjustment.status}`);
   }
 
   await updateDoc(adjustmentRef, {
-    status: 'REJECTED',
+    status: 'rejected',
     rejectedBy,
     rejectedAt: serverTimestamp(),
     rejectionReason: rejectionReason.trim(),

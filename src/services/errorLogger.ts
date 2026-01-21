@@ -3,6 +3,8 @@
  * Centralized error logging with localStorage persistence
  */
 
+import { generateErrorId, generateWarningId } from '../utils/idGenerator';
+
 interface ErrorLog {
   id: string;
   timestamp: string;
@@ -60,7 +62,7 @@ export function logError(
   }
 ): void {
   const errorLog: ErrorLog = {
-    id: `error_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: generateErrorId(),
     timestamp: new Date().toISOString(),
     message: error.message || 'Unknown error',
     stack: error.stack,
@@ -90,7 +92,7 @@ export function logWarning(
   metadata?: Record<string, any>
 ): void {
   const errorLog: ErrorLog = {
-    id: `warning_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: generateWarningId(),
     timestamp: new Date().toISOString(),
     message: `WARNING: ${message}`,
     url: typeof window !== 'undefined' ? window.location.href : undefined,

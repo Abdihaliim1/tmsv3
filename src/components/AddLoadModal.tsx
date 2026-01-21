@@ -102,7 +102,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     totalAccessorials: 0,
     grandTotal: 0,
     // Notes
-    notes: []
+    notes: ''
   };
 
   const [formData, setFormData] = useState<NewLoadInput>(initialState);
