@@ -475,7 +475,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     const newLoad: Load = {
       ...sanitizedInput,
       id: newLoadId,
-      loadNumber: `LD-2025-${(loads.length + 301).toString()}`,
+      // Preserve loadNumber if provided, otherwise generate one
+      loadNumber: sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
     };

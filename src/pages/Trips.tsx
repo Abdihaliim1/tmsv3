@@ -678,7 +678,8 @@ interface ViewTripModalProps {
 }
 
 const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, onEdit }) => {
-  const { plannedLoads, loads, drivers, trucks, trailers } = useTMS();
+  const { plannedLoads, loads, drivers, trucks, trailers, addLoad, updatePlannedLoad } = useTMS();
+  const [isDispatching, setIsDispatching] = React.useState(false);
 
   if (!isOpen || !trip) return null;
 
@@ -687,8 +688,112 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
     trip.plannedLoadIds?.includes(pl.id)
   );
 
+  // Get planned loads that are still in "planned" status (not yet dispatched to Loads)
+  const undispatchedPlannedLoads = associatedPlannedLoads.filter(pl => pl.status === 'planned');
+
   // Get associated loads (from Loads page) - linked by tripId
   const associatedLoads = loads.filter(l => l.tripId === trip.id);
+
+  // Handle dispatching planned loads to create Load entries linked to THIS trip
+  const handleDispatchPlannedLoads = async () => {
+    if (undispatchedPlannedLoads.length === 0) return;
+
+    setIsDispatching(true);
+    try {
+      const now = new Date().toISOString();
+
+      // For each undispatched planned load, create a Load entry linked to this trip
+      for (const plannedLoad of undispatchedPlannedLoads) {
+        const firstPickup = plannedLoad.pickups?.[0];
+        const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
+
+        // Update the planned load status
+        updatePlannedLoad(plannedLoad.id, {
+          status: 'dispatched',
+          currentStep: 2,
+          tripId: trip.id,
+          tripNumber: trip.tripNumber,
+          driverId: trip.driverId,
+          driverName: trip.driverName,
+          updatedAt: now,
+        });
+
+        // Create a Load entry linked to this existing trip
+        const newLoad = {
+          loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
+          status: 'dispatched' as const,
+
+          // Customer/Broker info
+          customerName: plannedLoad.customer?.name || '',
+          customerId: plannedLoad.customerId,
+          brokerName: plannedLoad.customer?.name || '',
+
+          // Driver assignment from trip
+          driverId: trip.driverId,
+          driverName: trip.driverName,
+
+          // Equipment from trip
+          truckId: trip.truckId,
+          truckNumber: trip.truckNumber,
+          trailerId: trip.trailerId,
+          trailerNumber: trip.trailerNumber,
+
+          // Route - from first pickup to last delivery
+          originCity: firstPickup?.shipper?.city || trip.fromCity || '',
+          originState: firstPickup?.shipper?.state || trip.fromState || '',
+          destCity: lastDelivery?.consignee?.city || trip.toCity || '',
+          destState: lastDelivery?.consignee?.state || trip.toState || '',
+
+          // Dates
+          pickupDate: firstPickup?.pickupDate || trip.pickupDate,
+          deliveryDate: lastDelivery?.deliveryDate || trip.deliveryDate,
+
+          // Financial
+          rate: plannedLoad.fees?.primaryFee || 0,
+          miles: plannedLoad.totalMiles || trip.totalMiles || 0,
+          ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
+            ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
+            : 0,
+          grandTotal: plannedLoad.totalCharge || plannedLoad.fees?.primaryFee || 0,
+
+          // FSC
+          hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
+          fscAmount: plannedLoad.fees?.fscAmount || 0,
+
+          // Accessorials
+          hasDetention: (plannedLoad.fees?.accessoryFees?.detention || 0) > 0,
+          detentionAmount: plannedLoad.fees?.accessoryFees?.detention || 0,
+          hasLumper: (plannedLoad.fees?.accessoryFees?.lumper || 0) > 0,
+          lumperAmount: plannedLoad.fees?.accessoryFees?.lumper || 0,
+          totalAccessorials:
+            (plannedLoad.fees?.accessoryFees?.detention || 0) +
+            (plannedLoad.fees?.accessoryFees?.lumper || 0) +
+            (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
+            (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
+
+          // Document numbers
+          bolNumber: firstPickup?.bolNumber,
+
+          // Trip Linking - this is the key part!
+          tripId: trip.id,
+          tripNumber: trip.tripNumber,
+
+          // Notes
+          notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${trip.tripNumber}`,
+        };
+
+        // Add the load
+        addLoad(newLoad);
+      }
+
+      alert(`Successfully dispatched ${undispatchedPlannedLoads.length} load(s) to the Loads board!`);
+    } catch (error) {
+      console.error('Error dispatching planned loads:', error);
+      alert('Failed to dispatch loads. Please try again.');
+    } finally {
+      setIsDispatching(false);
+    }
+  };
 
   // Get driver details
   const driver = drivers.find(d => d.id === trip.driverId);
@@ -912,11 +1017,30 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
             ) : associatedPlannedLoads.length > 0 ? (
               <div className="text-sm text-slate-500">
                 <p className="mb-2">Loads pending dispatch:</p>
-                <ul className="list-disc list-inside">
+                <ul className="list-disc list-inside mb-4">
                   {associatedPlannedLoads.map((pl) => (
                     <li key={pl.id}>{pl.customLoadNumber || pl.systemLoadNumber} - {pl.status}</li>
                   ))}
                 </ul>
+                {undispatchedPlannedLoads.length > 0 && (
+                  <button
+                    onClick={handleDispatchPlannedLoads}
+                    disabled={isDispatching}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isDispatching ? (
+                      <>
+                        <Clock size={16} className="animate-spin" />
+                        Dispatching...
+                      </>
+                    ) : (
+                      <>
+                        <Truck size={16} />
+                        Dispatch {undispatchedPlannedLoads.length} Load(s) to Loads Board
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             ) : (
               <p className="text-sm text-slate-500">No loads associated with this trip</p>
@@ -926,10 +1050,31 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
           {/* Planned Loads (if different from dispatched) */}
           {associatedPlannedLoads.length > 0 && associatedLoads.length !== associatedPlannedLoads.length && (
             <div className="border border-slate-200 rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                <ClipboardList size={16} />
-                Planned Loads ({associatedPlannedLoads.length})
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <ClipboardList size={16} />
+                  Planned Loads ({associatedPlannedLoads.length})
+                </h3>
+                {undispatchedPlannedLoads.length > 0 && (
+                  <button
+                    onClick={handleDispatchPlannedLoads}
+                    disabled={isDispatching}
+                    className="px-3 py-1.5 bg-green-600 text-white text-xs rounded-lg hover:bg-green-700 flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isDispatching ? (
+                      <>
+                        <Clock size={14} className="animate-spin" />
+                        Dispatching...
+                      </>
+                    ) : (
+                      <>
+                        <Truck size={14} />
+                        Dispatch All
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50">
