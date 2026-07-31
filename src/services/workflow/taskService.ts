@@ -1,26 +1,27 @@
 /**
  * Task Service - Task Management with Idempotency
- * 
+ *
  * Handles:
  * - Task creation with deduplication (idempotent)
  * - Task storage in localStorage (tenant-aware)
- * - Task ID generation from dedupeKey
+ * - Reconciliation against live load/invoice state
  */
 
-import { Task, NewTaskInput } from '../../types';
-// Tenant ID should be passed as parameter
+import { Task, NewTaskInput, Load, Invoice, LoadStatus } from '../../types';
+
+export function normalizeTenantId(tenantId: string | null | undefined): string {
+  return tenantId || 'default';
+}
 
 /**
  * Generate a stable task ID from dedupeKey using hash
  */
 export function taskIdFromDedupeKey(dedupeKey: string): string {
-  // Simple stable hash
   let h = 0;
   for (let i = 0; i < dedupeKey.length; i++) {
     h = ((h << 5) - h) + dedupeKey.charCodeAt(i);
-    h = h & h; // Convert to 32bit integer
+    h = h & h;
   }
-  // Ensure positive and add prefix
   const hash = Math.abs(h).toString(16);
   return `task_${hash}`;
 }
@@ -34,21 +35,13 @@ export function generateDedupeKey(
   entityId: string,
   templateKey: string
 ): string {
-  const tenant = tenantId || 'default';
-  return `${tenant}:${entityType}:${entityId}:${templateKey}`;
+  return `${normalizeTenantId(tenantId)}:${entityType}:${entityId}:${templateKey}`;
 }
 
-/**
- * Get storage key for tasks (tenant-aware)
- */
 function getStorageKey(tenantId: string | null): string {
-  const prefix = tenantId ? `tms_${tenantId}_` : 'tms_';
-  return `${prefix}tasks`;
+  return `tms_${normalizeTenantId(tenantId)}_tasks`;
 }
 
-/**
- * Load tasks from localStorage
- */
 export function loadTasks(tenantId: string | null): Task[] {
   try {
     const storageKey = getStorageKey(tenantId);
@@ -63,9 +56,6 @@ export function loadTasks(tenantId: string | null): Task[] {
   return [];
 }
 
-/**
- * Save tasks to localStorage
- */
 export function saveTasks(tenantId: string | null, tasks: Task[]): void {
   try {
     const storageKey = getStorageKey(tenantId);
@@ -75,6 +65,29 @@ export function saveTasks(tenantId: string | null, tasks: Task[]): void {
   }
 }
 
+function logicalTaskKey(task: Pick<Task, 'entityType' | 'entityId' | 'templateKey' | 'title'>): string {
+  return `${task.entityType}:${task.entityId}:${task.templateKey || task.title || ''}`;
+}
+
+export function loadHasPod(load: Load): boolean {
+  if (load.podNumber) return true;
+  const documents = load.documents || [];
+  return documents.some(d => {
+    const type = String(d.type || '').toLowerCase();
+    return type === 'pod' || type.includes('proof');
+  });
+}
+
+export function isLoadInvoiced(load: Load): boolean {
+  return !!(
+    load.invoiceId ||
+    load.status === LoadStatus.Invoiced ||
+    load.status === LoadStatus.Paid
+  );
+}
+
+const OPEN_STATUSES = new Set<Task['status']>(['pending', 'in_progress', 'blocked']);
+
 /**
  * Create task if it doesn't already exist (idempotent)
  */
@@ -82,45 +95,59 @@ export function createTaskIfNotExists(
   tenantId: string | null,
   taskInput: NewTaskInput & { dedupeKey: string }
 ): Task | null {
-  const tasks = loadTasks(tenantId);
+  const tid = normalizeTenantId(tenantId);
+  const tasks = loadTasks(tid);
 
-  // Check if task with this dedupeKey already exists
-  const existing = tasks.find(t => t.dedupeKey === taskInput.dedupeKey);
-  if (existing) {
-    return existing; // Already exists, return it
+  const byDedupe = tasks.find(t => t.dedupeKey === taskInput.dedupeKey);
+  if (byDedupe) return byDedupe;
+
+  // Fallback: same logical task without/mismatched dedupeKey
+  const byLogical = tasks.find(
+    t =>
+      t.entityType === taskInput.entityType &&
+      t.entityId === taskInput.entityId &&
+      (t.templateKey || '') === (taskInput.templateKey || '') &&
+      OPEN_STATUSES.has(t.status)
+  );
+  if (byLogical) return byLogical;
+
+  // Also return completed/cancelled twin so we don't reopen
+  const closedTwin = tasks.find(
+    t =>
+      t.entityType === taskInput.entityType &&
+      t.entityId === taskInput.entityId &&
+      (t.templateKey || '') === (taskInput.templateKey || '')
+  );
+  if (closedTwin) return closedTwin;
+
+  let id = taskIdFromDedupeKey(taskInput.dedupeKey);
+  if (tasks.some(t => t.id === id)) {
+    id = `${id}_${Date.now().toString(36)}`;
   }
 
-  // Generate ID from dedupeKey
-  const id = taskIdFromDedupeKey(taskInput.dedupeKey);
-
-  // Create new task
   const now = new Date().toISOString();
   const task: Task = {
     ...taskInput,
     id,
-    tenantId: tenantId || undefined,
+    tenantId: tid,
     createdAt: now,
     updatedAt: now,
-    dueAt: taskInput.dueAt || taskInput.dueDate, // Support both fields
-    dueDate: taskInput.dueDate || taskInput.dueAt, // Keep for backward compatibility
+    dueAt: taskInput.dueAt || taskInput.dueDate,
+    dueDate: taskInput.dueDate || taskInput.dueAt,
   };
 
-  // Add to array and save
   tasks.push(task);
-  saveTasks(tenantId, tasks);
-
+  saveTasks(tid, tasks);
   return task;
 }
 
-/**
- * Update an existing task
- */
 export function updateTask(
   tenantId: string | null,
   taskId: string,
   updates: Partial<Task>
 ): Task | null {
-  const tasks = loadTasks(tenantId);
+  const tid = normalizeTenantId(tenantId);
+  const tasks = loadTasks(tid);
   const index = tasks.findIndex(t => t.id === taskId);
 
   if (index === -1) {
@@ -128,23 +155,18 @@ export function updateTask(
     return null;
   }
 
-  // Update task
   tasks[index] = {
     ...tasks[index],
     ...updates,
     updatedAt: new Date().toISOString(),
-    // Sync dueAt and dueDate
     dueAt: updates.dueAt || tasks[index].dueAt || updates.dueDate,
     dueDate: updates.dueDate || tasks[index].dueDate || updates.dueAt,
   };
 
-  saveTasks(tenantId, tasks);
+  saveTasks(tid, tasks);
   return tasks[index];
 }
 
-/**
- * Complete a task
- */
 export function completeTask(
   tenantId: string | null,
   taskId: string,
@@ -155,12 +177,10 @@ export function completeTask(
     status: 'completed',
     completedAt: now,
     completedBy,
+    blockers: [],
   });
 }
 
-/**
- * Assign a task
- */
 export function assignTask(
   tenantId: string | null,
   taskId: string,
@@ -168,13 +188,10 @@ export function assignTask(
 ): Task | null {
   return updateTask(tenantId, taskId, {
     assignedTo,
-    status: 'in_progress', // Auto-set to in_progress when assigned
+    status: 'in_progress',
   });
 }
 
-/**
- * Get tasks by filter
- */
 export function getTasks(
   tenantId: string | null,
   filters?: {
@@ -199,18 +216,148 @@ export function getTasks(
   });
 }
 
-/**
- * Delete a task
- */
 export function deleteTask(tenantId: string | null, taskId: string): boolean {
-  const tasks = loadTasks(tenantId);
+  const tid = normalizeTenantId(tenantId);
+  const tasks = loadTasks(tid);
   const filtered = tasks.filter(t => t.id !== taskId);
-  
+
   if (filtered.length === tasks.length) {
-    return false; // Task not found
+    return false;
   }
 
-  saveTasks(tenantId, filtered);
+  saveTasks(tid, filtered);
   return true;
 }
 
+function completeOpenTask(task: Task, now: string): Task {
+  return {
+    ...task,
+    status: 'completed',
+    completedAt: now,
+    updatedAt: now,
+    blockers: [],
+  };
+}
+
+function cancelOpenTask(task: Task, now: string): Task {
+  return {
+    ...task,
+    status: 'cancelled',
+    updatedAt: now,
+    blockers: [],
+  };
+}
+
+/**
+ * Reconcile workflow tasks against live loads/invoices:
+ * - collapse logical duplicates
+ * - complete POD / invoice / assign-driver tasks when work is done
+ * - unblock invoice tasks once POD exists
+ */
+export function reconcileTasks(
+  tenantId: string | null,
+  context: { loads: Load[]; invoices?: Invoice[] }
+): Task[] {
+  const tid = normalizeTenantId(tenantId);
+  let tasks = loadTasks(tid);
+  const now = new Date().toISOString();
+
+  const loadById = new Map(context.loads.map(l => [l.id, l]));
+  const loadByNumber = new Map(
+    context.loads.filter(l => l.loadNumber).map(l => [l.loadNumber, l])
+  );
+
+  // Collapse duplicates by logical key — keep newest open task, else newest overall
+  const groups = new Map<string, Task[]>();
+  tasks.forEach(task => {
+    const key = logicalTaskKey(task);
+    const list = groups.get(key) || [];
+    list.push(task);
+    groups.set(key, list);
+  });
+
+  const dropIds = new Set<string>();
+  groups.forEach(group => {
+    if (group.length <= 1) return;
+    const sorted = [...group].sort((a, b) =>
+      (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '')
+    );
+    const keeper =
+      sorted.find(t => OPEN_STATUSES.has(t.status)) || sorted[0];
+    sorted.forEach(t => {
+      if (t.id !== keeper.id) dropIds.add(t.id);
+    });
+  });
+
+  tasks = tasks
+    .filter(t => !dropIds.has(t.id))
+    .map(task => {
+      if (!OPEN_STATUSES.has(task.status)) return task;
+      if (task.entityType !== 'load') return task;
+
+      const load = loadById.get(task.entityId) || loadByNumber.get(task.entityId);
+      if (!load) return task;
+
+      if (load.status === LoadStatus.Cancelled) {
+        return cancelOpenTask(task, now);
+      }
+
+      const template = task.templateKey || '';
+      const hasPod = loadHasPod(load);
+      const invoiced = isLoadInvoiced(load);
+      const pastDispatch =
+        load.status === LoadStatus.Dispatched ||
+        load.status === LoadStatus.InTransit ||
+        load.status === LoadStatus.Delivered ||
+        load.status === LoadStatus.DeliveredWithBOL ||
+        load.status === LoadStatus.Completed ||
+        load.status === LoadStatus.Invoiced ||
+        load.status === LoadStatus.Paid;
+
+      if (template === 'LOAD_ASSIGN_DRIVER' && load.driverId) {
+        return completeOpenTask(task, now);
+      }
+
+      if (
+        (template === 'LOAD_DISPATCH' ||
+          template === 'DISPATCH_BLOCKED' ||
+          template === 'LOAD_CONFIRM_PICKUP') &&
+        pastDispatch
+      ) {
+        return completeOpenTask(task, now);
+      }
+
+      if (template === 'LOAD_COLLECT_POD') {
+        if (hasPod || invoiced) return completeOpenTask(task, now);
+        return {
+          ...task,
+          status: 'blocked',
+          blockers: ['POD_REQUIRED'],
+          updatedAt: now,
+        };
+      }
+
+      if (template === 'LOAD_GENERATE_INVOICE' || template === 'INVOICE_BLOCKED') {
+        if (invoiced) return completeOpenTask(task, now);
+        if (!hasPod) {
+          return {
+            ...task,
+            status: 'blocked',
+            blockers: ['POD_REQUIRED'],
+            updatedAt: now,
+          };
+        }
+        return {
+          ...task,
+          status: task.status === 'in_progress' ? 'in_progress' : 'pending',
+          blockers: [],
+          updatedAt: now,
+        };
+      }
+
+      return task;
+    });
+
+  saveTasks(tid, tasks);
+  return tasks;
+}

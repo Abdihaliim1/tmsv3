@@ -119,10 +119,8 @@ export async function triggerWorkflow(
       // Resolve assignee
       const assignedTo = resolveAssignee(action.assignTo, event, event.payload || {});
 
-      // Determine initial status (blocked if blockers exist)
-      const status: Task['status'] = action.blockers && action.blockers.length > 0
-        ? 'blocked'
-        : 'pending';
+      // Start as pending; reconcileTasks sets blocked when requirements are unmet
+      const status: Task['status'] = 'pending';
 
       // Create task
       const task = createTaskIfNotExists(tenantId, {

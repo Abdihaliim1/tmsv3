@@ -9,7 +9,7 @@ import { loadWorkflowRules, saveWorkflowRules, DEFAULT_WORKFLOW_RULES } from '..
 const Tasks: React.FC = () => {
   const { tasks, updateTaskStatus, completeTask, deleteTaskById, loads, invoices } = useTMS();
   const { activeTenantId } = useTenant();
-  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all' | 'active'>('active');
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
@@ -56,8 +56,12 @@ const Tasks: React.FC = () => {
   const filteredTasks = useMemo(() => {
     let filtered = tasks;
 
-    // Filter by status
-    if (statusFilter !== 'all') {
+    // Filter by status (default: active = exclude completed/cancelled)
+    if (statusFilter === 'active') {
+      filtered = filtered.filter(
+        task => task.status !== 'completed' && task.status !== 'cancelled'
+      );
+    } else if (statusFilter !== 'all') {
       filtered = filtered.filter(task => task.status === statusFilter);
     }
 
@@ -152,8 +156,9 @@ const Tasks: React.FC = () => {
   };
 
   const stats = useMemo(() => {
+    const active = tasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled');
     return {
-      total: tasks.length,
+      total: active.length,
       pending: tasks.filter(t => t.status === 'pending').length,
       inProgress: tasks.filter(t => t.status === 'in_progress').length,
       completed: tasks.filter(t => t.status === 'completed').length,
@@ -301,7 +306,7 @@ const Tasks: React.FC = () => {
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <div className="bg-white rounded-lg shadow p-4">
-          <div className="text-sm text-gray-600">Total</div>
+          <div className="text-sm text-gray-600">Active</div>
           <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
         </div>
         <div className="bg-white rounded-lg shadow p-4">
@@ -341,9 +346,10 @@ const Tasks: React.FC = () => {
             <Filter className="w-5 h-5 text-gray-400" />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as TaskStatus | 'all')}
+              onChange={(e) => setStatusFilter(e.target.value as TaskStatus | 'all' | 'active')}
               className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
+              <option value="active">Active</option>
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
               <option value="in_progress">In Progress</option>

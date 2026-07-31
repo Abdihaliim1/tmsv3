@@ -10,7 +10,7 @@ import { generateSearchKey, generatePrefixes } from '../services/brokerUtils';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateShortId, generateStopId } from '../utils/idGenerator';
 import { triggerLoadCreated, triggerLoadStatusChanged, triggerLoadDelivered, triggerInvoiceCreated } from '../services/workflow/workflowEngine';
-import { getTasks, updateTask, deleteTask } from '../services/workflow/taskService';
+import { updateTask, deleteTask, reconcileTasks, normalizeTenantId } from '../services/workflow/taskService';
 import { useAuth } from './AuthContext';
 import { auditCreate, auditUpdate, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
@@ -352,9 +352,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           }
         }
 
-        // Load tasks
+        // Load + reconcile tasks against current loads/invoices
         try {
-          const tasksData = getTasks(tenantId);
+          const tasksData = reconcileTasks(normalizeTenantId(tenantId), {
+            loads: loadsData,
+            invoices: invoicesData,
+          });
           setTasks(tasksData);
         } catch (error) {
           console.warn('Error loading tasks:', error);
@@ -391,20 +394,18 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   // Note: Data is saved to Firestore immediately when changes are made (in each add/update function)
   // No need for auto-save hooks as we persist on each operation
 
-  // Save tasks to localStorage (tasks service handles storage, but we keep state in sync)
-  useEffect(() => {
-    // Tasks are persisted by taskService, but we can refresh from storage if needed
-    try {
-      const storedTasks = getTasks(tenantId);
-      if (JSON.stringify(storedTasks) !== JSON.stringify(tasks)) {
-        // Only update if different to avoid loops
-        setTasks(storedTasks);
-      }
-    } catch (error) {
-      // Ignore errors
-    }
-  }, [tenantId]);
-
+  /** Refresh React task state from storage after reconcile against live entities. */
+  const syncTasks = useCallback(
+    (loadsSnapshot: Load[] = loads, invoicesSnapshot: Invoice[] = invoices) => {
+      setTasks(
+        reconcileTasks(normalizeTenantId(tenantId), {
+          loads: loadsSnapshot,
+          invoices: invoicesSnapshot,
+        })
+      );
+    },
+    [tenantId, loads, invoices]
+  );
 
   // KPIs
   const kpis = useMemo(() => {
@@ -550,7 +551,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         createdBy: newLoad.createdBy,
       });
       if (createdTasks.length > 0) {
-        setTasks(getTasks(tenantId)); // Refresh tasks
+        syncTasks([newLoad, ...loads], invoices);
       }
 
       logger.info('[TMSContext] Load created successfully', {
@@ -802,18 +803,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           );
 
           if (sanitizedUpdates.status === LoadStatus.Delivered || sanitizedUpdates.status === LoadStatus.Completed) {
-            const deliveredTasks = await triggerLoadDelivered(tenantId || 'default', id, {
+            await triggerLoadDelivered(tenantId || 'default', id, {
               loadNumber: updatedLoad.loadNumber,
               driverId: updatedLoad.driverId,
               deliveryDate: updatedLoad.deliveryDate,
             });
-            if (deliveredTasks.length > 0) {
-              setTasks(getTasks(tenantId));
-            }
           }
 
-          if (createdTasks.length > 0) {
-            setTasks(getTasks(tenantId));
+          if (createdTasks.length > 0 || sanitizedUpdates.status) {
+            const nextLoads = loads.map(l => (l.id === id ? updatedLoad : l));
+            syncTasks(nextLoads, invoices);
           }
         } catch (workflowError) {
           logger.warn('[TMSContext] Error triggering workflow', { error: workflowError, loadId: id });
@@ -1029,7 +1028,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
       // Trigger workflow for status changes
       try {
-        const createdTasks = await triggerLoadStatusChanged(
+        await triggerLoadStatusChanged(
           tenantId || 'default',
           id,
           load.status,
@@ -1045,19 +1044,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         );
 
         if (newStatus === LoadStatus.Delivered || newStatus === LoadStatus.Completed) {
-          const deliveredTasks = await triggerLoadDelivered(tenantId || 'default', id, {
+          await triggerLoadDelivered(tenantId || 'default', id, {
             loadNumber: updatedLoad.loadNumber,
             driverId: updatedLoad.driverId,
             deliveryDate: updatedLoad.deliveryDate,
           });
-          if (deliveredTasks.length > 0) {
-            setTasks(getTasks(tenantId));
-          }
         }
 
-        if (createdTasks.length > 0) {
-          setTasks(getTasks(tenantId));
-        }
+        const nextLoads = loads.map(l => (l.id === id ? updatedLoad : l));
+        syncTasks(nextLoads, invoices);
       } catch (workflowError) {
         logger.warn('[TMSContext] Error triggering workflow for status change', { error: workflowError, loadId: id });
       }
@@ -1492,29 +1487,36 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     saveInvoice(tenantId || 'default', newInvoice).catch(e => console.error('Failed to save invoice:', e));
 
     // Link invoice to loads and update Load status to 'invoiced' (TruckingOffice Step 6)
+    const invoicedAt = new Date().toISOString();
+    const nextLoads =
+      invoiceLoadIds.length > 0
+        ? loads.map(load => {
+            if (!invoiceLoadIds.includes(load.id)) return load;
+            const factoredPatch = newInvoice.isFactored
+              ? {
+                  isFactored: true as const,
+                  factoringCompanyId: newInvoice.factoringCompanyId,
+                  factoringCompanyName: newInvoice.factoringCompanyName,
+                  factoringFeePercent: newInvoice.factoringFeePercent,
+                  factoringFee:
+                    (load.grandTotal || load.rate || 0) *
+                    ((newInvoice.factoringFeePercent || 2.5) / 100),
+                  factoredDate: newInvoice.factoredDate || newInvoice.factorSubmittedDate,
+                }
+              : {};
+            return {
+              ...load,
+              ...factoredPatch,
+              invoiceId: newInvoice.id,
+              invoiceNumber: newInvoice.invoiceNumber,
+              invoicedAt,
+              status: LoadStatus.Invoiced,
+            };
+          })
+        : loads;
+
     if (invoiceLoadIds.length > 0) {
-      const invoicedAt = new Date().toISOString();
-      setLoads(prev => prev.map(load => {
-        if (invoiceLoadIds.includes(load.id)) {
-          const factoredPatch = newInvoice.isFactored ? {
-            isFactored: true as const,
-            factoringCompanyId: newInvoice.factoringCompanyId,
-            factoringCompanyName: newInvoice.factoringCompanyName,
-            factoringFeePercent: newInvoice.factoringFeePercent,
-            factoringFee: (load.grandTotal || load.rate || 0) * ((newInvoice.factoringFeePercent || 2.5) / 100),
-            factoredDate: newInvoice.factoredDate || newInvoice.factorSubmittedDate,
-          } : {};
-          return {
-            ...load,
-            ...factoredPatch,
-            invoiceId: newInvoice.id,
-            invoiceNumber: newInvoice.invoiceNumber,
-            invoicedAt: invoicedAt,
-            status: LoadStatus.Invoiced, // TruckingOffice Step 6
-          };
-        }
-        return load;
-      }));
+      setLoads(nextLoads);
 
       // Also update associated PlannedLoads to 'invoiced' status (TruckingOffice workflow sync)
       invoiceLoadIds.forEach(loadId => {
@@ -1535,9 +1537,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       });
     }
 
-    // Trigger workflow for invoice created
+    // Trigger workflow for invoice created, then reconcile stale POD/invoice tasks
     try {
-      const createdTasks = await triggerInvoiceCreated(tenantId || 'default', newInvoice.id, {
+      await triggerInvoiceCreated(tenantId || 'default', newInvoice.id, {
         invoiceNumber: newInvoice.invoiceNumber,
         customerName: newInvoice.customerName,
         amount: newInvoice.amount,
@@ -1545,12 +1547,10 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         dueDate: newInvoice.dueDate,
         loadIds: newInvoice.loadIds,
       });
-      if (createdTasks.length > 0) {
-        setTasks(getTasks(tenantId)); // Refresh tasks
-      }
     } catch (error) {
       console.error('Error triggering workflow for invoice creation:', error);
     }
+    syncTasks(nextLoads, [newInvoice, ...invoices]);
   };
 
   const updateInvoice = (id: string, updates: Partial<Invoice>) => {
@@ -2525,26 +2525,27 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
   // Task management functions
   const updateTaskStatus = (taskId: string, status: Task['status']) => {
-    const updated = updateTask(tenantId, taskId, { status });
+    const updated = updateTask(normalizeTenantId(tenantId), taskId, { status });
     if (updated) {
-      setTasks(getTasks(tenantId));
+      syncTasks();
     }
   };
 
   const completeTaskById = (taskId: string) => {
-    const updated = updateTask(tenantId, taskId, {
+    const updated = updateTask(normalizeTenantId(tenantId), taskId, {
       status: 'completed',
       completedAt: new Date().toISOString(),
+      blockers: [],
     });
     if (updated) {
-      setTasks(getTasks(tenantId));
+      syncTasks();
     }
   };
 
   const deleteTaskById = (taskId: string) => {
-    const deleted = deleteTask(tenantId, taskId);
+    const deleted = deleteTask(normalizeTenantId(tenantId), taskId);
     if (deleted) {
-      setTasks(getTasks(tenantId));
+      syncTasks();
     }
   };
 
