@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect, useCallback } from 'react';
-import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, EmployeeType, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus } from '../types';
-import { recentLoads, generateMockKPIs, initialDrivers, initialInvoices, initialTrucks, initialTrailers, initialDispatchers } from '../services/mockData';
+import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus, Task } from '../types';
+import { generateMockKPIs } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
 // Tenant ID comes from TenantContext
 import { autoSeedBrokers } from '../services/brokerSeed';
@@ -10,12 +10,10 @@ import { generateSearchKey, generatePrefixes } from '../services/brokerUtils';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateShortId, generateStopId } from '../utils/idGenerator';
 import { triggerLoadCreated, triggerLoadStatusChanged, triggerLoadDelivered, triggerInvoiceCreated } from '../services/workflow/workflowEngine';
-import { getTasks, createTaskIfNotExists, updateTask, deleteTask } from '../services/workflow/taskService';
-import { Task } from '../types';
+import { getTasks, updateTask, deleteTask } from '../services/workflow/taskService';
 import { useAuth } from './AuthContext';
-import { auditCreate, auditUpdate, auditDelete, auditStatusChange, auditAdjustment } from '../data/audit';
+import { auditCreate, auditUpdate, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
-import { createAdjustment } from '../services/adjustmentService';
 // Logging and error handling
 import { logger } from '../services/logger';
 import { errorHandler, ErrorSeverity } from '../services/errorHandler';
@@ -33,14 +31,8 @@ import {
   deleteExpense as firestoreDeleteExpense, deleteFactoringCompany as firestoreDeleteFactoringCompany,
   deleteBroker as firestoreDeleteBroker, deleteCustomer as firestoreDeleteCustomer,
   deletePlannedLoad as firestoreDeletePlannedLoad, deleteTrip as firestoreDeleteTrip,
-  batchSave, subscribeToCollection
+  batchSave
 } from '../services/firestoreService';
-
-// LocalStorage keys (tenant-aware)
-const getStorageKey = (tenantId: string | null, key: string): string => {
-  const prefix = tenantId ? `tms_${tenantId}_` : 'tms_';
-  return `${prefix}${key}`;
-};
 
 interface TMSContextType {
   loads: Load[];
@@ -126,13 +118,7 @@ interface TMSProviderProps {
 }
 
 export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) => {
-  // tenantId is passed from parent (avoids circular dependency with TenantContext)
-
-  // Get current user from Firebase Auth for tracking changes
-  // Hooks must be called unconditionally at the top level
-  const { user: authUser } = useAuth();
-
-  // Block data operations if no tenant selected
+  // Split empty-tenant vs loaded provider so hooks are never called conditionally
   if (!tenantId) {
     return (
       <TMSContext.Provider value={{
@@ -216,6 +202,17 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     );
   }
 
+  return (
+    <TMSProviderInner tenantId={tenantId}>
+      {children}
+    </TMSProviderInner>
+  );
+};
+
+const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({ children, tenantId }) => {
+  // Get current user from Firebase Auth for tracking changes
+  const { user: authUser } = useAuth();
+
   // Initialize state with empty arrays (will be loaded from Firestore)
   const [loads, setLoads] = useState<Load[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -231,7 +228,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [, setIsDataLoaded] = useState(false);
   const [pendingDispatchLoadIds, setPendingDispatchLoadIds] = useState<string[]>([]);
 
   // Helper to clear pending dispatch load IDs
@@ -541,15 +538,13 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     }
 
     // --- AUTOMATION LOGIC ---
-    // If load is created as "Delivered" or "Completed", automatically generate Invoice and Settlement
+    // Delivered loads: auto-create invoice only. Settlements are created intentionally
+    // via Settlements → Generate (never auto-create empty/$NaN settlement shells).
     if (newLoad.status === LoadStatus.Delivered || newLoad.status === LoadStatus.Completed) {
-
-      // 1. Auto-Generate Invoice
       const today = new Date();
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 30); // Net 30
 
-      // Check if load is factored
       const isFactored = newLoad.isFactored || false;
       const factoringCompany = factoringCompanies.find(fc => fc.id === newLoad.factoringCompanyId);
 
@@ -558,11 +553,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
         loadIds: [newLoad.id],
         customerName: newLoad.customerName,
-        amount: newLoad.grandTotal || newLoad.rate, // Use grandTotal (includes accessorials) if available
-        status: isFactored ? 'paid' : 'pending', // Mark as paid if factored
+        amount: newLoad.grandTotal || newLoad.rate,
+        status: isFactored ? 'paid' : 'pending',
         date: today.toISOString().split('T')[0],
         dueDate: dueDate.toISOString().split('T')[0],
-        // Factoring fields
         isFactored: isFactored,
         factoringCompanyId: newLoad.factoringCompanyId,
         factoringCompanyName: factoringCompany?.name || newLoad.factoringCompanyName,
@@ -572,38 +566,18 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         paidAt: isFactored ? (newLoad.factoredDate || today.toISOString().split('T')[0]) : undefined,
       };
       setInvoices(prev => [newInvoice, ...prev]);
-
-      // 2. Auto-Generate Settlement (if Driver is assigned)
-      if (newLoad.driverId) {
-        const driver = drivers.find(d => d.id === newLoad.driverId);
-        if (driver) {
-          let grossPay = 0;
-
-          if (driver.type === 'OwnerOperator') {
-            // Split Logic: (Load Rate - Expenses) * Split%
-            // Assuming 0 expenses for this auto-generated example
-            grossPay = newLoad.rate * (driver.rateOrSplit / 100);
-          } else {
-            // Company Driver: Miles * Rate
-            grossPay = newLoad.miles * driver.rateOrSplit;
-          }
-
-          const newSettlement: Settlement = {
-            id: `st-${newLoadId}`,
-            type: 'driver',
-            driverId: driver.id,
-            payeeName: `${driver.firstName} ${driver.lastName}`,
-            loadId: newLoad.loadNumber,
-            grossPay: grossPay,
-            deductions: {}, // Can be edited later
-            totalDeductions: 0,
-            netPay: grossPay,
-            status: 'draft',
-            date: new Date().toISOString().split('T')[0]
-          };
-          setSettlements(prev => [newSettlement, ...prev]);
-        }
-      }
+      saveInvoice(tenantId || 'default', newInvoice).catch(e =>
+        console.error('Failed to save auto-invoice:', e)
+      );
+      const linkedLoad = {
+        ...newLoad,
+        invoiceId: newInvoice.id,
+        invoiceNumber: newInvoice.invoiceNumber,
+      };
+      setLoads(prev => prev.map(l => (l.id === newLoadId ? linkedLoad : l)));
+      saveLoad(tenantId || 'default', linkedLoad).catch(e =>
+        console.error('Failed to link invoice on load:', e)
+      );
     }
   };
 
@@ -1567,12 +1541,16 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
     // Proceed with deletion and cleanup
     setSettlements(prev => prev.filter(settlement => settlement.id !== id));
     firestoreDeleteSettlement(tenantId || 'default', id).catch(e => console.error('Failed to delete settlement:', e));
-    // Clean up: Remove settlementId from all loads that were linked to this settlement
+    // Clean up: unlink loads from this settlement (driver and/or dispatcher fields)
     setLoads(prev => prev.map(load => {
+      let next = load;
       if (load.settlementId === id) {
-        return { ...load, settlementId: undefined };
+        next = { ...next, settlementId: undefined, settlementNumber: undefined };
       }
-      return load;
+      if (load.dispatcherSettlementId === id) {
+        next = { ...next, dispatcherSettlementId: undefined, dispatcherSettlementNumber: undefined };
+      }
+      return next;
     }));
   };
 

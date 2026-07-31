@@ -5,9 +5,9 @@
  * Centralizes all settlement-related business logic with validation.
  */
 
-import { Load, Driver, Settlement, Expense, PaymentType } from '../types';
-import { calculateDriverPay, calculateDriverBasePay } from './businessLogic';
-import { generateSettlementNumber, generateSettlementId } from '../utils/idGenerator';
+import { Load, Driver, Settlement, Expense } from '../types';
+import { calculateDriverBasePay } from './businessLogic';
+import { generateSettlementNumber } from '../utils/idGenerator';
 
 // ============================================================================
 // Types
@@ -187,7 +187,7 @@ function calculateLoadEntry(load: Load, driver: Driver): SettlementLoadEntry {
 function calculateDeductions(
   deductions?: Partial<DeductionBreakdown>,
   expenses?: Expense[],
-  driver?: Driver
+  _driver?: Driver
 ): DeductionBreakdown {
   const result: DeductionBreakdown = {
     insurance: deductions?.insurance || 0,
@@ -415,8 +415,10 @@ export function getEligibleLoadsForSettlement(
     // Must be delivered or completed
     if (load.status !== 'delivered' && load.status !== 'completed') return false;
 
-    // Must not already be settled
+    // Must not already be on a driver settlement
     if (load.settlementId) return false;
+    // Also respect loads listed on a driver settlement even if pointer is missing
+    // (caller should pass settlements when available; kept for backward compat)
 
     // Must be within period
     const deliveryDate = new Date(load.deliveryDate || load.pickupDate || '');

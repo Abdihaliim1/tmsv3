@@ -5,12 +5,7 @@ import {
   Truck,
   Users,
   TrendingUp,
-  MoreHorizontal,
-  CheckSquare,
-  AlertCircle,
-  Clock,
   Plus,
-  Calendar
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -448,9 +443,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 <Tooltip />
               </PieChart>
             </ResponsiveContainer>
-            {/* Center Text */}
+            {/* Center Text — total loads (not only active/in-progress) */}
              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-               <span className="text-3xl font-bold text-slate-900">{kpis.activeLoads}</span>
+               <span className="text-3xl font-bold text-slate-900">{loads.length}</span>
                <span className="text-xs text-slate-500 font-medium uppercase">Total</span>
              </div>
           </div>

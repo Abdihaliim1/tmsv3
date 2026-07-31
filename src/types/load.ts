@@ -84,10 +84,12 @@ export interface Load {
   invoiceNumber?: string;
   invoicedAt?: string;
   
-  // Settlement Linking
+  // Settlement Linking (driver + dispatcher are independent)
   settlementId?: string;
   settlementNumber?: string;
   settledAt?: string;
+  dispatcherSettlementId?: string;
+  dispatcherSettlementNumber?: string;
 
   // Trip Linking
   tripId?: string;

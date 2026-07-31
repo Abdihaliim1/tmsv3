@@ -18,7 +18,11 @@ const NO_REASON_REQUIRED_FIELDS = [
   'bolNumber', // BOL number
   'status', // Status changes (e.g., DELIVERED -> COMPLETED)
   'invoiceId', // Linking invoice
-  'settlementId', // Linking settlement
+  'invoiceNumber',
+  'settlementId', // Linking driver settlement
+  'settlementNumber',
+  'dispatcherSettlementId', // Linking dispatcher settlement (independent of driver)
+  'dispatcherSettlementNumber',
 ] as const;
 
 /**
@@ -87,9 +91,9 @@ export function validatePostDeliveryUpdates(
  * Legacy function - now always returns allowed: true
  */
 export function validatePostDeliveryUpdate(
-  load: Load,
-  field: string,
-  newValue: any
+  _load: Load,
+  _field: string,
+  _newValue: unknown
 ): { allowed: boolean; reason?: string } {
   return { allowed: true };
 }
