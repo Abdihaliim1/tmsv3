@@ -682,6 +682,9 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
         formData.rateOrSplit = undefined;
         formData.currentTruckId = undefined;
         formData.truckId = undefined;
+        // Keep legacy defaultCommission* in sync for settlement fallbacks
+        formData.defaultCommissionType = formData.dispatcherCommissionType;
+        formData.defaultCommissionRate = formData.dispatcherCommissionRate;
       }
     }
 

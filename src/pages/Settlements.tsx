@@ -5,7 +5,21 @@ import { useCompany } from '../context/CompanyContext';
 import { Settlement, Load, LoadStatus } from '../types';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { generateSettlementPDF } from '../services/settlementPDF';
-import { calculateDriverPay, formatDriverPayRate, resolveDriverPayment, getLoadMiles } from '../services/businessLogic';
+import {
+  calculateDriverPay,
+  formatDriverPayRate,
+  resolveDriverPayment,
+  getLoadMiles,
+  resolveDispatcherCommission,
+} from '../services/businessLogic';
+import {
+  computeSettlementPay,
+  sanitizeMoneyInput,
+  sumStoredDeductions,
+  validateSettlementPay,
+  type SettlementLoadPay,
+  type SettlementMoneyInputs,
+} from '../services/settlementMath';
 import { formatDateOnly } from '../utils/dateOnly';
 
 type SettlementType = 'driver' | 'dispatcher';
@@ -244,128 +258,115 @@ const Settlements: React.FC = () => {
     }
   }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads, settlements, employees]);
 
-  // Calculate settlement totals with earnings breakdown
-  const settlementTotals = useMemo(() => {
+  const moneyInputs: SettlementMoneyInputs = useMemo(
+    () => ({
+      insurance: insuranceDeduction,
+      fuel: fuelDeduction,
+      dispatch: dispatchDeduction,
+      advances: advancesDeduction,
+      other: otherDeduction,
+      tonu: tonuDeduction,
+      layover: layoverDeduction,
+      detention: detentionDeduction,
+    }),
+    [
+      insuranceDeduction,
+      fuelDeduction,
+      dispatchDeduction,
+      advancesDeduction,
+      otherDeduction,
+      tonuDeduction,
+      layoverDeduction,
+      detentionDeduction,
+    ]
+  );
+
+  /** Resolve per-load earnings used by settlement math (order-independent). */
+  const resolveLoadPays = (): { loadPays: SettlementLoadPay[]; totalMiles: number; settlementLoads: Settlement['loads'] } => {
     const selectedLoadsData = availableLoads.filter(load => selectedLoads.includes(load.id));
-    
+    const loadPays: SettlementLoadPay[] = [];
+    const settlementLoads: NonNullable<Settlement['loads']> = [];
+    let totalMiles = 0;
+
     if (settlementType === 'dispatcher') {
-      // Dispatcher settlement: sum up commissions
-      let grossPay = 0;
+      const dispatcher = employees.find(e => e.id === selectedDispatcherId);
       selectedLoadsData.forEach(load => {
-        let commissionAmount = load.dispatcherCommissionAmount || 0;
-        
-        // If commission amount is not set, calculate it from commission type and rate
-        if (!commissionAmount && load.dispatcherCommissionType && load.dispatcherCommissionRate) {
-          const baseRate = load.rate || 0;
-          const commissionType = load.dispatcherCommissionType;
-          const commissionRate = load.dispatcherCommissionRate;
-          
-          if (commissionType === 'percentage') {
-            // Percentage: commissionAmount = baseRate * (commissionRate / 100)
-            commissionAmount = baseRate * (commissionRate / 100);
-          } else if (commissionType === 'flat_fee') {
-            // Flat fee: commissionAmount = commissionRate
-            commissionAmount = commissionRate;
-          } else if (commissionType === 'per_mile') {
-            // Per mile: commissionAmount = totalMiles * commissionRate
-            commissionAmount = (load.miles || 0) * commissionRate;
-          }
-        }
-        
-        grossPay += commissionAmount;
-      });
-      
-      const totalDeductions = dispatchDeduction + advancesDeduction + otherDeduction + tonuDeduction + layoverDeduction + detentionDeduction; // Dispatchers don't have fuel/insurance deductions
-      const netPay = Math.max(0, grossPay - totalDeductions);
-      
-      return { 
-        grossPay, 
-        totalDeductions, 
-        netPay, 
-        totalMiles: 0,
-        earningsBreakdown: {
+        const commission = resolveDispatcherCommission(load, dispatcher).amount;
+        loadPays.push({ basePay: commission });
+        settlementLoads.push({
+          loadId: load.id,
           basePay: 0,
           detention: 0,
+          tonu: 0,
           layover: 0,
-          tonu: 0
-        }
-      };
-    } else {
-      // Driver settlement
-      const driver = drivers.find(d => d.id === selectedDriverId);
-      
-      let grossPay = 0;
-      let totalMiles = 0;
-      let totalBasePay = 0;
-      let totalDetentionPay = 0;
-      let totalLayoverPay = 0;
-      let totalTonuPay = 0;
-
-      selectedLoadsData.forEach(load => {
-        // Use stored driver pay if available (from load creation), otherwise calculate
-        let basePay = 0;
-        let detentionPay = 0;
-        let layoverPay = 0;
-        let tonuPay = 0;
-        
-        if (load.driverBasePay !== undefined || load.driverDetentionPay !== undefined || load.driverLayoverPay !== undefined) {
-          // Use stored values from load (already calculated during load creation)
-          basePay = load.driverBasePay || 0;
-          detentionPay = load.driverDetentionPay || 0;
-          layoverPay = load.driverLayoverPay || 0;
-          tonuPay = (load as any).tonuFee || 0;
-        } else {
-          // Calculate using centralized businessLogic function (NO FALLBACKS)
-          if (driver) {
-            // Use centralized calculateDriverPay - NO hardcoded fallbacks
-            basePay = calculateDriverPay(load, driver);
-            // Accessorials: 100% pass-through to driver
-            detentionPay = load.detentionAmount || 0;
-            layoverPay = load.layoverAmount || 0;
-            tonuPay = (load as any).tonuFee || 0;
-            
-            // If driver pay is 0 and should be calculated, warn
-            if (basePay === 0 && load.rate && load.rate > 0) {
-              console.warn(`[Settlements] Driver ${driver.firstName} ${driver.lastName} has no payment profile configured. Pay = 0 for load ${load.loadNumber}.`);
-            }
-          } else {
-            // No driver - pay is 0 (NO default to 100%)
-            basePay = 0;
-            detentionPay = 0;
-            layoverPay = 0;
-            tonuPay = 0;
-            console.warn(`[Settlements] No driver assigned to load ${load.loadNumber}. Pay = 0.`);
-          }
-        }
-        
-        // Total gross pay for this load (base + all accessorials)
-        const loadGrossPay = basePay + detentionPay + layoverPay + tonuPay;
-        
-        grossPay += loadGrossPay;
-        totalBasePay += basePay;
-        totalDetentionPay += detentionPay;
-        totalLayoverPay += layoverPay;
-        totalTonuPay += tonuPay;
-        totalMiles += getLoadMiles(load);
+          dispatchFee: commission,
+        } as any);
       });
-
-      const totalDeductions = insuranceDeduction + fuelDeduction + dispatchDeduction + advancesDeduction + otherDeduction + tonuDeduction + layoverDeduction + detentionDeduction;
-      const netPay = Math.max(0, grossPay - totalDeductions);
-
-      return { 
-        grossPay, 
-        totalDeductions, 
-        netPay, 
-        totalMiles,
-        earningsBreakdown: {
-          basePay: totalBasePay,
-          detention: totalDetentionPay,
-          layover: totalLayoverPay,
-          tonu: totalTonuPay
-        }
-      };
+      return { loadPays, totalMiles: 0, settlementLoads };
     }
-  }, [settlementType, selectedLoads, availableLoads, fuelDeduction, otherDeduction, selectedDriverId, selectedDispatcherId, drivers]);
+
+    const driver = drivers.find(d => d.id === selectedDriverId);
+    selectedLoadsData.forEach(load => {
+      let basePay = 0;
+      let detentionPay = 0;
+      let layoverPay = 0;
+      let tonuPay = 0;
+
+      const hasStoredPay =
+        (load.driverTotalGross !== undefined && load.driverTotalGross > 0) ||
+        (load.driverBasePay !== undefined && load.driverBasePay > 0);
+
+      if (hasStoredPay && load.driverTotalGross !== undefined && load.driverTotalGross > 0) {
+        basePay = load.driverTotalGross;
+      } else if (hasStoredPay) {
+        basePay = load.driverBasePay || 0;
+        detentionPay = load.driverDetentionPay || 0;
+        layoverPay = load.driverLayoverPay || 0;
+        tonuPay = load.tonuFee || 0;
+      } else if (driver) {
+        basePay = calculateDriverPay(load, driver);
+        detentionPay = load.detentionAmount || 0;
+        layoverPay = load.layoverAmount || 0;
+        tonuPay = load.tonuFee || 0;
+      }
+
+      loadPays.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
+      settlementLoads.push({
+        loadId: load.id,
+        basePay,
+        detention: detentionPay,
+        layover: layoverPay,
+        tonu: tonuPay,
+        dispatchFee: load.dispatcherCommissionAmount || 0,
+      } as any);
+      totalMiles += getLoadMiles(load);
+    });
+
+    return { loadPays, totalMiles, settlementLoads };
+  };
+
+  // Calculate settlement totals — every money field is a dependency; math is pure.
+  const settlementTotals = useMemo(() => {
+    const { loadPays, totalMiles } = resolveLoadPays();
+    const pay = computeSettlementPay(loadPays, moneyInputs, {
+      includeDriverDeductions: settlementType === 'driver',
+    });
+    return {
+      ...pay,
+      totalMiles,
+    };
+    // resolveLoadPays closes over selected loads / payees — list them explicitly
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    settlementType,
+    selectedLoads,
+    availableLoads,
+    moneyInputs,
+    selectedDriverId,
+    selectedDispatcherId,
+    drivers,
+    employees,
+  ]);
 
   // Update period display
   const periodDisplay = useMemo(() => {
@@ -523,11 +524,6 @@ const Settlements: React.FC = () => {
       return;
     }
 
-    if (!Number.isFinite(settlementTotals.grossPay) || !Number.isFinite(settlementTotals.netPay)) {
-      alert('Settlement totals are invalid. Check pay/commission settings and try again.');
-      return;
-    }
-
     if (settlementType === 'driver') {
       const driver = drivers.find(d => d.id === selectedDriverId);
       if (driver) {
@@ -549,6 +545,29 @@ const Settlements: React.FC = () => {
       }
     }
 
+    // Recalculate from current inputs at submit time (never trust a stale UI memo alone)
+    const { loadPays, totalMiles, settlementLoads } = resolveLoadPays();
+    const submitInputs: SettlementMoneyInputs = {
+      insurance: insuranceDeduction,
+      fuel: fuelDeduction,
+      dispatch: dispatchDeduction,
+      advances: advancesDeduction,
+      other: otherDeduction,
+      tonu: tonuDeduction,
+      layover: layoverDeduction,
+      detention: detentionDeduction,
+    };
+    const payResult = computeSettlementPay(loadPays, submitInputs, {
+      includeDriverDeductions: settlementType === 'driver',
+    });
+    const validation = validateSettlementPay(payResult, submitInputs, {
+      includeDriverDeductions: settlementType === 'driver',
+    });
+    if (!validation.valid) {
+      alert(`Cannot save settlement:\n\n${validation.errors.join('\n')}`);
+      return;
+    }
+
     const payee = employees.find(e => e.id === currentPayeeId);
     if (!payee) return;
 
@@ -559,48 +578,25 @@ const Settlements: React.FC = () => {
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
 
-    // Build loads array for settlement
-    const settlementLoads = selectedLoads.map(loadId => {
-      const load = loads.find(l => l.id === loadId);
-      if (settlementType === 'dispatcher') {
-        return {
-          loadId,
-          basePay: 0,
-          detention: 0,
-          tonu: 0,
-          layover: 0,
-          dispatchFee: load?.dispatcherCommissionAmount || 0
-        };
-      } else {
-        return {
-          loadId,
-          basePay: load?.driverBasePay || 0,
-          detention: load?.driverDetentionPay || 0,
-          tonu: (load as any)?.tonuFee || 0,
-          layover: load?.driverLayoverPay || 0,
-          dispatchFee: load?.dispatcherCommissionAmount || 0
-        };
-      }
-    });
-
-    // Build deductions object
-    const deductions: Settlement['deductions'] = settlementType === 'driver' ? {
-      insurance: insuranceDeduction || 0,
-      fuel: fuelDeduction || 0,
-      cashAdvance: advancesDeduction || 0,
+    const deductions: Settlement['deductions'] = {
+      insurance: settlementType === 'driver' ? payResult.deductions.insurance : 0,
+      fuel: settlementType === 'driver' ? payResult.deductions.fuel : 0,
+      dispatch: payResult.deductions.dispatch,
+      cashAdvance: payResult.deductions.cashAdvance,
       escrow: 0,
-      tonu: tonuDeduction || 0,
-      layover: layoverDeduction || 0,
-      detention: detentionDeduction || 0,
-      other: (otherDeduction || 0) + (dispatchDeduction || 0)
-    } : {
-      cashAdvance: advancesDeduction || 0,
-      escrow: 0,
-      tonu: tonuDeduction || 0,
-      layover: layoverDeduction || 0,
-      detention: detentionDeduction || 0,
-      other: (otherDeduction || 0) + (dispatchDeduction || 0)
+      other: payResult.deductions.other,
     };
+
+    const otherEarnings: Settlement['otherEarnings'] = [];
+    if (payResult.manualTonu > 0) {
+      otherEarnings.push({ type: 'tonu', description: 'TONU (manual)', amount: payResult.manualTonu });
+    }
+    if (payResult.manualLayover > 0) {
+      otherEarnings.push({ type: 'layover', description: 'Layover (manual)', amount: payResult.manualLayover });
+    }
+    if (payResult.manualDetention > 0) {
+      otherEarnings.push({ type: 'detention', description: 'Detention (manual)', amount: payResult.manualDetention });
+    }
 
     const newSettlement: Omit<Settlement, 'id'> = {
       settlementNumber,
@@ -611,11 +607,12 @@ const Settlements: React.FC = () => {
       loadIds: selectedLoads,
       loads: settlementLoads,
       expenseIds: [],
-      grossPay: settlementTotals.grossPay,
+      grossPay: payResult.grossPay,
       deductions,
-      totalDeductions: settlementTotals.totalDeductions,
-      netPay: settlementTotals.netPay,
-      totalMiles: settlementTotals.totalMiles,
+      otherEarnings: otherEarnings.length > 0 ? otherEarnings : undefined,
+      totalDeductions: payResult.totalDeductions,
+      netPay: payResult.netPay,
+      totalMiles,
       status: 'pending',
       periodStart: weekStart.toISOString().split('T')[0],
       periodEnd: weekEnd.toISOString().split('T')[0],
@@ -995,8 +992,22 @@ const Settlements: React.FC = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{settlement.totalMiles || 0}</td>
                       )}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{formatCurrency(settlement.grossPay)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">-{formatCurrency(settlement.totalDeductions || (typeof settlement.deductions === 'number' ? settlement.deductions : 0))}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-green-600">{formatCurrency(settlement.netPay)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
+                        -{formatCurrency((() => {
+                          const fromBreakdown = sumStoredDeductions(settlement.deductions as any);
+                          if (fromBreakdown > 0) return fromBreakdown;
+                          return settlement.totalDeductions || (typeof settlement.deductions === 'number' ? settlement.deductions : 0);
+                        })())}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-green-600">
+                        {formatCurrency((() => {
+                          const fromBreakdown = sumStoredDeductions(settlement.deductions as any);
+                          if (fromBreakdown > 0 && settlement.grossPay != null) {
+                            return Math.round((settlement.grossPay - fromBreakdown + Number.EPSILON) * 100) / 100;
+                          }
+                          return settlement.netPay;
+                        })())}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadge(settlement.status)}`}>
                           {(settlement.status || 'pending').charAt(0).toUpperCase() + (settlement.status || 'pending').slice(1)}
@@ -1196,36 +1207,21 @@ const Settlements: React.FC = () => {
                           let payFormula = '—';
 
                           if (settlementType === 'dispatcher') {
-                            // Use stored commission amount, or calculate if missing
-                            payAmount = load.dispatcherCommissionAmount || 0;
-                            payFormula = 'Stored commission';
-                            
-                            // If commission amount is not set, calculate it from commission type and rate
-                            if (!payAmount && load.dispatcherCommissionType && load.dispatcherCommissionRate) {
-                              const baseRate = load.rate || 0;
-                              const commissionType = load.dispatcherCommissionType;
-                              const commissionRate = load.dispatcherCommissionRate;
-                              
-                              if (commissionType === 'percentage') {
-                                payAmount = baseRate * (commissionRate / 100);
-                                payFormula = `$${baseRate.toFixed(2)} × ${commissionRate}%`;
-                              } else if (commissionType === 'flat_fee') {
-                                payAmount = commissionRate;
-                                payFormula = `Flat $${commissionRate.toFixed(2)}`;
-                              } else if (commissionType === 'per_mile') {
-                                const miles = getLoadMiles(load);
-                                payAmount = miles * commissionRate;
-                                payFormula = `${miles} mi × $${commissionRate.toFixed(2)}`;
-                              }
-                            }
+                            const dispatcher = employees.find(e => e.id === selectedDispatcherId);
+                            const resolved = resolveDispatcherCommission(load, dispatcher);
+                            payAmount = resolved.amount;
+                            payFormula = resolved.formula;
                           } else {
                             const driver = drivers.find(d => d.id === selectedDriverId);
-                            if (load.driverBasePay !== undefined || load.driverDetentionPay !== undefined || load.driverLayoverPay !== undefined) {
-                              payAmount = (load.driverBasePay || 0) + (load.driverDetentionPay || 0) + (load.driverLayoverPay || 0) + (load.tonuFee || 0);
-                              payFormula = 'Stored load pay';
-                            } else if (load.driverTotalGross !== undefined && load.driverTotalGross > 0) {
+                            const hasStoredPay =
+                              (load.driverTotalGross !== undefined && load.driverTotalGross > 0) ||
+                              (load.driverBasePay !== undefined && load.driverBasePay > 0);
+                            if (hasStoredPay && load.driverTotalGross !== undefined && load.driverTotalGross > 0) {
                               payAmount = load.driverTotalGross;
                               payFormula = 'Stored total gross';
+                            } else if (hasStoredPay) {
+                              payAmount = (load.driverBasePay || 0) + (load.driverDetentionPay || 0) + (load.driverLayoverPay || 0) + (load.tonuFee || 0);
+                              payFormula = 'Stored load pay';
                             } else if (driver) {
                               const pay = resolveDriverPayment(driver);
                               const miles = getLoadMiles(load);
@@ -1235,7 +1231,9 @@ const Settlements: React.FC = () => {
                               const tonuPay = load.tonuFee || 0;
                               payAmount = base + detentionPay + layoverPay + tonuPay;
                               if (pay.type === 'per_mile') {
-                                payFormula = `${miles} mi × $${pay.perMileRate.toFixed(2)}/mi`;
+                                payFormula = miles > 0
+                                  ? `${miles} mi × $${pay.perMileRate.toFixed(2)}/mi`
+                                  : `0 mi × $${pay.perMileRate.toFixed(2)}/mi (set miles on load)`;
                               } else if (pay.type === 'percentage') {
                                 payFormula = `Rev × ${pay.percentageDisplay.toFixed(2)}%`;
                               } else {
@@ -1281,8 +1279,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Insurance</label>
                             <input
                               type="number"
-                              value={insuranceDeduction}
-                              onChange={(e) => setInsuranceDeduction(parseFloat(e.target.value) || 0)}
+                              value={insuranceDeduction || ''}
+                              onChange={(e) => setInsuranceDeduction(sanitizeMoneyInput(e.target.value, insuranceDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1292,8 +1290,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Fuel</label>
                             <input
                               type="number"
-                              value={fuelDeduction}
-                              onChange={(e) => setFuelDeduction(parseFloat(e.target.value) || 0)}
+                              value={fuelDeduction || ''}
+                              onChange={(e) => setFuelDeduction(sanitizeMoneyInput(e.target.value, fuelDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1303,8 +1301,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Dispatch</label>
                             <input
                               type="number"
-                              value={dispatchDeduction}
-                              onChange={(e) => setDispatchDeduction(parseFloat(e.target.value) || 0)}
+                              value={dispatchDeduction || ''}
+                              onChange={(e) => setDispatchDeduction(sanitizeMoneyInput(e.target.value, dispatchDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1314,8 +1312,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Advances</label>
                             <input
                               type="number"
-                              value={advancesDeduction}
-                              onChange={(e) => setAdvancesDeduction(parseFloat(e.target.value) || 0)}
+                              value={advancesDeduction || ''}
+                              onChange={(e) => setAdvancesDeduction(sanitizeMoneyInput(e.target.value, advancesDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1325,8 +1323,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Others</label>
                             <input
                               type="number"
-                              value={otherDeduction}
-                              onChange={(e) => setOtherDeduction(parseFloat(e.target.value) || 0)}
+                              value={otherDeduction || ''}
+                              onChange={(e) => setOtherDeduction(sanitizeMoneyInput(e.target.value, otherDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1334,14 +1332,15 @@ const Settlements: React.FC = () => {
                           </div>
                         </div>
                         <div className="border-t border-slate-300 pt-4">
-                          <h6 className="text-sm font-medium text-slate-700 mb-3">Accessorials</h6>
+                          <h6 className="text-sm font-medium text-slate-700 mb-1">Accessorial earnings</h6>
+                          <p className="text-xs text-slate-500 mb-3">100% pass-through — added to gross pay, not deductions.</p>
                           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                             <div>
                               <label className="block text-sm text-slate-600 mb-1">TONU</label>
                               <input
                                 type="number"
-                                value={tonuDeduction}
-                                onChange={(e) => setTonuDeduction(parseFloat(e.target.value) || 0)}
+                                value={tonuDeduction || ''}
+                                onChange={(e) => setTonuDeduction(sanitizeMoneyInput(e.target.value, tonuDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1351,8 +1350,8 @@ const Settlements: React.FC = () => {
                               <label className="block text-sm text-slate-600 mb-1">Layover</label>
                               <input
                                 type="number"
-                                value={layoverDeduction}
-                                onChange={(e) => setLayoverDeduction(parseFloat(e.target.value) || 0)}
+                                value={layoverDeduction || ''}
+                                onChange={(e) => setLayoverDeduction(sanitizeMoneyInput(e.target.value, layoverDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1362,8 +1361,8 @@ const Settlements: React.FC = () => {
                               <label className="block text-sm text-slate-600 mb-1">Detention</label>
                               <input
                                 type="number"
-                                value={detentionDeduction}
-                                onChange={(e) => setDetentionDeduction(parseFloat(e.target.value) || 0)}
+                                value={detentionDeduction || ''}
+                                onChange={(e) => setDetentionDeduction(sanitizeMoneyInput(e.target.value, detentionDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1380,8 +1379,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Dispatch</label>
                             <input
                               type="number"
-                              value={dispatchDeduction}
-                              onChange={(e) => setDispatchDeduction(parseFloat(e.target.value) || 0)}
+                              value={dispatchDeduction || ''}
+                              onChange={(e) => setDispatchDeduction(sanitizeMoneyInput(e.target.value, dispatchDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1391,8 +1390,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Advances</label>
                             <input
                               type="number"
-                              value={advancesDeduction}
-                              onChange={(e) => setAdvancesDeduction(parseFloat(e.target.value) || 0)}
+                              value={advancesDeduction || ''}
+                              onChange={(e) => setAdvancesDeduction(sanitizeMoneyInput(e.target.value, advancesDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1402,8 +1401,8 @@ const Settlements: React.FC = () => {
                             <label className="block text-sm text-slate-600 mb-1">Others</label>
                             <input
                               type="number"
-                              value={otherDeduction}
-                              onChange={(e) => setOtherDeduction(parseFloat(e.target.value) || 0)}
+                              value={otherDeduction || ''}
+                              onChange={(e) => setOtherDeduction(sanitizeMoneyInput(e.target.value, otherDeduction))}
                               min="0"
                               step="0.01"
                               className="w-full border rounded px-3 py-2"
@@ -1411,14 +1410,15 @@ const Settlements: React.FC = () => {
                           </div>
                         </div>
                         <div className="border-t border-slate-300 pt-4">
-                          <h6 className="text-sm font-medium text-slate-700 mb-3">Accessorials</h6>
+                          <h6 className="text-sm font-medium text-slate-700 mb-1">Accessorial earnings</h6>
+                          <p className="text-xs text-slate-500 mb-3">100% pass-through — added to gross pay, not deductions.</p>
                           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                             <div>
                               <label className="block text-sm text-slate-600 mb-1">TONU</label>
                               <input
                                 type="number"
-                                value={tonuDeduction}
-                                onChange={(e) => setTonuDeduction(parseFloat(e.target.value) || 0)}
+                                value={tonuDeduction || ''}
+                                onChange={(e) => setTonuDeduction(sanitizeMoneyInput(e.target.value, tonuDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1428,8 +1428,8 @@ const Settlements: React.FC = () => {
                               <label className="block text-sm text-slate-600 mb-1">Layover</label>
                               <input
                                 type="number"
-                                value={layoverDeduction}
-                                onChange={(e) => setLayoverDeduction(parseFloat(e.target.value) || 0)}
+                                value={layoverDeduction || ''}
+                                onChange={(e) => setLayoverDeduction(sanitizeMoneyInput(e.target.value, layoverDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1439,8 +1439,8 @@ const Settlements: React.FC = () => {
                               <label className="block text-sm text-slate-600 mb-1">Detention</label>
                               <input
                                 type="number"
-                                value={detentionDeduction}
-                                onChange={(e) => setDetentionDeduction(parseFloat(e.target.value) || 0)}
+                                value={detentionDeduction || ''}
+                                onChange={(e) => setDetentionDeduction(sanitizeMoneyInput(e.target.value, detentionDeduction))}
                                 min="0"
                                 step="0.01"
                                 className="w-full border rounded px-3 py-2"
@@ -1457,12 +1457,12 @@ const Settlements: React.FC = () => {
                     <h4 className="text-sm font-semibold text-slate-700 mb-3">Pay Summary</h4>
                     <div className="space-y-2">
                       {/* Earnings Breakdown */}
-                      {settlementType === 'driver' && settlementTotals.earningsBreakdown && (
+                      {settlementTotals.earningsBreakdown && (
                         <div className="mb-3 pb-3 border-b border-slate-300">
                           <p className="text-xs font-medium text-slate-500 mb-2 uppercase">Earnings Breakdown:</p>
                           <div className="space-y-1.5 text-sm">
                             <div className="flex justify-between text-slate-600">
-                              <span>Base Pay:</span>
+                              <span>{settlementType === 'dispatcher' ? 'Commission:' : 'Base Pay:'}</span>
                               <span className="font-medium">{formatCurrency(settlementTotals.earningsBreakdown.basePay)}</span>
                             </div>
                             {settlementTotals.earningsBreakdown.detention > 0 && (
@@ -1496,8 +1496,25 @@ const Settlements: React.FC = () => {
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-slate-300">
                         <span className="text-xl font-bold text-slate-900">Net Pay:</span>
-                        <span className="text-2xl font-extrabold text-green-600">{formatCurrency(settlementTotals.netPay)}</span>
+                        <span className={`text-2xl font-extrabold ${settlementTotals.netPay < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {formatCurrency(settlementTotals.netPay)}
+                        </span>
                       </div>
+                      {settlementTotals.netPay < 0 && (
+                        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-900">
+                          Deductions exceed gross by {formatCurrency(settlementTotals.totalDeductions - settlementTotals.grossPay)}.
+                          Reduce deductions before generating — save is blocked.
+                        </div>
+                      )}
+                      {settlementTotals.grossPay === 0 && selectedLoads.length > 0 && (
+                        <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
+                          {settlementType === 'dispatcher' ? (
+                            <>Gross is $0 because this dispatcher has no commission type/rate on their employee profile, and loads have no stored commission. Edit the dispatcher under Employees, set Commission Type + Rate, then reload Settlements.</>
+                          ) : (
+                            <>Gross is $0 because stored driver pay is 0 and recalculation also returned 0 — usually missing miles on a per-mile driver, or no pay rate on the driver profile. Check driver pay settings and load miles.</>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1585,27 +1602,52 @@ const Settlements: React.FC = () => {
 
             {/* Content */}
             <div className="p-6 space-y-6">
-              {/* Status & Summary Cards */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-slate-50 rounded-lg p-4">
-                  <p className="text-xs text-slate-500 uppercase font-medium">Status</p>
-                  <span className={`inline-block mt-1 px-2 py-1 text-xs rounded-full ${getStatusBadge(previewSettlement.status)}`}>
-                    {(previewSettlement.status || 'pending').charAt(0).toUpperCase() + (previewSettlement.status || 'pending').slice(1)}
-                  </span>
-                </div>
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <p className="text-xs text-blue-600 uppercase font-medium">Gross Pay</p>
-                  <p className="text-lg font-bold text-blue-700">${(previewSettlement.grossPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                </div>
-                <div className="bg-red-50 rounded-lg p-4">
-                  <p className="text-xs text-red-600 uppercase font-medium">Deductions</p>
-                  <p className="text-lg font-bold text-red-700">-${(previewSettlement.totalDeductions || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                </div>
-                <div className="bg-green-50 rounded-lg p-4">
-                  <p className="text-xs text-green-600 uppercase font-medium">Net Pay</p>
-                  <p className="text-lg font-bold text-green-700">${(previewSettlement.netPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                </div>
-              </div>
+              {/* Status & Summary Cards — recompute deductions from breakdown so detail never lies */}
+              {(() => {
+                const breakdownTotal = sumStoredDeductions(previewSettlement.deductions as any);
+                const storedTotal = previewSettlement.totalDeductions ?? 0;
+                const displayDeductions = breakdownTotal > 0 ? breakdownTotal : storedTotal;
+                const otherEarn = (previewSettlement.otherEarnings || []).reduce((s, e) => s + (e.amount || 0), 0);
+                const displayNet = Math.round(((previewSettlement.grossPay || 0) - displayDeductions + Number.EPSILON) * 100) / 100;
+                const mismatch =
+                  breakdownTotal > 0 &&
+                  Math.abs(breakdownTotal - storedTotal) > 0.009;
+                return (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-slate-50 rounded-lg p-4">
+                        <p className="text-xs text-slate-500 uppercase font-medium">Status</p>
+                        <span className={`inline-block mt-1 px-2 py-1 text-xs rounded-full ${getStatusBadge(previewSettlement.status)}`}>
+                          {(previewSettlement.status || 'pending').charAt(0).toUpperCase() + (previewSettlement.status || 'pending').slice(1)}
+                        </span>
+                      </div>
+                      <div className="bg-blue-50 rounded-lg p-4">
+                        <p className="text-xs text-blue-600 uppercase font-medium">Gross Pay</p>
+                        <p className="text-lg font-bold text-blue-700">${(previewSettlement.grossPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-red-50 rounded-lg p-4">
+                        <p className="text-xs text-red-600 uppercase font-medium">Deductions</p>
+                        <p className="text-lg font-bold text-red-700">-${displayDeductions.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-green-50 rounded-lg p-4">
+                        <p className="text-xs text-green-600 uppercase font-medium">Net Pay</p>
+                        <p className="text-lg font-bold text-green-700">${displayNet.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    </div>
+                    {mismatch && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+                        Stored totalDeductions was ${storedTotal.toFixed(2)} but breakdown sums to ${breakdownTotal.toFixed(2)}.
+                        Showing the breakdown total. Delete and regenerate this settlement to persist corrected totals.
+                      </div>
+                    )}
+                    {otherEarn > 0 && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
+                        Includes ${otherEarn.toFixed(2)} accessorial earnings (TONU / layover / detention) in gross.
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Payee & Period Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1665,15 +1707,37 @@ const Settlements: React.FC = () => {
                   <h3 className="text-sm font-semibold text-slate-700 uppercase">Deductions Breakdown</h3>
                   <div className="bg-red-50 rounded-lg p-4">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                      {Object.entries(previewSettlement.deductions).map(([key, value]) => (
+                      {Object.entries(previewSettlement.deductions)
+                        .filter(([key]) => !['tonu', 'layover', 'detention'].includes(key))
+                        .map(([key, value]) => (
                         value && Number(value) > 0 ? (
                           <div key={key} className="flex justify-between">
-                            <span className="text-sm text-slate-600 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
+                            <span className="text-sm text-slate-600 capitalize">
+                              {key === 'cashAdvance' ? 'Advances' : key.replace(/([A-Z])/g, ' $1').trim()}:
+                            </span>
                             <span className="text-sm font-medium text-red-600">-${Number(value).toFixed(2)}</span>
                           </div>
                         ) : null
                       ))}
                     </div>
+                    <div className="mt-3 pt-3 border-t border-red-200 flex justify-between text-sm font-semibold text-red-800">
+                      <span>Breakdown total</span>
+                      <span>-${sumStoredDeductions(previewSettlement.deductions as any).toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {previewSettlement.otherEarnings && previewSettlement.otherEarnings.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase">Accessorial Earnings</h3>
+                  <div className="bg-blue-50 rounded-lg p-4 grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {previewSettlement.otherEarnings.map((earn, idx) => (
+                      <div key={`${earn.type}-${idx}`} className="flex justify-between">
+                        <span className="text-sm text-slate-600 capitalize">{earn.description || earn.type}:</span>
+                        <span className="text-sm font-medium text-blue-700">+${Number(earn.amount || 0).toFixed(2)}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

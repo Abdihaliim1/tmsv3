@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, MapPin, Calculator, Clock, FileText, AlertTriangle } from 'lucide-react';
-import { LoadStatus, NewLoadInput, Load, Broker, NewBrokerInput, FactoringCompany, DocumentType } from '../types';
+import React, { useState, useEffect } from 'react';
+import { X, MapPin, Calculator, Clock, FileText } from 'lucide-react';
+import { LoadStatus, NewLoadInput, Load, Broker, NewBrokerInput } from '../types';
 import { useTMS } from '../context/TMSContext';
 import { calculateDistance, validatePayPercentage } from '../services/utils';
 import { normalize } from '../services/brokerUtils';
 import { BrokerAutocomplete } from './BrokerAutocomplete';
-import { FactoringCompanyAutocomplete } from './FactoringCompanyAutocomplete';
 import DocumentUpload from './DocumentUpload';
 import { isLoadLocked, validatePostDeliveryUpdates } from '../services/loadLocking';
 
@@ -17,7 +16,7 @@ interface AddLoadModalProps {
 }
 
 const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, editingLoad }) => {
-  const { employees, drivers, factoringCompanies, brokers, loads, trucks, trailers, addBroker, addFactoringCompany } = useTMS();
+  const { employees, drivers, factoringCompanies, brokers, trucks, trailers, addBroker } = useTMS();
 
   // Get dispatchers from employees
   const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
@@ -106,7 +105,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   };
 
   const [formData, setFormData] = useState<NewLoadInput>(initialState);
-  const [selectedTruckId, setSelectedTruckId] = useState<string>('');
+  const [, setSelectedTruckId] = useState<string>('');
   const [rpm, setRpm] = useState<string>('0.00');
   const [isCalculatingMiles, setIsCalculatingMiles] = useState(false);
 
@@ -151,45 +150,6 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         setFormData(prev => ({
           ...prev,
           brokerName: newBroker.name || '',
-        }));
-      }
-    }, 100);
-  };
-
-  // Handle factoring company selection from autocomplete
-  const handleFactoringCompanySelect = (company: FactoringCompany | null) => {
-    if (company) {
-      setFormData(prev => ({
-        ...prev,
-        factoringCompanyId: company.id,
-        factoringCompanyName: company.name,
-        // Set fee percentage from company if available
-        factoringFeePercent: company.feePercentage || prev.factoringFeePercent || 0,
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        factoringCompanyId: '',
-        factoringCompanyName: '',
-        factoringFeePercent: 0,
-      }));
-    }
-  };
-
-  // Handle adding new factoring company
-  const handleAddNewFactoringCompany = (newCompany: Omit<FactoringCompany, 'id'>) => {
-    addFactoringCompany(newCompany);
-    // After adding, the company will be in the list, so we can find and select it
-    setTimeout(() => {
-      const addedCompany = factoringCompanies.find(c => c.name === newCompany.name) ||
-        factoringCompanies.find(c => normalize(c.name) === normalize(newCompany.name || ''));
-      if (addedCompany) {
-        handleFactoringCompanySelect(addedCompany);
-      } else {
-        // If not found immediately, set the name directly
-        setFormData(prev => ({
-          ...prev,
-          factoringCompanyName: newCompany.name || '',
         }));
       }
     }, 100);
@@ -1068,8 +1028,14 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                           ...prev,
                           dispatcherId: dispatcher.id,
                           dispatcherName: `${dispatcher.firstName} ${dispatcher.lastName}`,
-                          dispatcherCommissionType: dispatcher.dispatcherCommissionType || undefined,
-                          dispatcherCommissionRate: dispatcher.dispatcherCommissionRate || 0,
+                          dispatcherCommissionType:
+                            dispatcher.dispatcherCommissionType ||
+                            dispatcher.defaultCommissionType ||
+                            undefined,
+                          dispatcherCommissionRate:
+                            dispatcher.dispatcherCommissionRate ||
+                            dispatcher.defaultCommissionRate ||
+                            0,
                           isExternalDispatch: false
                         }));
                       } else {

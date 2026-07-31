@@ -2,11 +2,11 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Route, Plus, Calendar, MapPin, Truck, Clock, DollarSign, Search,
   ChevronLeft, ChevronRight, Eye, Edit, Trash2, List, LayoutGrid,
-  Info, Users, Box, Check, X, FileText, Phone, Mail, Hash
+  Info, Users, Box, Check, X, FileText
 } from 'lucide-react';
-import { Trip, TripStatus, TripType, NewTripInput, PlannedLoad } from '../types/plannedLoad';
+import { Trip, TripStatus, TripType, NewTripInput } from '../types/plannedLoad';
 import { useTMS } from '../context/TMSContext';
-import { NewDriverInput, NewTruckInput, NewTrailerInput, TruckStatus, TruckOwnership, TrailerStatus, TrailerType } from '../types';
+import { TruckStatus, TruckOwnership, TrailerStatus, TrailerType } from '../types';
 
 // ============================================================================
 // Create Driver Modal Component
@@ -1156,7 +1156,8 @@ interface EditTripModalProps {
 }
 
 const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, onSave }) => {
-  const { drivers, trucks, trailers } = useTMS();
+  const { drivers, trucks, trailers, employees } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
   const [formData, setFormData] = useState({
     tripNumber: '',
@@ -1168,6 +1169,8 @@ const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, on
     truckNumber: '',
     trailerId: '',
     trailerNumber: '',
+    dispatcherId: '',
+    dispatcherName: '',
     fromCity: '',
     fromState: '',
     toCity: '',
@@ -1193,6 +1196,8 @@ const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, on
         truckNumber: trip.truckNumber || '',
         trailerId: trip.trailerId || '',
         trailerNumber: trip.trailerNumber || '',
+        dispatcherId: trip.dispatcherId || '',
+        dispatcherName: trip.dispatcherName || '',
         fromCity: trip.fromCity || '',
         fromState: trip.fromState || '',
         toCity: trip.toCity || '',
@@ -1213,6 +1218,15 @@ const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, on
       ...formData,
       driverId,
       driverName: driver ? `${driver.firstName} ${driver.lastName}` : '',
+    });
+  };
+
+  const handleDispatcherChange = (dispatcherId: string) => {
+    const dispatcher = dispatchers.find(d => d.id === dispatcherId);
+    setFormData({
+      ...formData,
+      dispatcherId,
+      dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : '',
     });
   };
 
@@ -1300,13 +1314,13 @@ const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, on
             </div>
           </div>
 
-          {/* Driver & Equipment */}
+          {/* Driver, Dispatcher & Equipment */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
               <Users size={16} />
-              Driver & Equipment
+              Driver, Dispatcher & Equipment
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Driver</label>
                 <select
@@ -1318,6 +1332,21 @@ const EditTripModal: React.FC<EditTripModalProps> = ({ isOpen, onClose, trip, on
                   {drivers.map((driver) => (
                     <option key={driver.id} value={driver.id}>
                       {driver.firstName} {driver.lastName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Dispatcher (Booked By)</label>
+                <select
+                  value={formData.dispatcherId}
+                  onChange={(e) => handleDispatcherChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (Self-Dispatched)</option>
+                  {dispatchers.map((dispatcher) => (
+                    <option key={dispatcher.id} value={dispatcher.id}>
+                      {dispatcher.firstName} {dispatcher.lastName}
                     </option>
                   ))}
                 </select>
@@ -1544,12 +1573,14 @@ interface AddTripFormProps {
   preSelectedLoadIds?: string[];
 }
 
-const AddTripForm: React.FC<AddTripFormProps> = ({ onSave, onCancel, preSelectedLoadIds = [] }) => {
-  const { drivers, trucks, trailers, plannedLoads, dispatchPlannedLoadsToTrip } = useTMS();
+const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, preSelectedLoadIds = [] }) => {
+  const { drivers, trucks, trailers, plannedLoads, employees, dispatchPlannedLoadsToTrip } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
   // Form state
   const [customTripNumber, setCustomTripNumber] = useState('');
   const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState('');
   const [accessoryDriverPay, setAccessoryDriverPay] = useState(0);
   const [driverAdvance, setDriverAdvance] = useState(0);
   const [teamDriverId, setTeamDriverId] = useState('');
@@ -1600,6 +1631,7 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave, onCancel, preSelected
     }
 
     const driver = drivers.find(d => d.id === selectedDriverId);
+    const dispatcher = employees.find(e => e.id === selectedDispatcherId);
     const truck = trucks.find(t => t.id === selectedTruckId);
     const trailer = trailers.find(t => t.id === selectedTrailerId);
 
@@ -1613,6 +1645,8 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave, onCancel, preSelected
       type: 'company',
       driverId: selectedDriverId,
       driverName: driver ? `${driver.firstName} ${driver.lastName}` : '',
+      dispatcherId: selectedDispatcherId || undefined,
+      dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
       truckId: selectedTruckId,
       truckNumber: truck?.truckNumber,
       trailerId: selectedTrailerId || undefined,
@@ -1700,6 +1734,27 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave, onCancel, preSelected
             >
               + Create Driver
             </button>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Dispatcher (Booked By)
+            </label>
+            <select
+              value={selectedDispatcherId}
+              onChange={(e) => setSelectedDispatcherId(e.target.value)}
+              className="w-full max-w-md px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">None (Self-Dispatched)</option>
+              {dispatchers.map((dispatcher) => (
+                <option key={dispatcher.id} value={dispatcher.id}>
+                  {dispatcher.firstName} {dispatcher.lastName}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              Propagates to created loads with the dispatcher’s commission defaults.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
@@ -1968,7 +2023,7 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave, onCancel, preSelected
 
 const Trips: React.FC = () => {
   const {
-    trips, addTrip, deleteTrip, updateTrip, drivers, trucks, trailers, plannedLoads, loads, dispatchPlannedLoadsToTrip,
+    trips, addTrip, deleteTrip, updateTrip, loads, dispatchPlannedLoadsToTrip,
     pendingDispatchLoadIds, clearPendingDispatchLoadIds
   } = useTMS();
 

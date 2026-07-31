@@ -1,10 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  ClipboardList, Plus, Search, Eye, Edit, Copy, Trash2, Route, Building2,
-  MapPin, Calendar, FileText, DollarSign, ChevronRight, X, Check, Clock,
-  Truck, Package, Receipt, Upload, Paperclip
+  ClipboardList, Plus, Search, Edit, Copy, Trash2,
+  MapPin, FileText, DollarSign, ChevronRight, X, Check, Paperclip
 } from 'lucide-react';
-import { PlannedLoad, PlannedLoadStatus, Pickup, Delivery, Customer, PlannedLoadFees, NewPlannedLoadInput, FeeType } from '../types/plannedLoad';
+import { PlannedLoad, PlannedLoadStatus, NewPlannedLoadInput, FeeType } from '../types/plannedLoad';
 import { useTMS } from '../context/TMSContext';
 
 // Quantity unit type for form
@@ -19,7 +18,7 @@ interface ProgressTrackerProps {
   status: PlannedLoadStatus;
 }
 
-const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStep, status }) => {
+const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStep, status: _status }) => {
   const steps = [
     { num: 1, label: 'Planned Load', status: 'planned' },
     { num: 2, label: 'Trip (Dispatched)', status: 'dispatched' },
@@ -36,7 +35,6 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({ currentStep, status }
         {steps.map((step, index) => {
           const isCompleted = currentStep > step.num;
           const isCurrent = currentStep === step.num;
-          const isFuture = currentStep < step.num;
 
           return (
             <React.Fragment key={step.num}>
@@ -649,7 +647,8 @@ interface PlannedLoadFormProps {
 }
 
 const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCancel }) => {
-  const { customers, addCustomer } = useTMS();
+  const { customers, addCustomer, employees } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
   // Basic form data
   const [customLoadNumber, setCustomLoadNumber] = useState(load?.customLoadNumber || '');
@@ -658,6 +657,7 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; address?: string; city?: string; state?: string } | null>(
     load?.customer ? { id: load.customer.id, name: load.customer.name, address: load.customer.address, city: load.customer.city, state: load.customer.state } : null
   );
+  const [dispatcherId, setDispatcherId] = useState(load?.dispatcherId || '');
 
   // Pickups - dynamic array
   const [pickups, setPickups] = useState<PickupFormData[]>(() => {
@@ -932,9 +932,12 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const dispatcher = dispatchers.find(d => d.id === dispatcherId);
     onSave({
       customLoadNumber,
       customerId,
+      dispatcherId: dispatcherId || undefined,
+      dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
       customer: selectedCustomer ? {
         id: selectedCustomer.id,
         name: selectedCustomer.name,
@@ -1040,6 +1043,23 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
               <p className="text-xs text-slate-500 mt-1">
                 Optional custom load number that will override the system generated load number
               </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Dispatcher (Booked By)
+              </label>
+              <select
+                value={dispatcherId}
+                onChange={(e) => setDispatcherId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">None (Self-Dispatched)</option>
+                {dispatchers.map((dispatcher) => (
+                  <option key={dispatcher.id} value={dispatcher.id}>
+                    {dispatcher.firstName} {dispatcher.lastName}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -1313,26 +1333,22 @@ interface ViewPlannedLoadProps {
   onBack: () => void;
   onAddTrip: () => void;
   onBrokerTrip: () => void;
-  onDispatch: (driverId: string) => void;
+  onDispatch: (driverId: string, dispatcherId?: string) => void;
 }
 
 const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack, onAddTrip, onBrokerTrip, onDispatch }) => {
-  const { drivers, trucks } = useTMS();
+  const { drivers, trucks, employees } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
   const [selectedDriverId, setSelectedDriverId] = useState('');
   const [selectedTruckId, setSelectedTruckId] = useState('');
-
-  const totalAccessoryFees =
-    (load.fees?.accessoryFees?.detention || 0) +
-    (load.fees?.accessoryFees?.lumper || 0) +
-    (load.fees?.accessoryFees?.stopOff || 0) +
-    (load.fees?.accessoryFees?.tarpFee || 0);
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState(load.dispatcherId || '');
 
   const handleDispatchClick = () => {
     if (!selectedDriverId) {
       alert('Please select a driver');
       return;
     }
-    onDispatch(selectedDriverId);
+    onDispatch(selectedDriverId, selectedDispatcherId || undefined);
   };
 
   return (
@@ -1412,6 +1428,21 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack,
                   {trucks.map((truck) => (
                     <option key={truck.id} value={truck.id}>
                       {truck.truckNumber} - {truck.make} {truck.model}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Dispatcher (Booked By)</label>
+                <select
+                  value={selectedDispatcherId}
+                  onChange={(e) => setSelectedDispatcherId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (Self-Dispatched)</option>
+                  {dispatchers.map((dispatcher) => (
+                    <option key={dispatcher.id} value={dispatcher.id}>
+                      {dispatcher.firstName} {dispatcher.lastName}
                     </option>
                   ))}
                 </select>
@@ -1555,9 +1586,11 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     deletePlannedLoad,
     drivers,
     trucks,
+    employees,
     dispatchPlannedLoadsToTrip,
     setPendingDispatchLoadIds
   } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
   // Navigate to Trips page with pre-selected load
   const navigateToTripsWithLoad = (loadIds: string[]) => {
@@ -1572,6 +1605,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
   const [selectedLoad, setSelectedLoad] = useState<PlannedLoad | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState<string>('');
 
   // TruckingOffice: Load Planner is a STAGING area - only show 'planned' status loads
   // Dispatched loads move to Trips/Loads pages
@@ -1647,6 +1681,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
 
     const driver = drivers.find(d => d.id === selectedDriverId);
     const truck = trucks.find(t => t.id === selectedTruckId);
+    const dispatcher = employees.find(e => e.id === selectedDispatcherId);
 
     if (!driver) {
       alert('Please select a driver');
@@ -1662,6 +1697,8 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
           driverName: `${driver.firstName} ${driver.lastName}`,
           truckId: truck?.id,
           truckNumber: truck?.truckNumber,
+          dispatcherId: dispatcher?.id,
+          dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
           plannedLoadIds: [selectedLoad.id],
           pickupDate: selectedLoad.pickups[0]?.pickupDate || '',
           deliveryDate: selectedLoad.deliveries[0]?.deliveryDate || '',
@@ -1678,18 +1715,20 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       setSelectedLoad(null);
       setSelectedDriverId('');
       setSelectedTruckId('');
+      setSelectedDispatcherId('');
       alert('Load dispatched to trip successfully!');
     } catch (error) {
       console.error('Error dispatching load:', error);
       alert('Failed to dispatch load. Please try again.');
     }
-  }, [selectedLoad, selectedDriverId, selectedTruckId, drivers, trucks, dispatchPlannedLoadsToTrip]);
+  }, [selectedLoad, selectedDriverId, selectedTruckId, selectedDispatcherId, drivers, trucks, employees, dispatchPlannedLoadsToTrip]);
 
   // Handle dispatching from ViewPlannedLoad component (accepts driverId from its internal state)
-  const handleDispatchFromView = useCallback(async (driverId: string) => {
+  const handleDispatchFromView = useCallback(async (driverId: string, dispatcherId?: string) => {
     if (!selectedLoad) return;
 
     const driver = drivers.find(d => d.id === driverId);
+    const dispatcher = dispatcherId ? employees.find(e => e.id === dispatcherId) : undefined;
 
     if (!driver) {
       alert('Driver not found');
@@ -1705,6 +1744,8 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
           driverName: `${driver.firstName} ${driver.lastName}`,
           truckId: driver.truckId,
           truckNumber: trucks.find(t => t.id === driver.truckId)?.truckNumber,
+          dispatcherId: dispatcher?.id,
+          dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
           plannedLoadIds: [selectedLoad.id],
           pickupDate: selectedLoad.pickups[0]?.pickupDate || '',
           deliveryDate: selectedLoad.deliveries[0]?.deliveryDate || '',
@@ -1724,7 +1765,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       console.error('Error dispatching load:', error);
       alert('Failed to dispatch load. Please try again.');
     }
-  }, [selectedLoad, drivers, trucks, dispatchPlannedLoadsToTrip]);
+  }, [selectedLoad, drivers, trucks, employees, dispatchPlannedLoadsToTrip]);
 
   // Render based on view mode
   if (viewMode === 'add') {
@@ -1852,12 +1893,29 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
                 </select>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Dispatcher (Booked By)</label>
+                <select
+                  value={selectedDispatcherId}
+                  onChange={(e) => setSelectedDispatcherId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (Self-Dispatched)</option>
+                  {dispatchers.map((dispatcher) => (
+                    <option key={dispatcher.id} value={dispatcher.id}>
+                      {dispatcher.firstName} {dispatcher.lastName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="pt-4 border-t border-slate-200 flex gap-4">
                 <button
                   onClick={() => {
                     setViewMode('view');
                     setSelectedDriverId('');
                     setSelectedTruckId('');
+                    setSelectedDispatcherId('');
                   }}
                   className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
                 >

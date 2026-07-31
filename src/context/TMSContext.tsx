@@ -35,6 +35,11 @@ import {
   batchSave
 } from '../services/firestoreService';
 import { buildDueInsuranceExpenses } from '../services/insuranceRecurrence';
+import {
+  withDispatcherCommission,
+  calculateDriverPay,
+  getDispatcherAssignmentFields,
+} from '../services/businessLogic';
 
 interface TMSContextType {
   loads: Load[];
@@ -481,10 +486,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   const addLoad = async (input: NewLoadInput) => {
     // Sanitize user input before saving
     const sanitizedInput = sanitizeLoadInput(input) as NewLoadInput;
+    const dispatcher = sanitizedInput.dispatcherId
+      ? employees.find(e => e.id === sanitizedInput.dispatcherId)
+      : null;
+    const withCommission = withDispatcherCommission(sanitizedInput, dispatcher);
 
     const newLoadId = generateShortId();
     const newLoad: Load = {
       ...sanitizedInput,
+      ...withCommission,
       id: newLoadId,
       // Preserve loadNumber if provided, otherwise generate one
       loadNumber: sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`,
@@ -671,9 +681,24 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const shouldLock = (sanitizedUpdates.status === LoadStatus.Delivered || sanitizedUpdates.status === LoadStatus.Completed) &&
       !oldLoad.isLocked;
 
+    const nextDispatcherId = sanitizedUpdates.dispatcherId !== undefined
+      ? sanitizedUpdates.dispatcherId
+      : oldLoad.dispatcherId;
+    const dispatcher = nextDispatcherId
+      ? employees.find(e => e.id === nextDispatcherId)
+      : null;
+    const commissionPatch =
+      sanitizedUpdates.dispatcherId ||
+      sanitizedUpdates.dispatcherCommissionType ||
+      sanitizedUpdates.dispatcherCommissionRate !== undefined ||
+      (!oldLoad.dispatcherCommissionAmount && nextDispatcherId)
+        ? withDispatcherCommission({ ...oldLoad, ...sanitizedUpdates }, dispatcher)
+        : {};
+
     const updatedLoad = {
       ...oldLoad,
       ...sanitizedUpdates,
+      ...commissionPatch,
       adjustmentLog: adjustmentEntries.length > 0 ? newAdjustmentLog : oldLoad.adjustmentLog,
       isLocked: shouldLock ? true : oldLoad.isLocked,
       lockedAt: shouldLock ? new Date().toISOString() : oldLoad.lockedAt,
@@ -2032,6 +2057,20 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       if (updates.driverId !== undefined) loadUpdates.driverId = updates.driverId;
       if (updates.driverName !== undefined) loadUpdates.driverName = updates.driverName;
 
+      // Sync dispatcher assignment + commission defaults
+      if (updates.dispatcherId !== undefined) {
+        const dispatcher = updates.dispatcherId
+          ? employees.find(e => e.id === updates.dispatcherId)
+          : null;
+        Object.assign(loadUpdates, withDispatcherCommission(loadUpdates, dispatcher));
+        if (!updates.dispatcherId) {
+          loadUpdates.dispatcherId = undefined;
+          loadUpdates.dispatcherName = undefined;
+        }
+      } else if (updates.dispatcherName !== undefined) {
+        loadUpdates.dispatcherName = updates.dispatcherName;
+      }
+
       // Sync equipment
       if (updates.truckId !== undefined) loadUpdates.truckId = updates.truckId;
       if (updates.truckNumber !== undefined) loadUpdates.truckNumber = updates.truckNumber;
@@ -2132,6 +2171,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const now = new Date().toISOString();
     for (const plannedLoad of loadsToDispatch) {
       // Update the PlannedLoad status
+      const dispatcher =
+        (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
+        (plannedLoad.dispatcherId && employees.find(e => e.id === plannedLoad.dispatcherId)) ||
+        null;
+      const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
+
       updatePlannedLoad(plannedLoad.id, {
         status: 'dispatched',
         currentStep: 2,
@@ -2139,6 +2184,8 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         tripNumber,
         driverId: tripData.driverId,
         driverName: tripData.driverName,
+        dispatcherId: dispatcherFields.dispatcherId || tripData.dispatcherId || plannedLoad.dispatcherId,
+        dispatcherName: dispatcherFields.dispatcherName || tripData.dispatcherName || plannedLoad.dispatcherName,
         updatedAt: now,
       });
 
@@ -2147,7 +2194,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       const firstPickup = plannedLoad.pickups?.[0];
       const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
 
-      const newLoad: Load = {
+      const driver = tripData.driverId
+        ? drivers.find(d => d.id === tripData.driverId) || employees.find(e => e.id === tripData.driverId)
+        : undefined;
+
+      const draftLoad: Load = {
         id: generateShortId(),
         loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
         status: LoadStatus.Dispatched,
@@ -2160,6 +2211,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         // Driver assignment
         driverId: tripData.driverId,
         driverName: tripData.driverName,
+
+        // Dispatcher assignment (propagated from trip / planned load)
+        dispatcherId: dispatcherFields.dispatcherId || undefined,
+        dispatcherName: dispatcherFields.dispatcherName || undefined,
+        dispatcherCommissionType: dispatcherFields.dispatcherCommissionType,
+        dispatcherCommissionRate: dispatcherFields.dispatcherCommissionRate || undefined,
 
         // Equipment
         truckId: tripData.truckId,
@@ -2235,6 +2292,19 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${tripNumber}`,
       };
 
+      const withCommission = withDispatcherCommission(draftLoad, dispatcher) as Load;
+      const driverBasePay = driver ? calculateDriverPay(withCommission, driver as Driver) : 0;
+      const newLoad: Load = {
+        ...withCommission,
+        driverBasePay,
+        driverDetentionPay: withCommission.detentionAmount || 0,
+        driverLayoverPay: withCommission.layoverAmount || 0,
+        driverTotalGross:
+          driverBasePay +
+          (withCommission.detentionAmount || 0) +
+          (withCommission.layoverAmount || 0),
+      };
+
       // Add the load to state and persist
       setLoads(prev => [newLoad, ...prev]);
       saveLoad(tenantId || 'default', newLoad).catch(e =>
@@ -2288,6 +2358,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
 
       // Copy all relevant trip data to the load
+      const dispatcher = trip.dispatcherId
+        ? employees.find(e => e.id === trip.dispatcherId)
+        : null;
       loadUpdates = {
         ...loadUpdates,
         tripId: trip.id,
@@ -2300,6 +2373,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         trailerNumber: trip.trailerNumber,
         pickupDate: trip.pickupDate,
         deliveryDate: trip.deliveryDate,
+        ...withDispatcherCommission({}, dispatcher),
       };
 
       logger.info('[TMSContext] Load linked to trip', {

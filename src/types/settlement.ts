@@ -57,6 +57,8 @@ export interface Settlement {
     ifta?: number;
     cashAdvance?: number;
     fuel?: number;
+    /** Stored separately from `other` so detail views can show Dispatch vs Others. */
+    dispatch?: number;
     trailer?: number;
     repairs?: number;
     parking?: number;
@@ -67,6 +69,10 @@ export interface Settlement {
     ucr?: number;
     escrow?: number;
     occupationalAccident?: number;
+    /**
+     * @deprecated Accessorials are earnings (otherEarnings), not deductions.
+     * Kept only for reading legacy settlements.
+     */
     tonu?: number;
     layover?: number;
     detention?: number;

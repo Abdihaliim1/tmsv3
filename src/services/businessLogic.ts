@@ -10,8 +10,122 @@
  * CRITICAL: All pages MUST import from this module, not duplicate logic.
  */
 
-import { Load, Driver, Settlement, Invoice, Expense, LoadStatus, PaymentType } from '../types';
+import { Load, Driver, Settlement, Invoice, Expense, LoadStatus, PaymentType, Employee } from '../types';
 import { calculateCompanyRevenue } from './utils';
+
+export type DispatcherCommissionType = 'percentage' | 'flat_fee' | 'per_mile';
+
+/** Pull dispatcher assignment + default commission from an employee record. */
+export function getDispatcherAssignmentFields(dispatcher: Employee | undefined | null): {
+  dispatcherId: string;
+  dispatcherName: string;
+  dispatcherCommissionType?: DispatcherCommissionType;
+  dispatcherCommissionRate: number;
+} {
+  if (!dispatcher) {
+    return {
+      dispatcherId: '',
+      dispatcherName: '',
+      dispatcherCommissionType: undefined,
+      dispatcherCommissionRate: 0,
+    };
+  }
+  const type =
+    dispatcher.dispatcherCommissionType ||
+    dispatcher.defaultCommissionType ||
+    undefined;
+  const rate =
+    Number(dispatcher.dispatcherCommissionRate ?? dispatcher.defaultCommissionRate) || 0;
+  return {
+    dispatcherId: dispatcher.id,
+    dispatcherName: `${dispatcher.firstName} ${dispatcher.lastName}`.trim(),
+    dispatcherCommissionType: type,
+    dispatcherCommissionRate: rate,
+  };
+}
+
+/**
+ * Resolve dispatcher commission for a load.
+ * Prefers load fields, then falls back to the dispatcher's employee defaults.
+ */
+export function resolveDispatcherCommission(
+  load: Load,
+  dispatcher?: Employee | null
+): { type?: DispatcherCommissionType; rate: number; amount: number; formula: string } {
+  if (load.dispatcherCommissionAmount !== undefined && load.dispatcherCommissionAmount > 0) {
+    return {
+      type: load.dispatcherCommissionType,
+      rate: load.dispatcherCommissionRate || 0,
+      amount: load.dispatcherCommissionAmount,
+      formula: 'Stored commission',
+    };
+  }
+
+  const type =
+    load.dispatcherCommissionType ||
+    dispatcher?.dispatcherCommissionType ||
+    dispatcher?.defaultCommissionType;
+  const rate =
+    (load.dispatcherCommissionRate && load.dispatcherCommissionRate > 0
+      ? load.dispatcherCommissionRate
+      : undefined) ??
+    (dispatcher?.dispatcherCommissionRate && dispatcher.dispatcherCommissionRate > 0
+      ? dispatcher.dispatcherCommissionRate
+      : undefined) ??
+    (dispatcher?.defaultCommissionRate && dispatcher.defaultCommissionRate > 0
+      ? dispatcher.defaultCommissionRate
+      : 0);
+
+  if (!type || !rate || rate <= 0) {
+    return { type, rate: rate || 0, amount: 0, formula: 'No commission configured on load or dispatcher' };
+  }
+
+  const baseRate = load.rate || 0;
+  const miles = getLoadMiles(load);
+
+  if (type === 'percentage') {
+    const amount = baseRate * (rate / 100);
+    return { type, rate, amount, formula: `$${baseRate.toFixed(2)} × ${rate}%` };
+  }
+  if (type === 'flat_fee') {
+    return { type, rate, amount: rate, formula: `Flat $${rate.toFixed(2)}` };
+  }
+  if (type === 'per_mile') {
+    const amount = miles * rate;
+    return { type, rate, amount, formula: `${miles} mi × $${rate.toFixed(2)}` };
+  }
+
+  return { type, rate, amount: 0, formula: 'Unknown commission type' };
+}
+
+/** Enrich a load patch with dispatcher commission when assigning a dispatcher. */
+export function withDispatcherCommission(
+  loadOrPatch: Partial<Load>,
+  dispatcher: Employee | undefined | null
+): Partial<Load> {
+  if (!dispatcher) return loadOrPatch;
+  const assignment = getDispatcherAssignmentFields(dispatcher);
+  const merged: Partial<Load> = {
+    ...loadOrPatch,
+    dispatcherId: assignment.dispatcherId,
+    dispatcherName: assignment.dispatcherName,
+  };
+  if (!merged.dispatcherCommissionType && assignment.dispatcherCommissionType) {
+    merged.dispatcherCommissionType = assignment.dispatcherCommissionType;
+  }
+  if (!(merged.dispatcherCommissionRate && merged.dispatcherCommissionRate > 0) && assignment.dispatcherCommissionRate > 0) {
+    merged.dispatcherCommissionRate = assignment.dispatcherCommissionRate;
+  }
+  // Recalculate amount when we have type+rate
+  const tempLoad = { ...loadOrPatch, ...merged } as Load;
+  const resolved = resolveDispatcherCommission(tempLoad, dispatcher);
+  if (resolved.amount > 0) {
+    merged.dispatcherCommissionAmount = resolved.amount;
+    merged.dispatcherCommissionType = resolved.type;
+    merged.dispatcherCommissionRate = resolved.rate;
+  }
+  return merged;
+}
 
 /** Statuses that count as completed revenue loads in reports. */
 export const REVENUE_LOAD_STATUSES: LoadStatus[] = [
@@ -385,15 +499,18 @@ export function calculateSettlementGrossPay(
 
 /**
  * Calculate settlement total deductions
+ * Includes `dispatch` (stored separately from `other`).
+ * Does NOT treat TONU/layover/detention as deductions — those are earnings.
  */
 export function calculateSettlementDeductions(settlement: Settlement): number {
   const deductions = settlement.deductions || {};
-  
-  return (
+
+  const sum =
     (deductions.insurance || 0) +
     (deductions.ifta || 0) +
     (deductions.cashAdvance || 0) +
     (deductions.fuel || 0) +
+    (deductions.dispatch || 0) +
     (deductions.trailer || 0) +
     (deductions.repairs || 0) +
     (deductions.parking || 0) +
@@ -404,8 +521,9 @@ export function calculateSettlementDeductions(settlement: Settlement): number {
     (deductions.ucr || 0) +
     (deductions.escrow || 0) +
     (deductions.occupationalAccident || 0) +
-    (deductions.other || 0)
-  );
+    (deductions.other || 0);
+
+  return Math.round((sum + Number.EPSILON) * 100) / 100;
 }
 
 /**

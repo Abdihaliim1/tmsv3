@@ -135,6 +135,10 @@ export interface PlannedLoad {
   // Driver assignment
   driverId?: string;
   driverName?: string;
+
+  // Dispatcher assignment
+  dispatcherId?: string;
+  dispatcherName?: string;
   
   // Documents
   rateConUrl?: string;
@@ -180,6 +184,8 @@ export interface Trip {
   truckNumber?: string;
   trailerId?: string;
   trailerNumber?: string;
+  dispatcherId?: string;
+  dispatcherName?: string;
   
   // Loads
   plannedLoadIds: string[];
