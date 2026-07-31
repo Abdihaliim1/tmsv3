@@ -9,6 +9,7 @@ import {
   getLoadRevenue,
   isRevenueLoadStatus,
   calculateFactoringFees,
+  calculateAccruedDriverPay,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
@@ -177,64 +178,33 @@ const Reports: React.FC = () => {
     // Driver pay breakdown
     // IMPORTANT: Only count settlements where ALL loads were delivered in the period
     // Settlement creation date does NOT matter - only load delivery dates matter
+    const accrued = calculateAccruedDriverPay(revenueLoads, filteredSettlements, drivers);
     let companyDriverPay = 0;
     let ownerOperatorPay = 0;
     const ownerAsDriverPay = 0;
-    let isEstimated = false;
+    const isEstimated = accrued.isEstimated;
 
-    // Get settlements that only contain loads delivered in this period
-    const periodSettlements = filteredSettlements.filter(settlement => {
-      // Get all load IDs from this settlement
-      const settlementLoadIds: string[] = [];
-      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
-      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
-      if (settlement.loads) {
-        settlement.loads.forEach(l => {
-          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
-            settlementLoadIds.push(l.loadId);
-          }
-        });
-      }
-
-      // Only include settlement if ALL its loads are in revenueLoads (delivered in period)
-      if (settlementLoadIds.length === 0) return false;
-      return settlementLoadIds.every(loadId => 
-        revenueLoads.some(load => load.id === loadId)
-      );
+    // Split accrued total by driver type for overview breakdown cards
+    revenueLoads.forEach(load => {
+      if (!load.driverId) return;
+      const driver = drivers.find(d => d.id === load.driverId);
+      if (!driver) return;
+      const share = calculateDriverPay(load, driver);
+      // Prefer settlement line when present (same helper already used for total)
+      if (driver.type === 'OwnerOperator') ownerOperatorPay += share;
+      else companyDriverPay += share;
     });
-
-    if (periodSettlements.length > 0) {
-      periodSettlements.forEach(settlement => {
-        const driver = drivers.find(d => d.id === settlement.driverId);
-        if (!driver) return;
-
-        if (driver.type === 'OwnerOperator') {
-          ownerOperatorPay += settlement.grossPay || 0;
-        } else {
-          // Company driver
-          companyDriverPay += settlement.netPay || 0;
-        }
-      });
-    } else {
-      // Estimate from loads using driver's actual payment rate from profile
-      isEstimated = true;
-      revenueLoads.forEach(load => {
-        if (!load.driverId) return;
-        const driver = drivers.find(d => d.id === load.driverId);
-        if (!driver) return;
-
-        // Use centralized business logic (NO hardcoded fallbacks)
-        const driverPay = calculateDriverPay(load, driver);
-
-        if (driver.type === 'OwnerOperator') {
-          ownerOperatorPay += driverPay;
-        } else {
-          companyDriverPay += driverPay;
-        }
-      });
+    // Prefer accrued total for profit (authoritative); keep type split proportional if needed
+    const typeSplit = companyDriverPay + ownerOperatorPay;
+    if (typeSplit > 0 && Math.abs(typeSplit - accrued.total) > 0.02) {
+      const scale = accrued.total / typeSplit;
+      companyDriverPay = Math.round(companyDriverPay * scale * 100) / 100;
+      ownerOperatorPay = Math.round(ownerOperatorPay * scale * 100) / 100;
+    } else if (typeSplit === 0) {
+      companyDriverPay = accrued.total;
     }
 
-    const totalDriverPay = companyDriverPay + ownerOperatorPay + ownerAsDriverPay;
+    const totalDriverPay = accrued.total;
 
     // Calculate real expenses from expense data
     // CRITICAL: Only include expenses that affect company P&L

@@ -8,12 +8,12 @@ import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { calculateCompanyRevenue } from '../services/utils';
 import {
-  calculateDriverPay,
   getLoadMiles,
   getLoadRevenue,
   getLoadFsc,
   isRevenueLoadStatus,
   calculateFactoringFees,
+  calculateAccruedDriverPay,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
@@ -241,47 +241,10 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       return date >= periodStart && date <= periodEnd;
     });
 
-    // Calculate driver pay
-    let totalDriverPay = 0;
-    let isEstimated = false;
-
-    // Filter settlements by period
-    const periodSettlements = settlements.filter(settlement => {
-      const settlementLoadIds: string[] = [];
-      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
-      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
-      if (settlement.loads) {
-        settlement.loads.forEach(l => {
-          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
-            settlementLoadIds.push(l.loadId);
-          }
-        });
-      }
-      if (settlementLoadIds.length === 0) return false;
-      return settlementLoadIds.every(loadId =>
-        revenueLoads.some(load => load.id === loadId)
-      );
-    });
-
-    if (periodSettlements.length > 0) {
-      periodSettlements.forEach(settlement => {
-        const driver = drivers.find(d => d.id === settlement.driverId);
-        if (!driver) return;
-        if (driver.type === 'OwnerOperator') {
-          totalDriverPay += settlement.grossPay || 0;
-        } else {
-          totalDriverPay += settlement.netPay || 0;
-        }
-      });
-    } else {
-      isEstimated = true;
-      revenueLoads.forEach(load => {
-        if (!load.driverId) return;
-        const driver = drivers.find(d => d.id === load.driverId);
-        if (!driver) return;
-        totalDriverPay += calculateDriverPay(load, driver);
-      });
-    }
+    // Per-load accrual: settled line pay + estimates for unsettled loads
+    const accrued = calculateAccruedDriverPay(revenueLoads, settlements, drivers);
+    const totalDriverPay = accrued.total;
+    const isEstimated = accrued.isEstimated;
 
     // Calculate company expenses (exclude O/O pass-through)
     const companyExpenses = filteredExpenses.filter(exp => {
@@ -624,47 +587,10 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
       return date >= periodStart && date <= periodEnd;
     });
 
-    // Calculate driver pay from settlements or estimates
-    let driverExpenses = 0;
-    let isEstimated = false;
-
-    // Filter settlements by period
-    const periodSettlements = settlements.filter(settlement => {
-      const settlementLoadIds: string[] = [];
-      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
-      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
-      if (settlement.loads) {
-        settlement.loads.forEach(l => {
-          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
-            settlementLoadIds.push(l.loadId);
-          }
-        });
-      }
-      if (settlementLoadIds.length === 0) return false;
-      return settlementLoadIds.some(loadId =>
-        filteredLoads.some(load => load.id === loadId)
-      );
-    });
-
-    if (periodSettlements.length > 0) {
-      periodSettlements.forEach(settlement => {
-        const driver = drivers.find(d => d.id === settlement.driverId);
-        if (!driver) return;
-        if (driver.type === 'OwnerOperator') {
-          driverExpenses += settlement.grossPay || 0;
-        } else {
-          driverExpenses += settlement.netPay || 0;
-        }
-      });
-    } else {
-      isEstimated = true;
-      filteredLoads.forEach(load => {
-        if (!load.driverId) return;
-        const driver = drivers.find(d => d.id === load.driverId);
-        if (!driver) return;
-        driverExpenses += calculateDriverPay(load, driver);
-      });
-    }
+    // Per-load accrual: settled line pay + estimates for unsettled loads
+    const accrued = calculateAccruedDriverPay(filteredLoads, settlements, drivers);
+    const driverExpenses = accrued.total;
+    const isEstimated = accrued.isEstimated;
 
     // Calculate other operating expenses by category
     const expensesByCategory: Record<string, number> = {};

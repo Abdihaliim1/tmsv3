@@ -12,6 +12,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   query,
   orderBy,
   onSnapshot,
@@ -296,6 +297,19 @@ export const loadTrips = (tenantId: string) => loadCollection<Trip>(tenantId, 't
 // =============================================
 
 export const saveLoad = (tenantId: string, load: Load) => saveDocument(tenantId, 'loads', load);
+
+/** Persist FieldValue.delete() for load settlement links (merge:true cannot clear with undefined). */
+export async function clearLoadSettlementLinks(
+  tenantId: string,
+  loadId: string,
+  fields: Array<'settlementId' | 'settlementNumber' | 'dispatcherSettlementId' | 'dispatcherSettlementNumber'>
+): Promise<void> {
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  fields.forEach(f => {
+    updates[f] = deleteField();
+  });
+  await updateDocument(tenantId, 'loads', loadId, updates);
+}
 export const saveInvoice = (tenantId: string, invoice: Invoice) => saveDocument(tenantId, 'invoices', invoice);
 export const saveSettlement = (tenantId: string, settlement: Settlement) => saveDocument(tenantId, 'settlements', settlement);
 export const saveEmployee = (tenantId: string, employee: Employee) => saveDocument(tenantId, 'employees', employee);

@@ -23,7 +23,7 @@ import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
 import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { getFactoredLoads } from '../services/businessLogic';
+import { getFactoredLoads, resolveLoadFactoringFee } from '../services/businessLogic';
 import type { FactoringFundingStatus } from '../types';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -1358,17 +1358,20 @@ const FactoredLoadsTab: React.FC = () => {
       ),
     }));
 
-    // Prefer transaction ledger when present for amounts
+    // Prefer transaction ledger for % / dates only — never stamp full tx.feeAmount on each load
     const withTx = fromHelper.map(item => {
       const tx = factoringTransactions.find(t => t.invoiceId === item.invoice?.id);
-      if (!tx) return item;
+      const pct = item.load.factoringFeePercent || tx?.feePercentage || item.factoringCompany?.feePercentage;
+      const enriched = {
+        ...item.load,
+        factoringFeePercent: pct || item.load.factoringFeePercent,
+        factoredDate: item.load.factoredDate || tx?.submittedDate,
+      };
       return {
         ...item,
         load: {
-          ...item.load,
-          factoringFee: item.load.factoringFee || tx.feeAmount,
-          factoringFeePercent: item.load.factoringFeePercent || tx.feePercentage,
-          factoredDate: item.load.factoredDate || tx.submittedDate,
+          ...enriched,
+          factoringFee: resolveLoadFactoringFee(enriched, item.invoice, factoringCompanies),
         },
       };
     });
@@ -1410,14 +1413,7 @@ const FactoredLoadsTab: React.FC = () => {
     const pendingPayment = totalFactored - paidByFactoring;
 
     const totalFees = factoredData.reduce((sum, item) => {
-      if (item.load.factoringFee && item.load.factoringFee > 0) {
-        return sum + item.load.factoringFee;
-      } else {
-        const company = item.factoringCompany;
-        const feeRate = item.load.factoringFeePercent || company?.feePercentage || 2.5;
-        const factoredAmount = item.load.grandTotal || item.load.rate || 0;
-        return sum + (factoredAmount * (feeRate / 100));
-      }
+      return sum + resolveLoadFactoringFee(item.load, item.invoice, factoringCompanies);
     }, 0);
 
     const totalNetReceived = totalFactoredAmount - totalFees;

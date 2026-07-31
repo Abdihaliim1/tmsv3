@@ -27,6 +27,7 @@ import {
   saveExpense, saveFactoringCompany, saveFactoringTransaction, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
   deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
+  clearLoadSettlementLinks,
   deleteTruck as firestoreDeleteTruck, deleteTrailer as firestoreDeleteTrailer,
   deleteExpense as firestoreDeleteExpense, deleteFactoringCompany as firestoreDeleteFactoringCompany,
   deleteFactoringTransaction as firestoreDeleteFactoringTransaction,
@@ -1628,14 +1629,28 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     // Proceed with deletion and cleanup
     setSettlements(prev => prev.filter(settlement => settlement.id !== id));
     firestoreDeleteSettlement(tenantId || 'default', id).catch(e => console.error('Failed to delete settlement:', e));
-    // Clean up: unlink loads from this settlement (driver and/or dispatcher fields)
+
+    // Unlink loads in memory + persist Field deletes (undefined + merge leaves stale links)
+    const tid = tenantId || 'default';
     setLoads(prev => prev.map(load => {
       let next = load;
+      const driverFields: Array<'settlementId' | 'settlementNumber'> = [];
+      const dispatcherFields: Array<'dispatcherSettlementId' | 'dispatcherSettlementNumber'> = [];
+
       if (load.settlementId === id) {
         next = { ...next, settlementId: undefined, settlementNumber: undefined };
+        driverFields.push('settlementId', 'settlementNumber');
       }
       if (load.dispatcherSettlementId === id) {
         next = { ...next, dispatcherSettlementId: undefined, dispatcherSettlementNumber: undefined };
+        dispatcherFields.push('dispatcherSettlementId', 'dispatcherSettlementNumber');
+      }
+
+      const fields = [...driverFields, ...dispatcherFields];
+      if (fields.length > 0) {
+        clearLoadSettlementLinks(tid, load.id, fields).catch(e =>
+          console.error('Failed to unlink settlement from load:', load.id, e)
+        );
       }
       return next;
     }));

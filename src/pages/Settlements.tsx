@@ -177,6 +177,10 @@ const Settlements: React.FC = () => {
     setWeekFilter(weekStr);
   }, []);
 
+  const changeSelectedWeek = (week: string) => {
+    setSelectedWeek(week);
+    setSelectedLoads([]);
+  };
 
   // Get available loads for selected driver/dispatcher and week
   const availableLoads = useMemo(() => {
@@ -257,6 +261,15 @@ const Settlements: React.FC = () => {
       return [];
     }
   }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads, settlements, employees]);
+
+  // Drop selections that are no longer in the visible (filtered) load list
+  useEffect(() => {
+    const allowed = new Set(availableLoads.map(l => l.id));
+    setSelectedLoads(prev => {
+      const next = prev.filter(id => allowed.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [availableLoads]);
 
   const moneyInputs: SettlementMoneyInputs = useMemo(
     () => ({
@@ -501,15 +514,32 @@ const Settlements: React.FC = () => {
 
   const COLORS = ['#10b981', '#f59e0b', '#3b82f6'];
 
+  const nextSettlementNumber = (prefix: 'ST' | 'DSP'): string => {
+    const year = new Date().getFullYear();
+    const re = new RegExp(`^${prefix}-${year}-(\\d+)$`);
+    let max = 1000;
+    settlements.forEach(s => {
+      const m = (s.settlementNumber || '').match(re);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return `${prefix}-${year}-${max + 1}`;
+  };
+
   // Generate settlement
   const handleGenerateSettlement = async () => {
     const currentPayeeId = settlementType === 'driver' ? selectedDriverId : selectedDispatcherId;
-    if (!currentPayeeId || selectedLoads.length === 0) {
-      alert(`Please select a ${settlementType} and at least one load`);
+    // Only settle loads currently visible in the eligibility list (prevents cross-week ghosts)
+    const visibleIds = new Set(availableLoads.map(l => l.id));
+    const loadsToSettle = selectedLoads.filter(id => visibleIds.has(id));
+    if (loadsToSettle.length !== selectedLoads.length) {
+      setSelectedLoads(loadsToSettle);
+    }
+    if (!currentPayeeId || loadsToSettle.length === 0) {
+      alert(`Please select a ${settlementType} and at least one load in the current filter`);
       return;
     }
 
-    const selectedLoadObjs = selectedLoads
+    const selectedLoadObjs = loadsToSettle
       .map(id => loads.find(l => l.id === id))
       .filter((l): l is Load => !!l);
     const alreadySettled = selectedLoadObjs.filter(l =>
@@ -520,7 +550,7 @@ const Settlements: React.FC = () => {
         `${alreadySettled.length} selected load(s) are already on a ${settlementType} settlement. ` +
         `Refresh and select unpaid loads only.`
       );
-      setSelectedLoads(prev => prev.filter(id => !alreadySettled.some(l => l.id === id)));
+      setSelectedLoads(prev => prev.filter(id => !alreadySettled.some(l => l.id === id) && visibleIds.has(id)));
       return;
     }
 
@@ -545,8 +575,64 @@ const Settlements: React.FC = () => {
       }
     }
 
-    // Recalculate from current inputs at submit time (never trust a stale UI memo alone)
-    const { loadPays, totalMiles, settlementLoads } = resolveLoadPays();
+    // Recalculate using only visible selected loads (sync selection first)
+    setSelectedLoads(loadsToSettle);
+    const { loadPays, totalMiles, settlementLoads } = (() => {
+      // Temporarily resolve against loadsToSettle by filtering availableLoads
+      const selectedLoadsData = availableLoads.filter(load => loadsToSettle.includes(load.id));
+      const loadPaysLocal: SettlementLoadPay[] = [];
+      const settlementLoadsLocal: NonNullable<Settlement['loads']> = [];
+      let miles = 0;
+      if (settlementType === 'dispatcher') {
+        const dispatcher = employees.find(e => e.id === selectedDispatcherId);
+        selectedLoadsData.forEach(load => {
+          const commission = resolveDispatcherCommission(load, dispatcher).amount;
+          loadPaysLocal.push({ basePay: commission });
+          settlementLoadsLocal.push({
+            loadId: load.id,
+            basePay: 0,
+            detention: 0,
+            tonu: 0,
+            layover: 0,
+          });
+        });
+      } else {
+        const driver = drivers.find(d => d.id === selectedDriverId);
+        selectedLoadsData.forEach(load => {
+          let basePay = 0;
+          let detentionPay = 0;
+          let layoverPay = 0;
+          let tonuPay = 0;
+          const hasStoredPay =
+            (load.driverTotalGross !== undefined && load.driverTotalGross > 0) ||
+            (load.driverBasePay !== undefined && load.driverBasePay > 0);
+          if (hasStoredPay && load.driverTotalGross !== undefined && load.driverTotalGross > 0) {
+            basePay = load.driverTotalGross;
+          } else if (hasStoredPay) {
+            basePay = load.driverBasePay || 0;
+            detentionPay = load.driverDetentionPay || 0;
+            layoverPay = load.driverLayoverPay || 0;
+            tonuPay = load.tonuFee || 0;
+          } else if (driver) {
+            basePay = calculateDriverPay(load, driver);
+            detentionPay = load.detentionAmount || 0;
+            layoverPay = load.layoverAmount || 0;
+            tonuPay = load.tonuFee || 0;
+          }
+          loadPaysLocal.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
+          settlementLoadsLocal.push({
+            loadId: load.id,
+            basePay,
+            detention: detentionPay,
+            layover: layoverPay,
+            tonu: tonuPay,
+          });
+          miles += getLoadMiles(load);
+        });
+      }
+      return { loadPays: loadPaysLocal, totalMiles: miles, settlementLoads: settlementLoadsLocal };
+    })();
+
     const submitInputs: SettlementMoneyInputs = {
       insurance: insuranceDeduction,
       fuel: fuelDeduction,
@@ -568,11 +654,19 @@ const Settlements: React.FC = () => {
       return;
     }
 
+    if (payResult.grossPay <= 0) {
+      alert(
+        settlementType === 'dispatcher'
+          ? 'Cannot create a dispatcher settlement with $0 commission. Set the dispatcher commission rate on their employee profile (and/or on each load), then try again.'
+          : 'Cannot create a settlement with $0 gross pay. Check driver pay rate and load miles/revenue.'
+      );
+      return;
+    }
+
     const payee = employees.find(e => e.id === currentPayeeId);
     if (!payee) return;
 
-    const settlementNumberPrefix = settlementType === 'driver' ? 'ST' : 'DSP';
-    const settlementNumber = `${settlementNumberPrefix}-${new Date().getFullYear()}-${1000 + settlements.length + 1}`;
+    const settlementNumber = nextSettlementNumber(settlementType === 'driver' ? 'ST' : 'DSP');
     const [year, week] = selectedWeek.split('-W');
     const weekStart = getDateOfISOWeek(parseInt(week), parseInt(year));
     const weekEnd = new Date(weekStart);
@@ -604,7 +698,7 @@ const Settlements: React.FC = () => {
       driverId: settlementType === 'driver' ? selectedDriverId : undefined,
       dispatcherId: settlementType === 'dispatcher' ? selectedDispatcherId : undefined,
       driverName: `${payee.firstName} ${payee.lastName}`,
-      loadIds: selectedLoads,
+      loadIds: loadsToSettle,
       loads: settlementLoads,
       expenseIds: [],
       grossPay: payResult.grossPay,
@@ -627,7 +721,7 @@ const Settlements: React.FC = () => {
     const settlementId = addSettlement(newSettlement);
 
     // Link loads with type-specific fields so driver vs dispatcher never overwrite each other
-    for (const loadId of selectedLoads) {
+    for (const loadId of loadsToSettle) {
       try {
         if (settlementType === 'driver') {
           await updateLoad(loadId, { settlementId, settlementNumber });
@@ -1084,7 +1178,7 @@ const Settlements: React.FC = () => {
                               newWeek = 52;
                               newYear = yearNum - 1;
                             }
-                            setSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                            changeSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
                           }
                         }}
                         className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
@@ -1095,7 +1189,7 @@ const Settlements: React.FC = () => {
                       <input
                         type="week"
                         value={selectedWeek}
-                        onChange={(e) => setSelectedWeek(e.target.value)}
+                        onChange={(e) => changeSelectedWeek(e.target.value)}
                         className="flex-1 border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                       />
                       <button
@@ -1111,7 +1205,7 @@ const Settlements: React.FC = () => {
                               newWeek = 1;
                               newYear = yearNum + 1;
                             }
-                            setSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                            changeSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
                           }
                         }}
                         className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
@@ -1533,7 +1627,10 @@ const Settlements: React.FC = () => {
                     <div className="mt-4">
                       <button
                         type="button"
-                        onClick={() => setShowAllDeliveredLoads(!showAllDeliveredLoads)}
+                        onClick={() => {
+                          setShowAllDeliveredLoads(!showAllDeliveredLoads);
+                          setSelectedLoads([]);
+                        }}
                         className="btn-primary px-4 py-2 rounded-lg text-sm font-medium"
                       >
                         {showAllDeliveredLoads ? 'Filter by Week' : 'Show All Delivered Loads'}
@@ -1551,7 +1648,10 @@ const Settlements: React.FC = () => {
                     <input
                       type="checkbox"
                       checked={showAllDeliveredLoads}
-                      onChange={(e) => setShowAllDeliveredLoads(e.target.checked)}
+                      onChange={(e) => {
+                        setShowAllDeliveredLoads(e.target.checked);
+                        setSelectedLoads([]);
+                      }}
                       className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
                     />
                     Show all delivered loads (ignore week filter)
@@ -1568,7 +1668,11 @@ const Settlements: React.FC = () => {
                 </button>
                 <button
                   onClick={handleGenerateSettlement}
-                  disabled={((settlementType === 'driver' && !selectedDriverId) || (settlementType === 'dispatcher' && !selectedDispatcherId)) || selectedLoads.length === 0}
+                  disabled={
+                    ((settlementType === 'driver' && !selectedDriverId) || (settlementType === 'dispatcher' && !selectedDispatcherId)) ||
+                    selectedLoads.length === 0 ||
+                    settlementTotals.grossPay <= 0
+                  }
                   className="btn-primary px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Generate Settlement

@@ -159,92 +159,130 @@ export function getLoadFsc(load: Partial<Load> & { fuelSurcharge?: number }): nu
   return Number.isFinite(n) ? n : 0;
 }
 
+function invoiceLoadIds(invoice: Invoice): string[] {
+  const ids = new Set<string>();
+  if (invoice.loadId) ids.add(invoice.loadId);
+  (invoice.loadIds || []).forEach(id => ids.add(id));
+  return Array.from(ids);
+}
+
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 /**
- * Factoring fees from factored loads OR factored invoices (invoice is source of truth when loads weren't synced).
+ * Per-load factoring fee. Never copies the full invoice/transaction fee onto a load.
+ * Recomputes from load revenue × % when stored fee looks like a duplicated invoice total.
+ */
+export function resolveLoadFactoringFee(
+  load: Load,
+  invoice?: Invoice | null,
+  factoringCompanies: Array<{ id: string; feePercentage?: number }> = []
+): number {
+  const revenue = getLoadRevenue(load);
+  if (revenue <= 0) return 0;
+
+  let pct =
+    load.factoringFeePercent ||
+    invoice?.factoringFeePercent ||
+    0;
+  if ((!pct || pct <= 0) && (load.factoringCompanyId || invoice?.factoringCompanyId)) {
+    const companyId = load.factoringCompanyId || invoice?.factoringCompanyId;
+    const company = factoringCompanies.find(fc => fc.id === companyId);
+    pct = company?.feePercentage || 0;
+  }
+  if (!pct || pct <= 0) pct = 2.5;
+  // Guard nonsense percents
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+
+  const computed = roundMoney(revenue * (pct / 100));
+  const stored = Number(load.factoringFee) || 0;
+  if (stored <= 0) return computed;
+
+  const invIds = invoice ? invoiceLoadIds(invoice) : [];
+  const invoiceFee = Number(invoice?.factoringFee) || 0;
+  // Corrupt: multi-load invoice fee stamped on every load
+  if (invoiceFee > 0 && invIds.length > 1 && Math.abs(stored - invoiceFee) < 0.02) {
+    if (invoice?.amount && invoice.amount > 0) {
+      return roundMoney(invoiceFee * (revenue / invoice.amount));
+    }
+    return computed;
+  }
+  // Corrupt: fee larger than load revenue (impossible for normal %)
+  if (stored > revenue + 0.01) return computed;
+
+  return roundMoney(stored);
+}
+
+/**
+ * Factoring fees for the given period loads only.
+ * Does NOT inject orphan invoice fees when the period has no matching loads
+ * (fixes empty-period P&L leaking year-to-date fees).
+ *
+ * When multiple period loads share one invoice, allocate that invoice's fee
+ * by revenue share so cents stay consistent with the invoice total.
  */
 export function calculateFactoringFees(
   loads: Load[],
   invoices: Invoice[],
   factoringCompanies: Array<{ id: string; feePercentage?: number }> = []
 ): number {
-  const feeFromLoad = (load: Load): number => {
-    if (load.factoringFee && load.factoringFee > 0) return load.factoringFee;
-    const grandTotal = getLoadRevenue(load);
-    if (grandTotal <= 0) return 0;
-    let pct = load.factoringFeePercent;
-    if ((!pct || pct === 0) && load.factoringCompanyId) {
-      const company = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-      pct = company?.feePercentage;
-    }
-    if (!pct || pct === 0) pct = 2.5;
-    return grandTotal * (pct / 100);
-  };
-
-  const factoredLoadIds = new Set<string>();
-  let total = 0;
-
-  loads.forEach(load => {
-    if (!load.isFactored) return;
-    factoredLoadIds.add(load.id);
-    total += feeFromLoad(load);
-  });
-
+  const invoiceByLoadId = new Map<string, Invoice>();
   invoices.forEach(invoice => {
     if (!invoice.isFactored) return;
-    // Prefer stored invoice fee when present
-    if (invoice.factoringFee && invoice.factoringFee > 0) {
-      // Avoid double-counting loads already summed
-      const invoiceLoadIds = [
-        ...(invoice.loadId ? [invoice.loadId] : []),
-        ...(invoice.loadIds || []),
-      ];
-      const allAlreadyCounted =
-        invoiceLoadIds.length > 0 && invoiceLoadIds.every(id => factoredLoadIds.has(id));
-      if (!allAlreadyCounted) {
-        // If some loads missing isFactored, use invoice fee minus already-counted load fees
-        if (invoiceLoadIds.every(id => !factoredLoadIds.has(id))) {
-          total += invoice.factoringFee;
-        }
-      }
-      return;
-    }
-
-    const invoiceLoadIds = [
-      ...(invoice.loadId ? [invoice.loadId] : []),
-      ...(invoice.loadIds || []),
-    ];
-    const invoiceFeePct = (() => {
-      if (invoice.factoringCompanyId) {
-        const company = factoringCompanies.find(fc => fc.id === invoice.factoringCompanyId);
-        if (company?.feePercentage) return company.feePercentage;
-      }
-      return 2.5;
-    })();
-
-    if (invoiceLoadIds.length === 0) {
-      total += (invoice.amount || 0) * (invoiceFeePct / 100);
-      return;
-    }
-
-    invoiceLoadIds.forEach(loadId => {
-      if (factoredLoadIds.has(loadId)) return;
-      const load = loads.find(l => l.id === loadId);
-      if (load) {
-        factoredLoadIds.add(loadId);
-        total += feeFromLoad({
-          ...load,
-          isFactored: true,
-          factoringFeePercent: load.factoringFeePercent || invoiceFeePct,
-          factoringCompanyId: load.factoringCompanyId || invoice.factoringCompanyId,
-        });
-      } else {
-        const share = (invoice.amount || 0) / invoiceLoadIds.length;
-        total += share * (invoiceFeePct / 100);
-      }
+    invoiceLoadIds(invoice).forEach(id => {
+      if (!invoiceByLoadId.has(id)) invoiceByLoadId.set(id, invoice);
     });
   });
 
-  return total;
+  const byInvoice = new Map<string, { invoice: Invoice; loads: Load[] }>();
+  const orphanLoads: Load[] = [];
+
+  loads.forEach(load => {
+    const invoice = invoiceByLoadId.get(load.id);
+    const isFactored = !!(load.isFactored || invoice?.isFactored);
+    if (!isFactored) return;
+    if (invoice) {
+      const key = invoice.id;
+      const bucket = byInvoice.get(key) || { invoice, loads: [] };
+      bucket.loads.push(load);
+      byInvoice.set(key, bucket);
+    } else {
+      orphanLoads.push(load);
+    }
+  });
+
+  let total = 0;
+
+  byInvoice.forEach(({ invoice, loads: invLoads }) => {
+    const invoiceRevenue = Number(invoice.amount) || invLoads.reduce((s, l) => s + getLoadRevenue(l), 0);
+    let invoiceFee = Number(invoice.factoringFee) || 0;
+    if (invoiceFee <= 0) {
+      let pct = invoice.factoringFeePercent || 0;
+      if ((!pct || pct <= 0) && invoice.factoringCompanyId) {
+        pct = factoringCompanies.find(fc => fc.id === invoice.factoringCompanyId)?.feePercentage || 0;
+      }
+      if (!pct || pct <= 0) pct = 2.5;
+      invoiceFee = invoiceRevenue * (pct / 100);
+    }
+
+    const periodRevenue = invLoads.reduce((s, l) => s + getLoadRevenue(l), 0);
+    if (invoiceRevenue > 0 && periodRevenue > 0) {
+      // Allocate only the share of the invoice that falls in this period's loads
+      total += invoiceFee * (periodRevenue / invoiceRevenue);
+    } else {
+      invLoads.forEach(l => {
+        total += resolveLoadFactoringFee(l, invoice, factoringCompanies);
+      });
+    }
+  });
+
+  orphanLoads.forEach(load => {
+    total += resolveLoadFactoringFee(load, null, factoringCompanies);
+  });
+
+  return roundMoney(total);
 }
 
 /** Loads that are factored either on the load record or via a factored invoice. */
@@ -259,26 +297,32 @@ export function getFactoredLoads(
       const invoice = invoices.find(
         inv => inv.loadIds?.includes(load.id) || inv.loadId === load.id
       );
-      byLoadId.set(load.id, { load, invoice });
+      const fee = resolveLoadFactoringFee(load, invoice);
+      byLoadId.set(load.id, {
+        load: { ...load, factoringFee: fee },
+        invoice,
+      });
     }
   });
 
   invoices.forEach(invoice => {
     if (!invoice.isFactored) return;
-    const ids = [...(invoice.loadId ? [invoice.loadId] : []), ...(invoice.loadIds || [])];
-    ids.forEach(loadId => {
+    invoiceLoadIds(invoice).forEach(loadId => {
       if (byLoadId.has(loadId)) return;
       const load = loads.find(l => l.id === loadId);
       if (load) {
+        const enriched: Load = {
+          ...load,
+          isFactored: true,
+          factoringCompanyId: load.factoringCompanyId || invoice.factoringCompanyId,
+          factoringCompanyName: load.factoringCompanyName || invoice.factoringCompanyName,
+          factoringFeePercent: load.factoringFeePercent || invoice.factoringFeePercent,
+          factoredDate: load.factoredDate || invoice.factoredDate,
+        };
         byLoadId.set(loadId, {
           load: {
-            ...load,
-            isFactored: true,
-            factoringCompanyId: load.factoringCompanyId || invoice.factoringCompanyId,
-            factoringCompanyName: load.factoringCompanyName || invoice.factoringCompanyName,
-            factoringFeePercent: load.factoringFeePercent,
-            factoringFee: load.factoringFee || invoice.factoringFee,
-            factoredDate: load.factoredDate || invoice.factoredDate,
+            ...enriched,
+            factoringFee: resolveLoadFactoringFee(enriched, invoice),
           },
           invoice,
         });
@@ -586,8 +630,75 @@ export function calculatePeriodRevenue(
   return totalRevenue;
 }
 
+export type AccruedDriverPayResult = {
+  total: number;
+  settled: number;
+  unsettled: number;
+  /** True when any load used an estimate (unsettled or settled without line pay). */
+  isEstimated: boolean;
+};
+
 /**
- * Calculate period driver pay (from settlements or loads)
+ * Per-load driver pay for reporting:
+ *   settled loads → settlement line pay (or estimate if line missing)
+ *   unsettled loads → estimate from driver profile
+ * Never drops unsettled loads just because some settlements exist.
+ */
+export function calculateAccruedDriverPay(
+  revenueLoads: Load[],
+  settlements: Settlement[],
+  drivers: Driver[]
+): AccruedDriverPayResult {
+  const settledLinePay = new Map<string, number>();
+
+  settlements.forEach(settlement => {
+    if (settlement.type === 'dispatcher') return;
+    (settlement.loads || []).forEach(entry => {
+      if (!entry.loadId) return;
+      const pay =
+        (Number(entry.basePay) || 0) +
+        (Number(entry.detention) || 0) +
+        (Number(entry.layover) || 0) +
+        (Number(entry.tonu) || 0);
+      if (pay > 0) {
+        settledLinePay.set(entry.loadId, roundMoney(pay));
+      }
+    });
+  });
+
+  let settled = 0;
+  let unsettled = 0;
+  let isEstimated = false;
+
+  revenueLoads.forEach(load => {
+    if (!load.driverId) return;
+    const driver = drivers.find(d => d.id === load.driverId);
+    if (!driver) return;
+
+    const linePay = settledLinePay.get(load.id);
+    const isSettled = !!(load.settlementId || (linePay !== undefined && linePay > 0));
+
+    if (isSettled && linePay !== undefined && linePay > 0) {
+      settled += linePay;
+    } else if (isSettled) {
+      isEstimated = true;
+      settled += calculateDriverPay(load, driver);
+    } else {
+      isEstimated = true;
+      unsettled += calculateDriverPay(load, driver);
+    }
+  });
+
+  return {
+    total: roundMoney(settled + unsettled),
+    settled: roundMoney(settled),
+    unsettled: roundMoney(unsettled),
+    isEstimated,
+  };
+}
+
+/**
+ * Calculate period driver pay (settled lines + estimates for unsettled loads).
  */
 export function calculatePeriodDriverPay(
   loads: Load[],
@@ -596,65 +707,19 @@ export function calculatePeriodDriverPay(
   periodEnd: Date,
   drivers: Driver[]
 ): number {
-  // Filter settlements by load delivery dates (not settlement creation date)
-  const periodSettlements = settlements.filter(settlement => {
-    if (settlement.type !== 'driver' && settlement.type) return false;
-    
-    const settlementLoadIds: string[] = [];
-    if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
-    if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
-    if (settlement.loads) {
-      settlement.loads.forEach(l => {
-        if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
-          settlementLoadIds.push(l.loadId);
-        }
-      });
-    }
-
-    if (settlementLoadIds.length === 0) return false;
-
-    // Only include if ALL loads were delivered in period
-    return settlementLoadIds.every(loadId => {
-      const load = loads.find(l => l.id === loadId);
-      if (!load) return false;
-      const deliveryDate = new Date(load.deliveryDate || load.pickupDate || '');
-      if (isNaN(deliveryDate.getTime())) return false;
-      return deliveryDate >= periodStart && deliveryDate <= periodEnd;
-    });
+  const periodLoads = loads.filter(load => {
+    const isDelivered =
+      load.status === 'delivered' ||
+      load.status === 'completed' ||
+      load.status === LoadStatus.Delivered ||
+      load.status === LoadStatus.Completed;
+    if (!isDelivered || !load.driverId) return false;
+    const deliveryDate = new Date(load.deliveryDate || load.pickupDate || '');
+    if (isNaN(deliveryDate.getTime())) return false;
+    return deliveryDate >= periodStart && deliveryDate <= periodEnd;
   });
 
-  let totalDriverPay = 0;
-  periodSettlements.forEach(settlement => {
-    const payeeId = (settlement as any).payeeId || settlement.driverId;
-    const driver = drivers.find(d => d.id === payeeId);
-    if (driver) {
-      if (driver.type === 'OwnerOperator') {
-        totalDriverPay += settlement.grossPay || 0;
-      } else {
-        totalDriverPay += settlement.netPay || 0;
-      }
-    }
-  });
-
-  // If no settlements, estimate from loads
-  if (periodSettlements.length === 0) {
-    const periodLoads = loads.filter(load => {
-      const isDelivered = load.status === 'delivered' || load.status === 'completed';
-      if (!isDelivered || !load.driverId) return false;
-      const deliveryDate = new Date(load.deliveryDate || load.pickupDate || '');
-      if (isNaN(deliveryDate.getTime())) return false;
-      return deliveryDate >= periodStart && deliveryDate <= periodEnd;
-    });
-
-    periodLoads.forEach(load => {
-      const driver = drivers.find(d => d.id === load.driverId);
-      if (driver) {
-        totalDriverPay += calculateDriverPay(load, driver);
-      }
-    });
-  }
-
-  return totalDriverPay;
+  return calculateAccruedDriverPay(periodLoads, settlements, drivers).total;
 }
 
 /**

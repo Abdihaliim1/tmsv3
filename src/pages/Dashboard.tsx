@@ -26,7 +26,7 @@ import CompactTasksWidget from '../components/CompactTasksWidget';
 import { LoadStatus } from '../types';
 import { useTMS } from '../context/TMSContext';
 import { calculateCompanyRevenue } from '../services/utils';
-import { calculateDriverPay } from '../services/businessLogic';
+import { calculateAccruedDriverPay, calculateFactoringFees } from '../services/businessLogic';
 
 import { PageType } from '../App';
 
@@ -157,59 +157,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     });
 
     // Calculate total driver pay from settlements
-    // IMPORTANT: Only count settlements where ALL loads were delivered in CURRENT MONTH
-    // Settlement creation date does NOT matter - only load delivery dates matter
-    let totalDriverPay = 0;
-    
-    // Get settlements that only contain loads delivered in current month
-    const currentMonthSettlements = settlements.filter(settlement => {
-      if (settlement.type !== 'driver' && settlement.type) return false;
-      
-      // Get all load IDs from this settlement
-      const settlementLoadIds: string[] = [];
-      if (settlement.loadId) settlementLoadIds.push(settlement.loadId);
-      if (settlement.loadIds) settlementLoadIds.push(...settlement.loadIds);
-      if (settlement.loads) {
-        settlement.loads.forEach(l => {
-          if (l.loadId && !settlementLoadIds.includes(l.loadId)) {
-            settlementLoadIds.push(l.loadId);
-          }
-        });
-      }
-
-      // Only include settlement if ALL its loads are in revenueLoads (delivered in current month)
-      if (settlementLoadIds.length === 0) return false;
-      return settlementLoadIds.every(loadId => 
-        revenueLoads.some(load => load.id === loadId)
-      );
-    });
-
-    currentMonthSettlements.forEach(settlement => {
-      const payeeId = (settlement as any).payeeId || settlement.driverId;
-      const driver = drivers.find(d => d.id === payeeId);
-      if (driver) {
-        if (driver.type === 'OwnerOperator') {
-          // O/O: use grossPay
-          totalDriverPay += settlement.grossPay || 0;
-        } else {
-          // Company driver: use netPay
-          totalDriverPay += settlement.netPay || 0;
-        }
-      }
-    });
-
-    // If no settlements, estimate from loads using driver's actual payment rate from profile
-    if (settlements.length === 0) {
-      revenueLoads.forEach(load => {
-        if (!load.driverId) return;
-        const driver = drivers.find(d => d.id === load.driverId);
-        if (!driver) return;
-
-        // Use centralized business logic (NO hardcoded fallbacks)
-        const driverPay = calculateDriverPay(load, driver);
-        totalDriverPay += driverPay;
-      });
-    }
+    // Per-load accrual: settled lines + estimates for unsettled loads in this month
+    const totalDriverPay = calculateAccruedDriverPay(revenueLoads, settlements, drivers).total;
 
     // Calculate company expenses (same logic as Reports)
     // Only count expenses from CURRENT MONTH
@@ -249,40 +198,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 
     const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
-    // Calculate factoring expenses (factoring fees from all factored loads)
-    const factoringExpenses = revenueLoads
-      .filter(load => load.isFactored)
-      .reduce((sum, load) => {
-        // If factoringFee is already stored, use it
-        if (load.factoringFee && load.factoringFee > 0) {
-          return sum + load.factoringFee;
-        }
-        
-        // Otherwise, calculate it from grandTotal and fee percentage
-        const grandTotal = load.grandTotal || load.rate || 0;
-        if (grandTotal > 0) {
-          // Try to get fee percentage from load first
-          let feePercentage = load.factoringFeePercent;
-          
-          // If not on load, get it from the factoring company
-          if ((!feePercentage || feePercentage === 0) && load.factoringCompanyId) {
-            const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-            if (factoringCompany && factoringCompany.feePercentage) {
-              feePercentage = factoringCompany.feePercentage;
-            }
-          }
-          
-          // If still no percentage, default to 2.5% (typical factoring fee)
-          if (!feePercentage || feePercentage === 0) {
-            feePercentage = 2.5; // Default factoring fee percentage
-          }
-          
-          const factoringFee = grandTotal * (feePercentage / 100);
-          return sum + factoringFee;
-        }
-        
-        return sum;
-      }, 0);
+    // Factoring fees for this month's loads only (never full invoice fee per load)
+    const factoringExpenses = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
 
     // Calculate dispatcher cost (sum of all dispatcher commissions)
     const dispatcherCost = revenueLoads.reduce((sum, load) => {
@@ -297,7 +214,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
 
     return { netProfit, profitMargin };
-  }, [loads, drivers, settlements, expenses, factoringCompanies]);
+  }, [loads, drivers, settlements, expenses, factoringCompanies, invoices]);
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-8">
