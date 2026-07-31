@@ -25,8 +25,13 @@ import CompactAlertsWidget from '../components/CompactAlertsWidget';
 import CompactTasksWidget from '../components/CompactTasksWidget';
 import { LoadStatus } from '../types';
 import { useTMS } from '../context/TMSContext';
-import { calculateCompanyRevenue } from '../services/utils';
-import { calculateAccruedDriverPay, calculateFactoringFees } from '../services/businessLogic';
+import {
+  calculatePeriodFinancials,
+  getLoadRevenue,
+  getMonthDateRange,
+  isRevenueLoadStatus,
+  getLoadBusinessDate,
+} from '../services/businessLogic';
 
 import { PageType } from '../App';
 
@@ -38,36 +43,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { loads, kpis, addLoad, drivers, invoices, settlements, expenses, factoringCompanies, tasks } = useTMS();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-  // Calculate real revenue trends from loads (last 6 months)
+  // Revenue trends (last 6 months) — booked grand total, same formula as Analytics/P&L
   const revenueChartData = useMemo(() => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const now = new Date();
     const data: { name: string; value: number }[] = [];
 
-    // Get last 6 months
     for (let i = 5; i >= 0; i--) {
       const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-      const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-      monthEnd.setHours(23, 59, 59, 999);
+      const { start: monthStart, end: monthEnd } = getMonthDateRange(date);
 
-      // Calculate revenue for this month from delivered/completed loads
       const monthLoads = loads.filter(load => {
-        if (load.status !== LoadStatus.Delivered && load.status !== LoadStatus.Completed) return false;
-        const loadDate = new Date(load.deliveryDate || load.pickupDate || '');
+        if (!isRevenueLoadStatus(load.status)) return false;
+        const loadDate = getLoadBusinessDate(load);
+        if (!loadDate) return false;
         return loadDate >= monthStart && loadDate <= monthEnd;
       });
 
-      let monthRevenue = 0;
-      monthLoads.forEach(load => {
-        const grossAmount = load.rate || 0;
-        if (load.driverId) {
-          const driver = drivers.find(d => d.id === load.driverId);
-          monthRevenue += calculateCompanyRevenue(grossAmount, driver);
-        } else {
-          monthRevenue += grossAmount;
-        }
-      });
+      const monthRevenue = monthLoads.reduce((sum, load) => sum + getLoadRevenue(load), 0);
 
       data.push({
         name: months[date.getMonth()],
@@ -76,7 +69,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     }
 
     return data;
-  }, [loads, drivers]);
+  }, [loads]);
 
   // Calculate real load status data
   const loadStatusData = useMemo(() => {
@@ -94,12 +87,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       if (status === LoadStatus.Available) statusCounts['Available']++;
       else if (status === LoadStatus.Dispatched) statusCounts['Dispatched']++;
       else if (status === LoadStatus.InTransit) statusCounts['In Transit']++;
-      else if (status === LoadStatus.Delivered) statusCounts['Delivered']++;
-      else if (status === LoadStatus.Completed) statusCounts['Completed']++;
+      else if (status === LoadStatus.Delivered || status === LoadStatus.DeliveredWithBOL) statusCounts['Delivered']++;
+      else if (status === LoadStatus.Completed || status === LoadStatus.Invoiced || status === LoadStatus.Paid) statusCounts['Completed']++;
       else if (status === LoadStatus.Cancelled) statusCounts['Cancelled']++;
     });
 
-    // Convert to array format, filter out zeros
     return Object.entries(statusCounts)
       .filter(([_, value]) => value > 0)
       .map(([name, value]) => ({ name, value }));
@@ -119,101 +111,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   const COLORS = ['#94a3b8', '#facc15', '#3b82f6', '#10b981', '#a855f7', '#ef4444'];
 
-  // Calculate Net Profit using the same logic as Reports page
-  // IMPORTANT: Only count loads delivered in CURRENT MONTH (not when settlements were created)
-  const netProfitData = useMemo(() => {
-    // Get current month date range
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    // Only count delivered/completed loads for revenue that were delivered THIS MONTH
-    const revenueLoads = loads.filter(l => {
-      const isDelivered = l.status === LoadStatus.Delivered || l.status === LoadStatus.Completed;
-      if (!isDelivered) return false;
-      
-      // Filter by delivery date (not settlement creation date)
-      const deliveryDate = new Date(l.deliveryDate || l.pickupDate || '');
-      if (isNaN(deliveryDate.getTime())) return false;
-      return deliveryDate >= monthStart && deliveryDate <= monthEnd;
+  // Revenue + Net Profit share one current-month calculation (matches Analytics/P&L)
+  const periodFinancials = useMemo(() => {
+    const { start, end } = getMonthDateRange();
+    return calculatePeriodFinancials({
+      loads,
+      expenses,
+      settlements,
+      invoices,
+      factoringCompanies,
+      drivers,
+      periodStart: start,
+      periodEnd: end,
     });
-
-    // Calculate total revenue (using grandTotal if available, otherwise rate)
-    let totalRevenue = 0;
-    revenueLoads.forEach(load => {
-      const grossAmount = load.grandTotal || load.rate || 0;
-      if (load.driverId) {
-        const driver = drivers.find(d => d.id === load.driverId);
-        if (driver && driver.type === 'OwnerOperator') {
-          // For O/O, use full revenue
-          totalRevenue += grossAmount;
-        } else {
-          // For company drivers, use company revenue calculation
-          totalRevenue += calculateCompanyRevenue(grossAmount, driver);
-        }
-      } else {
-        totalRevenue += grossAmount;
-      }
-    });
-
-    // Calculate total driver pay from settlements
-    // Per-load accrual: settled lines + estimates for unsettled loads in this month
-    const totalDriverPay = calculateAccruedDriverPay(revenueLoads, settlements, drivers).total;
-
-    // Calculate company expenses (same logic as Reports)
-    // Only count expenses from CURRENT MONTH
-    const companyExpenses = expenses.filter(exp => {
-      // Filter by expense date (not creation date) - must be in current month
-      const expDate = new Date(exp.date || exp.createdAt || '');
-      if (isNaN(expDate.getTime())) return false;
-      if (expDate < monthStart || expDate > monthEnd) return false;
-      
-      // Must be paid by company
-      if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
-        return false;
-      }
-      
-      // If expense is linked to a driver, check if driver is O/O
-      if (exp.driverId) {
-        const driver = drivers.find(d => d.id === exp.driverId);
-        if (driver && driver.type === 'OwnerOperator') {
-          // This is an O/O expense - check if it's a pass-through
-          const expenseType = (exp.type || '').toLowerCase();
-          const isPassThrough = 
-            expenseType === 'fuel' || 
-            expenseType === 'insurance' || 
-            expenseType === 'toll' ||
-            expenseType === 'maintenance' ||
-            (exp.description || '').toLowerCase().includes('eld');
-          
-          // O/O pass-through expenses are NOT company expenses
-          if (isPassThrough) {
-            return false;
-          }
-        }
-      }
-      
-      return true;
-    });
-
-    const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-
-    // Factoring fees for this month's loads only (never full invoice fee per load)
-    const factoringExpenses = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
-
-    // Calculate dispatcher cost (sum of all dispatcher commissions)
-    const dispatcherCost = revenueLoads.reduce((sum, load) => {
-      return sum + (load.dispatcherCommissionAmount || 0);
-    }, 0);
-
-    // Total expenses including fees
-    const totalExpensesWithFees = totalExpenses + factoringExpenses + dispatcherCost;
-
-    // Net profit (Revenue - Total Expenses - Driver Pay)
-    const netProfit = totalRevenue - totalExpensesWithFees - totalDriverPay;
-    const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
-
-    return { netProfit, profitMargin };
   }, [loads, drivers, settlements, expenses, factoringCompanies, invoices]);
 
   return (
@@ -252,10 +162,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       {/* KPI Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatsCard 
-          label="Total Revenue" 
-          value={`$${(isNaN(kpis.revenue) || !isFinite(kpis.revenue) ? 0 : kpis.revenue).toLocaleString()}`} 
+          label="Revenue (This Month)" 
+          value={`$${periodFinancials.revenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
           icon={DollarSign} 
-          trend={kpis.revenueChange}
+          trend={0}
           color="green"
         />
         <StatsCard 
@@ -273,10 +183,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           color="purple"
         />
         <StatsCard 
-          label="Net Profit" 
-          value={`$${netProfitData.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
+          label="Net Profit (This Month)" 
+          value={`$${periodFinancials.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
           icon={TrendingUp} 
-          trend={netProfitData.profitMargin}
+          trend={periodFinancials.profitMargin}
           color="orange"
         />
       </div>
@@ -471,7 +381,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                       {load.driverName || <span className="text-slate-400 italic">Unassigned</span>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right font-medium text-slate-900">
-                      ${load.rate.toLocaleString()}
+                      ${getLoadRevenue(load).toLocaleString()}
                     </td>
                   </tr>
                 ))

@@ -485,6 +485,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     return sanitized;
   };
 
+  const isDuplicateLoadNumber = (loadNumber: string, excludeId?: string): boolean => {
+    const normalized = loadNumber.trim().toLowerCase();
+    if (!normalized) return false;
+    return loads.some(
+      l => l.id !== excludeId && (l.loadNumber || '').trim().toLowerCase() === normalized
+    );
+  };
+
   const addLoad = async (input: NewLoadInput) => {
     // Sanitize user input before saving
     const sanitizedInput = sanitizeLoadInput(input) as NewLoadInput;
@@ -493,13 +501,19 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       : null;
     const withCommission = withDispatcherCommission(sanitizedInput, dispatcher);
 
+    const loadNumber =
+      sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`;
+    if (isDuplicateLoadNumber(loadNumber)) {
+      throw new Error(`Load number "${loadNumber}" already exists. Use a unique load number.`);
+    }
+
     const newLoadId = generateShortId();
     const newLoad: Load = {
       ...sanitizedInput,
       ...withCommission,
       id: newLoadId,
       // Preserve loadNumber if provided, otherwise generate one
-      loadNumber: sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`,
+      loadNumber,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
     };
@@ -615,6 +629,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     // Sanitize user input in updates before processing
     const sanitizedUpdates = sanitizeLoadInput(updates);
+
+    if (
+      sanitizedUpdates.loadNumber &&
+      sanitizedUpdates.loadNumber !== oldLoad.loadNumber &&
+      isDuplicateLoadNumber(sanitizedUpdates.loadNumber, id)
+    ) {
+      return Promise.reject(
+        new Error(`Load number "${sanitizedUpdates.loadNumber}" already exists. Use a unique load number.`)
+      );
+    }
 
     // Get current user for audit logging
     const actorUid = authUser?.uid || 'system';

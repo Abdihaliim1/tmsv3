@@ -11,7 +11,17 @@
  */
 
 import { Load, Driver, Settlement, Invoice, Expense, LoadStatus, PaymentType, Employee } from '../types';
+import { parseDateOnlyLocal } from '../utils/dateOnly';
 import { calculateCompanyRevenue } from './utils';
+
+function coerceMoney(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
 
 export type DispatcherCommissionType = 'percentage' | 'flat_fee' | 'per_mile';
 
@@ -147,16 +157,176 @@ export function getLoadMiles(load: Partial<Load> & { totalMiles?: number; distan
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-export function getLoadRevenue(load: Partial<Load>): number {
-  const raw = load.grandTotal ?? load.rate ?? 0;
-  const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-  return Number.isFinite(n) ? n : 0;
+/** Accessorial earnings on a load (detention, layover, lumper, TONU, other). */
+export function getLoadAccessorials(load: Partial<Load>): number {
+  return roundMoney(
+    coerceMoney(load.detentionAmount) +
+      coerceMoney(load.layoverAmount) +
+      coerceMoney(load.lumperFee ?? load.lumperAmount) +
+      coerceMoney(load.tonuFee) +
+      coerceMoney(load.otherAccessorials)
+  );
 }
 
 export function getLoadFsc(load: Partial<Load> & { fuelSurcharge?: number }): number {
-  const raw = load.fscAmount ?? load.fuelSurcharge ?? 0;
-  const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
-  return Number.isFinite(n) ? n : 0;
+  return coerceMoney(load.fscAmount ?? load.fuelSurcharge);
+}
+
+/** Booked grand total rebuilt from parts (P&L formula). */
+export function calculateLoadGrandTotal(load: Partial<Load>): number {
+  return roundMoney(coerceMoney(load.rate) + getLoadFsc(load) + getLoadAccessorials(load));
+}
+
+/**
+ * Booked load revenue for reports/dashboard.
+ * Prefers stored grandTotal when present; otherwise rate + FSC + accessorials.
+ */
+export function getLoadRevenue(load: Partial<Load>): number {
+  const stored = coerceMoney(load.grandTotal);
+  if (stored > 0) return roundMoney(stored);
+  const computed = calculateLoadGrandTotal(load);
+  if (computed > 0) return computed;
+  return roundMoney(coerceMoney(load.rate));
+}
+
+/** Local business date for a load (delivery, else pickup). */
+export function getLoadBusinessDate(load: Partial<Load>): Date | null {
+  const raw = load.deliveryDate || load.pickupDate;
+  if (!raw) return null;
+  const d = parseDateOnlyLocal(String(raw));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Inclusive local calendar-month bounds. */
+export function getMonthDateRange(ref: Date = new Date()): { start: Date; end: Date } {
+  const start = new Date(ref.getFullYear(), ref.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 0, 23, 59, 59, 999);
+  return { start, end };
+}
+
+export function sumBookedRevenue(loads: Load[]): number {
+  return roundMoney(loads.reduce((sum, load) => sum + getLoadRevenue(load), 0));
+}
+
+export function filterRevenueLoadsInPeriod(
+  loads: Load[],
+  periodStart: Date,
+  periodEnd: Date
+): Load[] {
+  return loads.filter(load => {
+    if (!isRevenueLoadStatus(load.status)) return false;
+    const businessDate = getLoadBusinessDate(load);
+    if (!businessDate) return false;
+    return businessDate >= periodStart && businessDate <= periodEnd;
+  });
+}
+
+/**
+ * Company P&L expense recognition:
+ * - exclude rejected
+ * - exclude non-positive amounts
+ * - company / tracked_only / unset paidBy only
+ * - exclude O/O pass-through (fuel, insurance, toll, maintenance, ELD)
+ */
+export function isCompanyRecognizedExpense(
+  exp: Expense,
+  drivers: Driver[] = []
+): boolean {
+  if (exp.status === 'rejected') return false;
+  const amount = coerceMoney(exp.amount);
+  if (amount <= 0) return false;
+
+  if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
+    return false;
+  }
+
+  if (exp.driverId) {
+    const driver = drivers.find(d => d.id === exp.driverId);
+    if (driver && driver.type === 'OwnerOperator') {
+      const expenseType = (exp.type || '').toLowerCase();
+      const description = (exp.description || '').toLowerCase();
+      const isPassThrough =
+        expenseType === 'fuel' ||
+        expenseType === 'insurance' ||
+        expenseType === 'toll' ||
+        expenseType === 'maintenance' ||
+        description.includes('eld');
+      if (isPassThrough) return false;
+    }
+  }
+
+  return true;
+}
+
+export type PeriodFinancials = {
+  revenue: number;
+  driverPay: number;
+  operatingExpenses: number;
+  factoringFees: number;
+  dispatcherCost: number;
+  netProfit: number;
+  profitMargin: number;
+  revenueLoads: Load[];
+};
+
+/**
+ * Shared period P&L used by Dashboard / Analytics / Company Overview.
+ * Revenue = booked grand total (rate + FSC + accessorials) for revenue-status loads.
+ */
+export function calculatePeriodFinancials(input: {
+  loads: Load[];
+  expenses: Expense[];
+  settlements: Settlement[];
+  invoices: Invoice[];
+  factoringCompanies?: Array<{ id: string; feePercentage?: number }>;
+  drivers: Driver[];
+  periodStart: Date;
+  periodEnd: Date;
+}): PeriodFinancials {
+  const {
+    loads,
+    expenses,
+    settlements,
+    invoices,
+    factoringCompanies = [],
+    drivers,
+    periodStart,
+    periodEnd,
+  } = input;
+
+  const revenueLoads = filterRevenueLoadsInPeriod(loads, periodStart, periodEnd);
+  const revenue = sumBookedRevenue(revenueLoads);
+  const driverPay = calculateAccruedDriverPay(revenueLoads, settlements, drivers).total;
+
+  const operatingExpenses = roundMoney(
+    expenses
+      .filter(exp => {
+        if (!isCompanyRecognizedExpense(exp, drivers)) return false;
+        const expDate = parseDateOnlyLocal(String(exp.date || exp.createdAt || ''));
+        if (Number.isNaN(expDate.getTime())) return false;
+        return expDate >= periodStart && expDate <= periodEnd;
+      })
+      .reduce((sum, exp) => sum + coerceMoney(exp.amount), 0)
+  );
+
+  const factoringFees = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
+  const dispatcherCost = roundMoney(
+    revenueLoads.reduce((sum, load) => sum + coerceMoney(load.dispatcherCommissionAmount), 0)
+  );
+
+  const netProfit = roundMoney(revenue - operatingExpenses - factoringFees - dispatcherCost - driverPay);
+  const profitMargin = revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0;
+
+  return {
+    revenue,
+    driverPay,
+    operatingExpenses,
+    factoringFees,
+    dispatcherCost,
+    netProfit,
+    profitMargin,
+    revenueLoads,
+  };
 }
 
 function invoiceLoadIds(invoice: Invoice): string[] {
@@ -164,10 +334,6 @@ function invoiceLoadIds(invoice: Invoice): string[] {
   if (invoice.loadId) ids.add(invoice.loadId);
   (invoice.loadIds || []).forEach(id => ids.add(id));
   return Array.from(ids);
-}
-
-function roundMoney(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 /**

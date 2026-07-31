@@ -10,6 +10,7 @@ import {
   isRevenueLoadStatus,
   calculateFactoringFees,
   calculateAccruedDriverPay,
+  isCompanyRecognizedExpense,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
@@ -209,40 +210,9 @@ const Reports: React.FC = () => {
     // Calculate real expenses from expense data
     // CRITICAL: Only include expenses that affect company P&L
     // EXCLUDE: O/O pass-through expenses (fuel, insurance, tolls charged to O/O)
-    const companyExpenses = filteredExpenses.filter(exp => {
-      // Must be paid by company
-      if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
-        return false;
-      }
-      
-      // If expense is linked to a driver, check if driver is O/O
-      if (exp.driverId) {
-        const driver = drivers.find(d => d.id === exp.driverId);
-        if (driver && driver.type === 'OwnerOperator') {
-          // This is an O/O expense - check if it's a pass-through
-          const expenseType = (exp.type || '').toLowerCase();
-          const isPassThrough = 
-            expenseType === 'fuel' || 
-            expenseType === 'insurance' || 
-            expenseType === 'toll' ||
-            expenseType === 'maintenance' ||
-            (exp.description || '').toLowerCase().includes('eld');
-          
-          // O/O pass-through expenses are NOT company expenses
-          if (isPassThrough) {
-            return false;
-          }
-        }
-      }
-      
-      // If expense is linked to a truck, check if truck is O/O owned
-      if (exp.truckId) {
-        // For now, assume truck expenses are company expenses unless linked to O/O driver
-        // This could be enhanced with truck ownership data
-      }
-      
-      return true;
-    });
+    const companyExpenses = filteredExpenses.filter(exp =>
+      isCompanyRecognizedExpense(exp, drivers)
+    );
 
     const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
     

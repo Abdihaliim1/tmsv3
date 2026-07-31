@@ -14,6 +14,8 @@ import {
   isRevenueLoadStatus,
   calculateFactoringFees,
   calculateAccruedDriverPay,
+  isCompanyRecognizedExpense,
+  getLoadAccessorials,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
@@ -246,26 +248,10 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
     const totalDriverPay = accrued.total;
     const isEstimated = accrued.isEstimated;
 
-    // Calculate company expenses (exclude O/O pass-through)
-    const companyExpenses = filteredExpenses.filter(exp => {
-      if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
-        return false;
-      }
-      if (exp.driverId) {
-        const driver = drivers.find(d => d.id === exp.driverId);
-        if (driver && driver.type === 'OwnerOperator') {
-          const expenseType = (exp.type || '').toLowerCase();
-          const isPassThrough =
-            expenseType === 'fuel' ||
-            expenseType === 'insurance' ||
-            expenseType === 'toll' ||
-            expenseType === 'maintenance' ||
-            (exp.description || '').toLowerCase().includes('eld');
-          if (isPassThrough) return false;
-        }
-      }
-      return true;
-    });
+    // Calculate company expenses (exclude rejected + O/O pass-through)
+    const companyExpenses = filteredExpenses.filter(exp =>
+      isCompanyRecognizedExpense(exp, drivers)
+    );
 
     const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
@@ -564,25 +550,17 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
     const otherRevenue = 0;
 
     filteredLoads.forEach(load => {
-      // Primary fees = base rate
       primaryFees += load.rate || 0;
-      // Fuel surcharge (canonical field is fscAmount)
       fuelSurcharge += getLoadFsc(load);
-      // Accessory fees (detention, layover, lumper, tonu, other)
-      accessoryFees +=
-        (load.detentionAmount || 0) +
-        (load.layoverAmount || 0) +
-        (load.lumperFee || load.lumperAmount || 0) +
-        (load.tonuFee || 0) +
-        (load.otherAccessorials || 0);
+      accessoryFees += getLoadAccessorials(load);
     });
 
     const totalRevenue = primaryFees + fuelSurcharge + accessoryFees + otherRevenue;
     const totalIncome = totalRevenue;
 
-    // Calculate Expenses
-    // Filter expenses by period
+    // Company-recognized expenses in period (excludes rejected + O/O pass-through)
     const filteredExpenses = expenses.filter(expense => {
+      if (!isCompanyRecognizedExpense(expense, drivers)) return false;
       const date = parseDateOnlyLocal(expense.date || expense.createdAt || '');
       return date >= periodStart && date <= periodEnd;
     });

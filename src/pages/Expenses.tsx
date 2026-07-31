@@ -85,8 +85,13 @@ const Expenses: React.FC = () => {
     return true;
   });
 
-  const totalAmount = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
-  const pendingAmount = expenses.filter(e => e.status === 'pending').reduce((sum, exp) => sum + exp.amount, 0);
+  // Rejected expenses never count toward totals unless explicitly filtering rejected
+  const totalAmount = filteredExpenses
+    .filter(exp => filterStatus === 'rejected' || exp.status !== 'rejected')
+    .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+  const pendingAmount = expenses
+    .filter(e => e.status === 'pending')
+    .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
@@ -321,11 +326,17 @@ const Expenses: React.FC = () => {
             </div>
             <form onSubmit={(e) => {
               e.preventDefault();
+              const amount = Number(formData.amount);
+              if (!Number.isFinite(amount) || amount <= 0) {
+                alert('Expense amount must be greater than zero.');
+                return;
+              }
+              const normalized = { ...formData, amount };
               if (isEditModalOpen && editingExpenseId) {
                 // Update existing expense
                 const driverName = selectedDriverId ? drivers.find(d => d.id === selectedDriverId)?.firstName + ' ' + drivers.find(d => d.id === selectedDriverId)?.lastName : undefined;
                 updateExpense(editingExpenseId, {
-                  ...formData,
+                  ...normalized,
                   driverId: selectedDriverId || undefined,
                   driverName,
                   truckId: selectedTruckId || undefined,
@@ -336,7 +347,7 @@ const Expenses: React.FC = () => {
                 // Add new expense
                 const driverName = selectedDriverId ? drivers.find(d => d.id === selectedDriverId)?.firstName + ' ' + drivers.find(d => d.id === selectedDriverId)?.lastName : undefined;
                 addExpense({
-                  ...formData,
+                  ...normalized,
                   driverId: selectedDriverId || undefined,
                   driverName,
                   truckId: selectedTruckId || undefined,
@@ -452,7 +463,10 @@ const Expenses: React.FC = () => {
                   min="0"
                   step="0.01"
                   value={formData.amount || ''}
-                  onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) => {
+                    const next = parseFloat(e.target.value);
+                    setFormData({ ...formData, amount: Number.isFinite(next) ? Math.max(0, next) : 0 });
+                  }}
                   placeholder="0.00"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
