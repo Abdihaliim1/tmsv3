@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect, useCallback } from 'react';
-import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, Dispatcher, NewDispatcherInput, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus, Task } from '../types';
+import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, FactoringTransaction, NewFactoringTransactionInput, Dispatcher, NewDispatcherInput, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus, Task } from '../types';
 import { generateMockKPIs } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
 // Tenant ID comes from TenantContext
@@ -22,17 +22,19 @@ import { sanitizeText } from '../security/sanitize';
 // Firestore persistence
 import {
   loadLoads, loadInvoices, loadSettlements, loadEmployees, loadTrucks, loadTrailers,
-  loadExpenses, loadFactoringCompanies, loadBrokers, loadCustomers, loadPlannedLoads, loadTrips,
+  loadExpenses, loadFactoringCompanies, loadFactoringTransactions, loadBrokers, loadCustomers, loadPlannedLoads, loadTrips,
   saveLoad, saveInvoice, saveSettlement, saveEmployee, saveTruck, saveTrailer,
-  saveExpense, saveFactoringCompany, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
+  saveExpense, saveFactoringCompany, saveFactoringTransaction, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
   deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
   deleteTruck as firestoreDeleteTruck, deleteTrailer as firestoreDeleteTrailer,
   deleteExpense as firestoreDeleteExpense, deleteFactoringCompany as firestoreDeleteFactoringCompany,
+  deleteFactoringTransaction as firestoreDeleteFactoringTransaction,
   deleteBroker as firestoreDeleteBroker, deleteCustomer as firestoreDeleteCustomer,
   deletePlannedLoad as firestoreDeletePlannedLoad, deleteTrip as firestoreDeleteTrip,
   batchSave
 } from '../services/firestoreService';
+import { buildDueInsuranceExpenses } from '../services/insuranceRecurrence';
 
 interface TMSContextType {
   loads: Load[];
@@ -44,6 +46,7 @@ interface TMSContextType {
   trailers: Trailer[];
   expenses: Expense[];
   factoringCompanies: FactoringCompany[];
+  factoringTransactions: FactoringTransaction[];
   brokers: Broker[];
   customers: CustomerEntity[]; // Unified customer database (brokers, shippers, consignees)
   dispatchers: Employee[]; // Computed: filtered employees where employeeType is dispatcher
@@ -79,6 +82,9 @@ interface TMSContextType {
   addFactoringCompany: (company: NewFactoringCompanyInput) => void;
   updateFactoringCompany: (id: string, company: Partial<FactoringCompany>) => void;
   deleteFactoringCompany: (id: string) => void;
+  addFactoringTransaction: (tx: NewFactoringTransactionInput) => string;
+  updateFactoringTransaction: (id: string, tx: Partial<FactoringTransaction>) => void;
+  deleteFactoringTransaction: (id: string) => void;
   addBroker: (broker: NewBrokerInput) => void;
   updateBroker: (id: string, broker: Partial<Broker>) => void;
   deleteBroker: (id: string) => void;
@@ -131,6 +137,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         trailers: [],
         expenses: [],
         factoringCompanies: [],
+        factoringTransactions: [],
         brokers: [],
         customers: [],
         dispatchers: [],
@@ -171,6 +178,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },
+        addFactoringTransaction: () => '',
+        updateFactoringTransaction: () => { },
+        deleteFactoringTransaction: () => { },
         addBroker: () => { },
         updateBroker: () => { },
         deleteBroker: () => { },
@@ -222,6 +232,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [factoringCompanies, setFactoringCompanies] = useState<FactoringCompany[]>([]);
+  const [factoringTransactions, setFactoringTransactions] = useState<FactoringTransaction[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [customers, setCustomers] = useState<CustomerEntity[]>([]);
   const [plannedLoads, setPlannedLoads] = useState<PlannedLoad[]>([]);
@@ -259,6 +270,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           trailersData,
           expensesData,
           fcData,
+          factoringTxData,
           brokersData,
           customersData,
           plannedLoadsData,
@@ -272,6 +284,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           loadTrailers(tenantId),
           loadExpenses(tenantId),
           loadFactoringCompanies(tenantId),
+          loadFactoringTransactions(tenantId),
           loadBrokers(tenantId),
           loadCustomers(tenantId),
           loadPlannedLoads(tenantId),
@@ -289,6 +302,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         setTrailers(trailersData);
         setExpenses(expensesData);
         setFactoringCompanies(fcData);
+        setFactoringTransactions(factoringTxData);
         setBrokers(brokersData);
         setCustomers(customersData);
         setPlannedLoads(plannedLoadsData);
@@ -1342,9 +1356,49 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
     }
 
+    const invoiceId = generateShortId();
+    const invoiceLoadIds = input.loadIds || (input.loadId ? [input.loadId] : []);
+    let factoringExtras: Partial<Invoice> = {};
+
+    if (input.isFactored) {
+      const feePct = input.factoringFeePercent || 2.5;
+      const gross = input.amount || 0;
+      const feeAmount = input.factoringFee ?? (gross * (feePct / 100));
+      const netFunded = input.netFundedAmount ?? (gross - feeAmount);
+      const txId = generateShortId();
+      const today = new Date().toISOString().split('T')[0];
+      const tx: FactoringTransaction = {
+        id: txId,
+        invoiceId,
+        invoiceNumber: input.invoiceNumber,
+        factoringCompanyId: input.factoringCompanyId,
+        factoringCompanyName: input.factoringCompanyName,
+        loadIds: invoiceLoadIds,
+        grossAmount: gross,
+        feePercentage: feePct,
+        feeAmount,
+        netFundedAmount: netFunded,
+        submittedDate: input.factoredDate || today,
+        fundingStatus: 'submitted',
+        recourseStatus: 'none',
+        createdAt: new Date().toISOString(),
+      };
+      setFactoringTransactions(prev => [tx, ...prev]);
+      saveFactoringTransaction(tenantId || 'default', tx).catch(e => console.error('Failed to save factoring transaction:', e));
+      factoringExtras = {
+        factoringFeePercent: feePct,
+        factoringFee: feeAmount,
+        netFundedAmount: netFunded,
+        fundingStatus: 'submitted',
+        factorSubmittedDate: input.factoredDate || today,
+        factoringTransactionId: txId,
+      };
+    }
+
     const newInvoice: Invoice = {
       ...input,
-      id: generateShortId(),
+      ...factoringExtras,
+      id: invoiceId,
       invoiceNumber: input.invoiceNumber || generateUniqueInvoiceNumber(tenantId, invoices),
       createdAt: new Date().toISOString(),
     };
@@ -1352,13 +1406,21 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     saveInvoice(tenantId || 'default', newInvoice).catch(e => console.error('Failed to save invoice:', e));
 
     // Link invoice to loads and update Load status to 'invoiced' (TruckingOffice Step 6)
-    const invoiceLoadIds = newInvoice.loadIds || (newInvoice.loadId ? [newInvoice.loadId] : []);
     if (invoiceLoadIds.length > 0) {
       const invoicedAt = new Date().toISOString();
       setLoads(prev => prev.map(load => {
         if (invoiceLoadIds.includes(load.id)) {
+          const factoredPatch = newInvoice.isFactored ? {
+            isFactored: true as const,
+            factoringCompanyId: newInvoice.factoringCompanyId,
+            factoringCompanyName: newInvoice.factoringCompanyName,
+            factoringFeePercent: newInvoice.factoringFeePercent,
+            factoringFee: (load.grandTotal || load.rate || 0) * ((newInvoice.factoringFeePercent || 2.5) / 100),
+            factoredDate: newInvoice.factoredDate || newInvoice.factorSubmittedDate,
+          } : {};
           return {
             ...load,
+            ...factoredPatch,
             invoiceId: newInvoice.id,
             invoiceNumber: newInvoice.invoiceNumber,
             invoicedAt: invoicedAt,
@@ -1635,6 +1697,72 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     setFactoringCompanies(prev => prev.filter(company => company.id !== id));
     firestoreDeleteFactoringCompany(tenantId || 'default', id).catch(e => console.error('Failed to delete factoring company:', e));
   };
+
+  const addFactoringTransaction = (input: NewFactoringTransactionInput): string => {
+    const id = generateShortId();
+    const tx: FactoringTransaction = {
+      ...input,
+      id,
+      createdAt: new Date().toISOString(),
+    };
+    setFactoringTransactions(prev => [tx, ...prev]);
+    saveFactoringTransaction(tenantId || 'default', tx).catch(e => console.error('Failed to save factoring transaction:', e));
+    return id;
+  };
+
+  const updateFactoringTransaction = (id: string, updates: Partial<FactoringTransaction>) => {
+    const existing = factoringTransactions.find(t => t.id === id);
+    if (!existing) return;
+    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    setFactoringTransactions(prev => prev.map(t => t.id === id ? updated : t));
+    saveFactoringTransaction(tenantId || 'default', updated).catch(e => console.error('Failed to save factoring transaction:', e));
+
+    // Keep linked invoice funding fields in sync
+    if (updated.invoiceId) {
+      updateInvoice(updated.invoiceId, {
+        fundingStatus: updated.fundingStatus,
+        factorFundedDate: updated.fundedDate,
+        factorCustomerPaidDate: updated.customerPaidDate,
+        factorSubmittedDate: updated.submittedDate,
+        factoringFee: updated.feeAmount,
+        netFundedAmount: updated.netFundedAmount,
+      });
+    }
+  };
+
+  const deleteFactoringTransaction = (id: string) => {
+    setFactoringTransactions(prev => prev.filter(t => t.id !== id));
+    firestoreDeleteFactoringTransaction(tenantId || 'default', id).catch(e => console.error('Failed to delete factoring transaction:', e));
+  };
+
+  // Auto-generate due monthly insurance expenses (no backfill before truck start)
+  const insuranceGenKeyRef = React.useRef('');
+  useEffect(() => {
+    if (!tenantId || trucks.length === 0) return;
+    const key = `${trucks.map(t => `${t.id}:${t.monthlyInsuranceCost}:${t.createdAt}`).join('|')}|${expenses.length}`;
+    if (insuranceGenKeyRef.current === key) return;
+    insuranceGenKeyRef.current = key;
+
+    const driverList = employees.filter(
+      e => e.employeeType === 'driver' || e.employeeType === 'owner_operator'
+    ) as Driver[];
+    const due = buildDueInsuranceExpenses(trucks, expenses, driverList);
+    if (due.length === 0) return;
+
+    due.forEach(exp => {
+      if (expenses.some(e => e.recurrenceKey === exp.recurrenceKey)) return;
+      const newExpense: Expense = {
+        ...exp,
+        id: generateShortId(),
+        createdAt: new Date().toISOString(),
+      };
+      setExpenses(prev => {
+        if (prev.some(e => e.recurrenceKey === newExpense.recurrenceKey)) return prev;
+        return [newExpense, ...prev];
+      });
+      saveExpense(tenantId, newExpense).catch(err => console.error('Failed to save insurance expense:', err));
+    });
+  }, [tenantId, trucks, expenses, employees]);
 
   // Broker functions
   const addBroker = (input: NewBrokerInput) => {
@@ -2273,6 +2401,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       trailers,
       expenses,
       factoringCompanies,
+      factoringTransactions,
       brokers,
       customers,
       dispatchers, // Computed: filtered employees
@@ -2308,6 +2437,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       addFactoringCompany,
       updateFactoringCompany,
       deleteFactoringCompany,
+      addFactoringTransaction,
+      updateFactoringTransaction,
+      deleteFactoringTransaction,
       addBroker,
       updateBroker,
       deleteBroker,
@@ -2361,6 +2493,7 @@ export const useTMS = () => {
         trailers: [],
         expenses: [],
         factoringCompanies: [],
+        factoringTransactions: [],
         brokers: [],
         customers: [],
         dispatchers: [],
@@ -2401,6 +2534,9 @@ export const useTMS = () => {
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },
+        addFactoringTransaction: () => '',
+        updateFactoringTransaction: () => { },
+        deleteFactoringTransaction: () => { },
         addBroker: () => { },
         updateBroker: () => { },
         deleteBroker: () => { },

@@ -32,6 +32,10 @@ export interface Expense {
     createdAt: string;
     lastUpdated: string;
   };
+  /** Dedup key for recurring monthly expenses: truckId + type + YYYY-MM */
+  recurrenceKey?: string;
+  isRecurring?: boolean;
+  recurrenceSourceId?: string;
   createdAt?: string;
   updatedAt?: string;
 }

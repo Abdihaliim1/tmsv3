@@ -7,21 +7,24 @@
  * 3. Factoring Companies - Manage factoring company relationships
  */
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   FileText, DollarSign, Plus, Search, ChevronLeft, ChevronRight,
-  Check, X, Printer, Download, Eye, Edit, Trash2, MoreHorizontal,
-  Building2, MapPin, Truck, Calendar, Package, Clock, CheckCircle,
+  Check, X, Download, Edit, Trash2, MoreHorizontal,
+  Building2, Package, Clock, CheckCircle,
   AlertTriangle, TrendingUp
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { useTenant } from '../context/TenantContext';
-import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactoringCompanyInput, Payment } from '../types';
+import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactoringCompanyInput } from '../types';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
+import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
+import { getFactoredLoads } from '../services/businessLogic';
+import type { FactoringFundingStatus } from '../types';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
@@ -39,7 +42,8 @@ const formatCurrency = (amount: number) => {
 
 const formatDate = (dateString: string | undefined) => {
   if (!dateString) return '-';
-  return new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  // Date-only strings must use local parse to avoid Jul 31 → Jul 30 UTC shift
+  return formatDateOnly(dateString, { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 // ============================================================================
@@ -227,11 +231,11 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
 }) => {
   const { loads, invoices, factoringCompanies, addInvoice, updateLoad } = useTMS();
   const { activeTenantId } = useTenant();
-  const { companyProfile } = useCompany();
+  useCompany();
   const tenantId = activeTenantId || 'default';
 
   // Form state
-  const [invoiceNumber, setInvoiceNumber] = useState(() => generateUniqueInvoiceNumber(tenantId, invoices));
+  const [invoiceNumber] = useState(() => generateUniqueInvoiceNumber(tenantId, invoices));
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [dueDate, setDueDate] = useState(() => {
@@ -293,7 +297,15 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       return;
     }
 
-    const finalInvoiceNumber = customInvoiceNumber || invoiceNumber;
+    const finalInvoiceNumber = (customInvoiceNumber || invoiceNumber).trim();
+    const duplicate = invoices.some(
+      inv => inv.invoiceNumber?.trim().toLowerCase() === finalInvoiceNumber.toLowerCase()
+    );
+    if (duplicate) {
+      alert(`Invoice number "${finalInvoiceNumber}" already exists. Please use a unique invoice number.`);
+      return;
+    }
+
     const customerName = selectedLoads[0]?.customerName || selectedLoads[0]?.brokerName || initialCustomerName || 'Unknown';
 
     // Create the invoice
@@ -311,7 +323,11 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       isFactored: isFactored,
       factoringCompanyId: selectedFactoringCompany?.id,
       factoringCompanyName: selectedFactoringCompany?.name,
-      factoredDate: isFactored ? new Date().toISOString().split('T')[0] : undefined,
+      factoredDate: isFactored ? invoiceDate : undefined,
+      factoringFeePercent: isFactored ? factoringFeePercent : undefined,
+      factoringFee: isFactored ? factoringFee : undefined,
+      netFundedAmount: isFactored ? netAmount : undefined,
+      fundingStatus: isFactored ? 'submitted' : undefined,
     };
 
     addInvoice(newInvoice);
@@ -327,13 +343,15 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
         isLocked: true,  // Lock the load to prevent edits (TruckingOffice style)
         lockedAt: invoicedAt
       };
-      if (isFactored && selectedFactoringCompany) {
+      if (isFactored) {
         updateData.isFactored = true;
-        updateData.factoringCompanyId = selectedFactoringCompany.id;
-        updateData.factoringCompanyName = selectedFactoringCompany.name;
         updateData.factoringFeePercent = factoringFeePercent;
         updateData.factoringFee = (selectedLoads.find(l => l.id === loadId)?.grandTotal || 0) * (factoringFeePercent / 100);
         updateData.factoredDate = new Date().toISOString().split('T')[0];
+        if (selectedFactoringCompany) {
+          updateData.factoringCompanyId = selectedFactoringCompany.id;
+          updateData.factoringCompanyName = selectedFactoringCompany.name;
+        }
       }
       updateLoad(loadId, updateData);
     });
@@ -831,15 +849,50 @@ interface InvoiceListProps {
 }
 
 const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
-  const { invoices, loads, factoringCompanies, deleteInvoice, updateInvoice, updateLoad } = useTMS();
+  const { invoices, loads, factoringCompanies, factoringTransactions, deleteInvoice, updateInvoice, updateLoad, updateFactoringTransaction, addFactoringTransaction } = useTMS();
   const { companyProfile } = useCompany();
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [factoredFilter, setFactoredFilter] = useState<'all' | 'factored' | 'not_factored'>('all');
+  const [factoringCompanyFilter, setFactoringCompanyFilter] = useState('');
+  const [fundingStatusFilter, setFundingStatusFilter] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [monthFilter, setMonthFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [dueFrom, setDueFrom] = useState('');
+  const [dueTo, setDueTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [paymentModalInvoice, setPaymentModalInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 10;
+
+  // Backfill factoring transactions for older factored invoices
+  useEffect(() => {
+    invoices.forEach(inv => {
+      if (!inv.isFactored) return;
+      const existing = factoringTransactions.find(t => t.invoiceId === inv.id);
+      if (existing) return;
+      const feePct = inv.factoringFeePercent || 2.5;
+      const fee = inv.factoringFee ?? (inv.amount * (feePct / 100));
+      addFactoringTransaction({
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        factoringCompanyId: inv.factoringCompanyId,
+        factoringCompanyName: inv.factoringCompanyName,
+        loadIds: inv.loadIds || (inv.loadId ? [inv.loadId] : []),
+        grossAmount: inv.amount,
+        feePercentage: feePct,
+        feeAmount: fee,
+        netFundedAmount: inv.netFundedAmount ?? (inv.amount - fee),
+        submittedDate: inv.factoredDate || inv.date,
+        fundingStatus: (inv.fundingStatus as FactoringFundingStatus) || 'submitted',
+        recourseStatus: 'none',
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices.length, factoringTransactions.length]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -851,7 +904,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openMenuId]);
 
-  // Filter invoices
+  // Filter invoices (monthly + factoring reporting controls)
   const filteredInvoices = useMemo(() => {
     return invoices.filter(invoice => {
       const matchesStatus = !statusFilter || invoice.status === statusFilter;
@@ -859,9 +912,38 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
         invoice.invoiceNumber.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
         invoice.customerName?.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
         invoice.brokerName?.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
-      return matchesStatus && matchesSearch;
+      if (!matchesStatus || !matchesSearch) return false;
+
+      if (factoredFilter === 'factored' && !invoice.isFactored) return false;
+      if (factoredFilter === 'not_factored' && invoice.isFactored) return false;
+      if (factoringCompanyFilter && invoice.factoringCompanyId !== factoringCompanyFilter) return false;
+      if (fundingStatusFilter && (invoice.fundingStatus || 'not_submitted') !== fundingStatusFilter) return false;
+      if (customerFilter && (invoice.customerName || '') !== customerFilter) return false;
+
+      const invDate = parseDateOnlyLocal(invoice.date || invoice.createdAt || '');
+      if (monthFilter) {
+        const [y, m] = monthFilter.split('-').map(Number);
+        if (invDate.getFullYear() !== y || invDate.getMonth() !== m - 1) return false;
+      }
+      if (dateFrom && invDate < parseDateOnlyLocal(dateFrom)) return false;
+      if (dateTo) {
+        const to = parseDateOnlyLocal(dateTo);
+        to.setHours(23, 59, 59, 999);
+        if (invDate > to) return false;
+      }
+      if (dueFrom || dueTo) {
+        if (!invoice.dueDate) return false;
+        const due = parseDateOnlyLocal(invoice.dueDate);
+        if (dueFrom && due < parseDateOnlyLocal(dueFrom)) return false;
+        if (dueTo) {
+          const to = parseDateOnlyLocal(dueTo);
+          to.setHours(23, 59, 59, 999);
+          if (due > to) return false;
+        }
+      }
+      return true;
     });
-  }, [invoices, statusFilter, debouncedSearchTerm]);
+  }, [invoices, statusFilter, debouncedSearchTerm, factoredFilter, factoringCompanyFilter, fundingStatusFilter, customerFilter, monthFilter, dateFrom, dateTo, dueFrom, dueTo]);
 
   // Pagination
   const totalPages = Math.ceil(filteredInvoices.length / itemsPerPage);
@@ -1030,28 +1112,63 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-          <input
-            type="text"
-            placeholder="Search invoices..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-          />
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[200px] max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input
+              type="text"
+              placeholder="Search invoices..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 border rounded-lg">
+            <option value="">Invoice status</option>
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="partial">Partial</option>
+            <option value="overdue">Overdue</option>
+          </select>
+          <select value={factoredFilter} onChange={(e) => setFactoredFilter(e.target.value as 'all' | 'factored' | 'not_factored')} className="px-3 py-2 border rounded-lg">
+            <option value="all">All (factored+)</option>
+            <option value="factored">Factored only</option>
+            <option value="not_factored">Not factored</option>
+          </select>
+          <select value={factoringCompanyFilter} onChange={(e) => setFactoringCompanyFilter(e.target.value)} className="px-3 py-2 border rounded-lg">
+            <option value="">All factoring cos</option>
+            {factoringCompanies.map(fc => (
+              <option key={fc.id} value={fc.id}>{fc.name}</option>
+            ))}
+          </select>
+          <select value={fundingStatusFilter} onChange={(e) => setFundingStatusFilter(e.target.value)} className="px-3 py-2 border rounded-lg">
+            <option value="">Funding status</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved</option>
+            <option value="funded">Funded</option>
+            <option value="customer_paid">Customer paid factor</option>
+            <option value="rejected">Rejected</option>
+            <option value="repurchased">Repurchased</option>
+          </select>
+          <input type="month" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="px-3 py-2 border rounded-lg" title="Invoice month" />
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="">All Statuses</option>
-          <option value="pending">Pending</option>
-          <option value="paid">Paid</option>
-          <option value="partial">Partial</option>
-          <option value="overdue">Overdue</option>
-        </select>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-slate-500">Invoice date</span>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-2 py-1.5 border rounded-lg" />
+          <span className="text-slate-400">to</span>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-2 py-1.5 border rounded-lg" />
+          <span className="text-slate-500 ml-2">Due date</span>
+          <input type="date" value={dueFrom} onChange={(e) => setDueFrom(e.target.value)} className="px-2 py-1.5 border rounded-lg" />
+          <span className="text-slate-400">to</span>
+          <input type="date" value={dueTo} onChange={(e) => setDueTo(e.target.value)} className="px-2 py-1.5 border rounded-lg" />
+          <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="px-3 py-1.5 border rounded-lg">
+            <option value="">All customers</option>
+            {[...new Set(invoices.map(i => i.customerName).filter(Boolean))].map(name => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Invoices Table */}
@@ -1065,14 +1182,15 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
               <th className="text-left py-3 px-4 font-medium text-slate-700">Due Date</th>
               <th className="text-left py-3 px-4 font-medium text-slate-700">Loads</th>
               <th className="text-right py-3 px-4 font-medium text-slate-700">Amount</th>
-              <th className="text-center py-3 px-4 font-medium text-slate-700">Status</th>
+              <th className="text-center py-3 px-4 font-medium text-slate-700">Invoice</th>
+              <th className="text-center py-3 px-4 font-medium text-slate-700">Funding</th>
               <th className="text-right py-3 px-4 font-medium text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody>
             {paginatedInvoices.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-slate-500">
+                <td colSpan={9} className="py-12 text-center text-slate-500">
                   No invoices found
                 </td>
               </tr>
@@ -1083,7 +1201,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                     <td className="py-3 px-4">
                       <div className="font-medium text-blue-600">{invoice.invoiceNumber}</div>
                       {invoice.isFactored && (
-                        <span className="text-xs text-blue-500">Factored</span>
+                        <span className="text-xs text-blue-500">Factored via {invoice.factoringCompanyName || 'factor'}</span>
                       )}
                     </td>
                     <td className="py-3 px-4">{invoice.customerName || invoice.brokerName}</td>
@@ -1092,6 +1210,9 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                     <td className="py-3 px-4">{invoice.loadIds?.length || 1}</td>
                     <td className="py-3 px-4 text-right font-medium">{formatCurrency(invoice.amount)}</td>
                     <td className="py-3 px-4 text-center">{getStatusBadge(invoice.status)}</td>
+                    <td className="py-3 px-4 text-center text-xs text-slate-600">
+                      {invoice.isFactored ? (invoice.fundingStatus || 'submitted') : '—'}
+                    </td>
                     <td className="py-3 px-4 text-right relative menu-container">
                       <button
                         onClick={() => setOpenMenuId(openMenuId === invoice.id ? null : invoice.id)}
@@ -1100,7 +1221,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                         <MoreHorizontal size={16} />
                       </button>
                       {openMenuId === invoice.id && (
-                        <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10 border border-slate-200">
+                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg z-10 border border-slate-200">
                           <div className="py-1">
                             {invoice.status !== 'paid' && (
                               <button
@@ -1108,8 +1229,40 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                                 className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
                               >
                                 <CheckCircle size={16} />
-                                Mark as Paid
+                                Mark Invoice Paid (customer)
                               </button>
+                            )}
+                            {invoice.isFactored && (
+                              <>
+                                <div className="px-4 py-1 text-xs font-semibold text-slate-400 uppercase">Factor funding</div>
+                                {(['submitted', 'approved', 'funded', 'customer_paid', 'rejected', 'repurchased'] as FactoringFundingStatus[]).map(status => (
+                                  <button
+                                    key={status}
+                                    onClick={() => {
+                                      const today = new Date().toISOString().split('T')[0];
+                                      const patch: Partial<Invoice> = { fundingStatus: status };
+                                      if (status === 'funded') patch.factorFundedDate = today;
+                                      if (status === 'customer_paid') patch.factorCustomerPaidDate = today;
+                                      if (status === 'submitted') patch.factorSubmittedDate = today;
+                                      updateInvoice(invoice.id, patch);
+                                      const tx = factoringTransactions.find(t => t.invoiceId === invoice.id || t.id === invoice.factoringTransactionId);
+                                      if (tx) {
+                                        updateFactoringTransaction(tx.id, {
+                                          fundingStatus: status,
+                                          fundedDate: status === 'funded' ? today : tx.fundedDate,
+                                          customerPaidDate: status === 'customer_paid' ? today : tx.customerPaidDate,
+                                          submittedDate: status === 'submitted' ? today : tx.submittedDate,
+                                          recourseStatus: status === 'repurchased' ? 'repurchased' : tx.recourseStatus,
+                                        });
+                                      }
+                                      setOpenMenuId(null);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 capitalize"
+                                  >
+                                    {status.replace('_', ' ')}
+                                  </button>
+                                ))}
+                              </>
                             )}
                             <button
                               onClick={() => handlePrintInvoice(invoice)}
@@ -1192,32 +1345,46 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
 // ============================================================================
 
 const FactoredLoadsTab: React.FC = () => {
-  const { loads, invoices, factoringCompanies, updateInvoice } = useTMS();
+  const { loads, invoices, factoringCompanies, factoringTransactions, updateInvoice } = useTMS();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
   const factoredData = useMemo(() => {
-    const factoredLoads: Array<{ load: Load; invoice?: Invoice; factoringCompany?: FactoringCompany }> = [];
+    const fromHelper = getFactoredLoads(loads, invoices).map(item => ({
+      ...item,
+      factoringCompany: factoringCompanies.find(
+        fc => fc.id === (item.load.factoringCompanyId || item.invoice?.factoringCompanyId)
+      ),
+    }));
 
-    loads.forEach(load => {
-      if (load.isFactored && load.factoringCompanyId) {
-        const invoice = invoices.find(inv => inv.loadIds?.includes(load.id) || inv.loadId === load.id);
-        const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-        factoredLoads.push({ load, invoice, factoringCompany });
-      }
+    // Prefer transaction ledger when present for amounts
+    const withTx = fromHelper.map(item => {
+      const tx = factoringTransactions.find(t => t.invoiceId === item.invoice?.id);
+      if (!tx) return item;
+      return {
+        ...item,
+        load: {
+          ...item.load,
+          factoringFee: item.load.factoringFee || tx.feeAmount,
+          factoringFeePercent: item.load.factoringFeePercent || tx.feePercentage,
+          factoredDate: item.load.factoredDate || tx.submittedDate,
+        },
+      };
     });
 
     if (selectedCompanyId) {
-      return factoredLoads.filter(item => item.load.factoringCompanyId === selectedCompanyId);
+      return withTx.filter(item =>
+        (item.load.factoringCompanyId || item.invoice?.factoringCompanyId) === selectedCompanyId
+      );
     }
 
-    return factoredLoads.sort((a, b) => {
-      const dateA = new Date(a.load.factoredDate || a.load.deliveryDate || '').getTime();
-      const dateB = new Date(b.load.factoredDate || b.load.deliveryDate || '').getTime();
+    return withTx.sort((a, b) => {
+      const dateA = parseDateOnlyLocal(a.load.factoredDate || a.load.deliveryDate || '').getTime();
+      const dateB = parseDateOnlyLocal(b.load.factoredDate || b.load.deliveryDate || '').getTime();
       return dateB - dateA;
     });
-  }, [loads, invoices, factoringCompanies, selectedCompanyId]);
+  }, [loads, invoices, factoringCompanies, factoringTransactions, selectedCompanyId]);
 
   const filteredFactoredData = useMemo(() => {
     return factoredData.filter(item => {
@@ -1560,17 +1727,12 @@ const FactoringCompaniesTab: React.FC = () => {
   }, [manuallyAddedCompanies, debouncedSearchTerm]);
 
   const factoredData = useMemo(() => {
-    const factoredLoads: Array<{ load: Load; invoice?: Invoice; factoringCompany?: FactoringCompany }> = [];
-
-    loads.forEach(load => {
-      if (load.isFactored && load.factoringCompanyId) {
-        const invoice = invoices.find(inv => inv.loadIds?.includes(load.id) || inv.loadId === load.id);
-        const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-        factoredLoads.push({ load, invoice, factoringCompany });
-      }
-    });
-
-    return factoredLoads;
+    return getFactoredLoads(loads, invoices).map(item => ({
+      ...item,
+      factoringCompany: factoringCompanies.find(
+        fc => fc.id === (item.load.factoringCompanyId || item.invoice?.factoringCompanyId)
+      ),
+    }));
   }, [loads, invoices, factoringCompanies]);
 
   const handleEditCompany = (company: FactoringCompany) => {

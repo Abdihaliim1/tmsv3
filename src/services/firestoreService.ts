@@ -15,11 +15,10 @@ import {
   query,
   orderBy,
   onSnapshot,
-  Timestamp,
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, Broker, Dispatcher, CustomerEntity, PlannedLoad, Trip } from '../types';
+import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, FactoringTransaction, Broker, Dispatcher, CustomerEntity, PlannedLoad, Trip } from '../types';
 import { logger } from './logger';
 import { errorHandler, ErrorSeverity } from './errorHandler';
 
@@ -33,6 +32,7 @@ const COLLECTIONS = {
   trailers: 'trailers',
   expenses: 'expenses',
   factoringCompanies: 'factoringCompanies',
+  factoringTransactions: 'factoringTransactions',
   brokers: 'brokers',
   dispatchers: 'dispatchers',
   customers: 'customers',
@@ -67,7 +67,8 @@ export async function loadCollection<T>(tenantId: string, collectionName: Collec
 
     const items: T[] = [];
     snapshot.forEach((doc) => {
-      items.push({ id: doc.id, ...doc.data() } as T);
+      // Doc id must win over any embedded `id` field in the document data
+      items.push({ ...doc.data(), id: doc.id } as T);
     });
 
     logger.debug(`Loaded ${items.length} ${collectionName}`, { tenantId, collectionName });
@@ -205,7 +206,8 @@ export function subscribeToCollection<T>(
     (snapshot) => {
       const items: T[] = [];
       snapshot.forEach((doc) => {
-        items.push({ id: doc.id, ...doc.data() } as T);
+        // Doc id must win over any embedded `id` field in the document data
+        items.push({ ...doc.data(), id: doc.id } as T);
       });
       callback(items);
     },
@@ -282,6 +284,7 @@ export const loadTrucks = (tenantId: string) => loadCollection<Truck>(tenantId, 
 export const loadTrailers = (tenantId: string) => loadCollection<Trailer>(tenantId, 'trailers');
 export const loadExpenses = (tenantId: string) => loadCollection<Expense>(tenantId, 'expenses');
 export const loadFactoringCompanies = (tenantId: string) => loadCollection<FactoringCompany>(tenantId, 'factoringCompanies');
+export const loadFactoringTransactions = (tenantId: string) => loadCollection<FactoringTransaction>(tenantId, 'factoringTransactions');
 export const loadBrokers = (tenantId: string) => loadCollection<Broker>(tenantId, 'brokers');
 export const loadDispatchers = (tenantId: string) => loadCollection<Dispatcher>(tenantId, 'dispatchers');
 export const loadCustomers = (tenantId: string) => loadCollection<CustomerEntity>(tenantId, 'customers');
@@ -300,6 +303,7 @@ export const saveTruck = (tenantId: string, truck: Truck) => saveDocument(tenant
 export const saveTrailer = (tenantId: string, trailer: Trailer) => saveDocument(tenantId, 'trailers', trailer);
 export const saveExpense = (tenantId: string, expense: Expense) => saveDocument(tenantId, 'expenses', expense);
 export const saveFactoringCompany = (tenantId: string, fc: FactoringCompany) => saveDocument(tenantId, 'factoringCompanies', fc);
+export const saveFactoringTransaction = (tenantId: string, tx: FactoringTransaction) => saveDocument(tenantId, 'factoringTransactions', tx);
 export const saveBroker = (tenantId: string, broker: Broker) => saveDocument(tenantId, 'brokers', broker);
 export const saveDispatcher = (tenantId: string, dispatcher: Dispatcher) => saveDocument(tenantId, 'dispatchers', dispatcher);
 export const saveCustomer = (tenantId: string, customer: CustomerEntity) => saveDocument(tenantId, 'customers', customer);
@@ -318,6 +322,7 @@ export const deleteTruck = (tenantId: string, id: string) => deleteDocument(tena
 export const deleteTrailer = (tenantId: string, id: string) => deleteDocument(tenantId, 'trailers', id);
 export const deleteExpense = (tenantId: string, id: string) => deleteDocument(tenantId, 'expenses', id);
 export const deleteFactoringCompany = (tenantId: string, id: string) => deleteDocument(tenantId, 'factoringCompanies', id);
+export const deleteFactoringTransaction = (tenantId: string, id: string) => deleteDocument(tenantId, 'factoringTransactions', id);
 export const deleteBroker = (tenantId: string, id: string) => deleteDocument(tenantId, 'brokers', id);
 export const deleteDispatcher = (tenantId: string, id: string) => deleteDocument(tenantId, 'dispatchers', id);
 export const deleteCustomer = (tenantId: string, id: string) => deleteDocument(tenantId, 'customers', id);

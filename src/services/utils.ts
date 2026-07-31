@@ -386,8 +386,11 @@ const calculateHaversineDistance = (coord1: { lat: number; lng: number }, coord2
   return Math.round(straightLineDistance * roadMultiplier);
 };
 
+/** Public demo OSRM — fine for light use; self-host later for production volume. */
+const DEFAULT_OSRM_URL = 'https://router.project-osrm.org';
+
 /**
- * Calculate distance using OSRM (if available)
+ * Calculate distance using OSRM (public demo or VITE_OSRM_URL).
  */
 async function calculateDistanceOSRM(
   originCity: string,
@@ -402,8 +405,8 @@ async function calculateDistanceOSRM(
     
     if (!originCoord || !destCoord) return null;
 
-    // Call OSRM API
-    const osrmUrl = import.meta.env.VITE_OSRM_URL || 'http://localhost:5000';
+    // Prefer configured URL; default to public OSRM (not localhost — that only works with local Docker)
+    const osrmUrl = (import.meta.env.VITE_OSRM_URL || DEFAULT_OSRM_URL).replace(/\/$/, '');
     const response = await fetch(
       `${osrmUrl}/route/v1/driving/${originCoord.lng},${originCoord.lat};${destCoord.lng},${destCoord.lat}?overview=false`
     );
@@ -436,22 +439,20 @@ export const calculateDistance = async (
   const key = `${origin}_${dest}`;
   const reverseKey = `${dest}_${origin}`;
 
-  // 1. Check Lookup Table (fastest, no API call)
-  if (knownDistances[key]) return knownDistances[key];
-  if (knownDistances[reverseKey]) return knownDistances[reverseKey];
-
-  // 2. Try OSRM first (if available and configured)
+  // 1. OSRM driving distance (consistent across local + production)
   try {
     const osrmDistance = await calculateDistanceOSRM(originCity, originState, destCity, destState);
     if (osrmDistance !== null && osrmDistance > 0) {
-      // Cache OSRM result for future use
       knownDistances[key] = osrmDistance;
       return osrmDistance;
     }
   } catch (error) {
-    // OSRM not available, continue to fallback methods
     console.debug('OSRM not available, using fallback methods');
   }
+
+  // 2. Known highway lookup (offline fallback)
+  if (knownDistances[key]) return knownDistances[key];
+  if (knownDistances[reverseKey]) return knownDistances[reverseKey];
 
   // 3. Check if both cities are in our coordinate cache
   const coord1 = cityCoords[origin];
@@ -558,7 +559,7 @@ export const calculateCompanyRevenue = (grossAmount: number, driver?: Driver): n
   return amount;
 };
 
-export const validatePayPercentage = (percentage: number, driverType?: string): number => {
+export const validatePayPercentage = (percentage: number, _driverType?: string): number => {
   // If percentage is > 1, assume it's stored as integer (e.g., 88) and convert to decimal (0.88)
   if (percentage > 1) {
     return percentage / 100;

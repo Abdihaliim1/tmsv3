@@ -105,8 +105,8 @@ export async function loadFirstPage<T>(
   const resultDocs = hasMore ? docs.slice(0, pageSize) : docs;
 
   const items = resultDocs.map(doc => ({
+    ...doc.data(),
     id: doc.id,
-    ...doc.data()
   })) as T[];
 
   return {
@@ -149,8 +149,8 @@ export async function loadNextPage<T>(
   const resultDocs = hasMore ? docs.slice(0, pageSize) : docs;
 
   const items = resultDocs.map(doc => ({
+    ...doc.data(),
     id: doc.id,
-    ...doc.data()
   })) as T[];
 
   return {
@@ -199,8 +199,8 @@ export function subscribeToFirstPage<T>(
     q,
     (snapshot) => {
       const items = snapshot.docs.map(doc => ({
+        ...doc.data(),
         id: doc.id,
-        ...doc.data()
       })) as T[];
 
       callbacks.onData({

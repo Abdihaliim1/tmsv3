@@ -6,9 +6,15 @@ import {
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
-import { LoadStatus } from '../types';
 import { calculateCompanyRevenue } from '../services/utils';
-import { calculateDriverPay } from '../services/businessLogic';
+import {
+  calculateDriverPay,
+  getLoadMiles,
+  getLoadRevenue,
+  getLoadFsc,
+  isRevenueLoadStatus,
+  calculateFactoringFees,
+} from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
@@ -45,9 +51,134 @@ const PlaceholderReport: React.FC<{ title: string; description: string; icon: Re
   </div>
 );
 
+/** Month-selectable operating expense report with category drill-down */
+const MonthlyExpensesReport: React.FC<{ filterType: string; title: string }> = ({ filterType, title }) => {
+  const { expenses, trucks, drivers } = useTMS();
+  const now = new Date();
+  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+  const [truckFilter, setTruckFilter] = useState('');
+  const [driverFilter, setDriverFilter] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
+  const [y, m] = month.split('-').map(Number);
+  const periodStart = new Date(y, m - 1, 1);
+  const periodEnd = new Date(y, m, 0, 23, 59, 59, 999);
+
+  const monthExpenses = useMemo(() => {
+    return expenses.filter(exp => {
+      const d = parseDateOnlyLocal(exp.date || exp.createdAt || '');
+      if (d < periodStart || d > periodEnd) return false;
+      if (filterType !== 'all' && exp.type !== filterType) return false;
+      if (truckFilter && exp.truckId !== truckFilter) return false;
+      if (driverFilter && exp.driverId !== driverFilter) return false;
+      return true;
+    });
+  }, [expenses, month, filterType, truckFilter, driverFilter]);
+
+  const byCategory = useMemo(() => {
+    const map: Record<string, number> = {};
+    monthExpenses.forEach(e => {
+      const cat = e.category || e.type || 'other';
+      map[cat] = (map[cat] || 0) + (e.amount || 0);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [monthExpenses]);
+
+  const total = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const drillRows = selectedCategory
+    ? monthExpenses.filter(e => (e.category || e.type || 'other') === selectedCategory)
+    : monthExpenses;
+
+  const shiftMonth = (delta: number) => {
+    const d = new Date(y, m - 1 + delta, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    setSelectedCategory(null);
+  };
+
+  const fmt = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
+          <p className="text-slate-500 text-sm">Month-by-month operating expenses</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => shiftMonth(-1)} className="px-3 py-2 border rounded-lg">← Prev</button>
+          <input type="month" value={month} onChange={e => { setMonth(e.target.value); setSelectedCategory(null); }} className="px-3 py-2 border rounded-lg" />
+          <button type="button" onClick={() => shiftMonth(1)} className="px-3 py-2 border rounded-lg">Next →</button>
+          <select value={truckFilter} onChange={e => setTruckFilter(e.target.value)} className="px-3 py-2 border rounded-lg">
+            <option value="">All trucks</option>
+            {trucks.map(t => <option key={t.id} value={t.id}>{t.number || t.truckNumber}</option>)}
+          </select>
+          <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} className="px-3 py-2 border rounded-lg">
+            <option value="">All drivers</option>
+            {drivers.map(d => <option key={d.id} value={d.id}>{d.firstName} {d.lastName}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-lg p-6">
+        <p className="text-sm text-slate-500 uppercase">Month total</p>
+        <p className="text-3xl font-bold text-slate-900">{fmt(total)}</p>
+        <p className="text-sm text-slate-500 mt-1">{monthExpenses.length} expense(s)</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white border rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b font-semibold text-slate-800">By category (click to drill down)</div>
+          <table className="w-full">
+            <tbody>
+              {byCategory.map(([cat, amt]) => (
+                <tr
+                  key={cat}
+                  className={`border-b cursor-pointer hover:bg-slate-50 ${selectedCategory === cat ? 'bg-blue-50' : ''}`}
+                  onClick={() => setSelectedCategory(cat === selectedCategory ? null : cat)}
+                >
+                  <td className="px-4 py-3 capitalize">{cat}</td>
+                  <td className="px-4 py-3 text-right font-medium">{fmt(amt)}</td>
+                </tr>
+              ))}
+              {byCategory.length === 0 && (
+                <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={2}>No expenses this month</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="bg-white border rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b font-semibold text-slate-800">
+            {selectedCategory ? `Details: ${selectedCategory}` : 'All records'}
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-left">Description</th>
+                  <th className="px-3 py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drillRows.map(e => (
+                  <tr key={e.id} className="border-b">
+                    <td className="px-3 py-2">{e.date?.split('T')[0]}</td>
+                    <td className="px-3 py-2">{e.description}</td>
+                    <td className="px-3 py-2 text-right">{fmt(e.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Company Overview Report Component
 const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
-  const { loads, drivers, settlements, expenses, factoringCompanies } = useTMS();
+  const { loads, drivers, settlements, expenses, factoringCompanies, invoices } = useTMS();
   const currentYear = new Date().getFullYear();
 
   const [startMonth, setStartMonth] = useState(1);
@@ -74,17 +205,15 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       return date >= periodStart && date <= periodEnd;
     });
 
-    // Only count delivered/completed loads for revenue
-    const revenueLoads = filteredLoads.filter(l =>
-      l.status === LoadStatus.Delivered || l.status === LoadStatus.Completed
-    );
+    // Delivered through paid all count as revenue loads
+    const revenueLoads = filteredLoads.filter(l => isRevenueLoadStatus(l.status));
 
     // Calculate revenue by driver type
     let companyDriverRevenue = 0;
     let ownerOperatorRevenue = 0;
 
     revenueLoads.forEach(load => {
-      const grossAmount = load.grandTotal || load.rate || 0;
+      const grossAmount = getLoadRevenue(load);
       if (load.driverId) {
         const driver = drivers.find(d => d.id === load.driverId);
         if (driver) {
@@ -103,7 +232,7 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
     });
 
     const totalRevenue = companyDriverRevenue + ownerOperatorRevenue;
-    const totalMiles = revenueLoads.reduce((sum, l) => sum + (l.miles || 0), 0);
+    const totalMiles = revenueLoads.reduce((sum, l) => sum + getLoadMiles(l), 0);
     const loadsCompleted = revenueLoads.length;
 
     // Filter expenses by period
@@ -180,29 +309,8 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
     // Calculate dispatcher cost
     const dispatcherCost = revenueLoads.reduce((sum, load) => sum + (load.dispatcherCommissionAmount || 0), 0);
 
-    // Calculate factoring expenses
-    const factoringExpenses = revenueLoads
-      .filter(load => load.isFactored)
-      .reduce((sum, load) => {
-        if (load.factoringFee && load.factoringFee > 0) {
-          return sum + load.factoringFee;
-        }
-        const grandTotal = load.grandTotal || load.rate || 0;
-        if (grandTotal > 0) {
-          let feePercentage = load.factoringFeePercent;
-          if ((!feePercentage || feePercentage === 0) && load.factoringCompanyId) {
-            const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-            if (factoringCompany && factoringCompany.feePercentage) {
-              feePercentage = factoringCompany.feePercentage;
-            }
-          }
-          if (!feePercentage || feePercentage === 0) {
-            feePercentage = 2.5;
-          }
-          return sum + grandTotal * (feePercentage / 100);
-        }
-        return sum;
-      }, 0);
+    // Factoring fees from loads + factored invoices
+    const factoringExpenses = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
 
     const totalExpensesWithFees = totalExpenses + factoringExpenses + dispatcherCost;
     const netProfit = totalRevenue - totalExpensesWithFees - totalDriverPay;
@@ -229,7 +337,7 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       avgMilesPerLoad: loadsCompleted > 0 ? totalMiles / loadsCompleted : 0,
       revenuePerMile: totalMiles > 0 ? totalRevenue / totalMiles : 0,
     };
-  }, [reportGenerated, startMonth, startYear, endMonth, endYear, loads, drivers, settlements, expenses, factoringCompanies]);
+  }, [reportGenerated, startMonth, startYear, endMonth, endYear, loads, drivers, settlements, expenses, factoringCompanies, invoices]);
 
   const formatCurrency = (amount: number): string => {
     return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -461,7 +569,7 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
 
 // Profit & Loss Report Component - TruckingOffice Style
 const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
-  const { loads, drivers, settlements, expenses, factoringCompanies } = useTMS();
+  const { loads, drivers, settlements, expenses, factoringCompanies, invoices } = useTMS();
   const { companyProfile } = useCompany();
 
   const today = new Date();
@@ -480,26 +588,30 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
     const periodEnd = parseDateOnlyLocal(endDate);
     periodEnd.setHours(23, 59, 59, 999);
 
-    // Filter loads by period (delivered/completed)
+    // Filter loads by period (delivered through paid)
     const filteredLoads = loads.filter(load => {
       const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
-      const isDelivered = load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed;
-      return isDelivered && date >= periodStart && date <= periodEnd;
+      return isRevenueLoadStatus(load.status) && date >= periodStart && date <= periodEnd;
     });
 
     // Calculate Income
     let primaryFees = 0;
     let fuelSurcharge = 0;
     let accessoryFees = 0;
-    let otherRevenue = 0;
+    const otherRevenue = 0;
 
     filteredLoads.forEach(load => {
       // Primary fees = base rate
       primaryFees += load.rate || 0;
-      // Fuel surcharge from load
-      fuelSurcharge += load.fuelSurcharge || 0;
-      // Accessory fees (detention, lumper, etc.)
-      accessoryFees += (load.detentionPay || 0) + (load.lumperFee || 0) + (load.accessorialCharges || 0);
+      // Fuel surcharge (canonical field is fscAmount)
+      fuelSurcharge += getLoadFsc(load);
+      // Accessory fees (detention, layover, lumper, tonu, other)
+      accessoryFees +=
+        (load.detentionAmount || 0) +
+        (load.layoverAmount || 0) +
+        (load.lumperFee || load.lumperAmount || 0) +
+        (load.tonuFee || 0) +
+        (load.otherAccessorials || 0);
     });
 
     const totalRevenue = primaryFees + fuelSurcharge + accessoryFees + otherRevenue;
@@ -564,29 +676,7 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
     // Calculate dispatcher cost
     const dispatcherCost = filteredLoads.reduce((sum, load) => sum + (load.dispatcherCommissionAmount || 0), 0);
 
-    // Calculate factoring expenses
-    const factoringExpenses = filteredLoads
-      .filter(load => load.isFactored)
-      .reduce((sum, load) => {
-        if (load.factoringFee && load.factoringFee > 0) {
-          return sum + load.factoringFee;
-        }
-        const grandTotal = load.grandTotal || load.rate || 0;
-        if (grandTotal > 0) {
-          let feePercentage = load.factoringFeePercent;
-          if ((!feePercentage || feePercentage === 0) && load.factoringCompanyId) {
-            const factoringCompany = factoringCompanies.find(fc => fc.id === load.factoringCompanyId);
-            if (factoringCompany && factoringCompany.feePercentage) {
-              feePercentage = factoringCompany.feePercentage;
-            }
-          }
-          if (!feePercentage || feePercentage === 0) {
-            feePercentage = 2.5;
-          }
-          return sum + grandTotal * (feePercentage / 100);
-        }
-        return sum;
-      }, 0);
+    const factoringExpenses = calculateFactoringFees(filteredLoads, invoices, factoringCompanies);
 
     const operatingExpenses = Object.values(expensesByCategory).reduce((sum, val) => sum + val, 0);
     const totalExpenses = driverExpenses + operatingExpenses + dispatcherCost + factoringExpenses;
@@ -614,7 +704,7 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
       },
       profitLoss,
     };
-  }, [reportGenerated, beginDate, endDate, loads, drivers, settlements, expenses, factoringCompanies]);
+  }, [reportGenerated, beginDate, endDate, loads, drivers, settlements, expenses, factoringCompanies, invoices]);
 
   const formatCurrency = (amount: number): string => {
     return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -807,12 +897,10 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
                     <td className="py-2 px-4 text-right">{formatCurrency(reportData!.expenses.dispatcher)}</td>
                   </tr>
                 )}
-                {reportData!.expenses.factoring > 0 && (
-                  <tr className="border-b border-slate-700">
-                    <td className="py-2 px-4 bg-slate-800">Factoring Fees</td>
-                    <td className="py-2 px-4 bg-slate-800 text-right">{formatCurrency(reportData!.expenses.factoring)}</td>
-                  </tr>
-                )}
+                <tr className="border-b border-slate-700">
+                  <td className="py-2 px-4 bg-slate-800">Factoring Fees</td>
+                  <td className="py-2 px-4 bg-slate-800 text-right">{formatCurrency(reportData!.expenses.factoring)}</td>
+                </tr>
                 {Object.entries(reportData!.expenses.byCategory).map(([category, amount], index) => (
                   <tr key={category} className="border-b border-slate-700">
                     <td className={`py-2 px-4 ${index % 2 === 0 ? 'bg-slate-800' : ''}`}>{category}</td>
@@ -1182,21 +1270,9 @@ const ReportsCombined: React.FC = () => {
           />
         );
       case 'expenses':
-        return (
-          <PlaceholderReport
-            title="Expenses Report"
-            description="Detailed expense analysis coming soon."
-            icon={<DollarSign className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <MonthlyExpensesReport filterType="all" title="Expenses Report" />;
       case 'fuelExpenses':
-        return (
-          <PlaceholderReport
-            title="Fuel Expenses"
-            description="Fuel expense breakdown coming soon."
-            icon={<Fuel className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <MonthlyExpensesReport filterType="fuel" title="Fuel Expenses" />;
       case 'reeferFuelExpenses':
         return (
           <PlaceholderReport

@@ -20,6 +20,7 @@ export * from './load';
 export * from './employee';
 export * from './fleet';
 export * from './invoice';
+export * from './factoring';
 export * from './settlement';
 export * from './expense';
 export * from './workflow';

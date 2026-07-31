@@ -45,6 +45,11 @@ export interface Truck {
   cabCardRenewalDate?: string;
   leaseEndDate?: string;
   insuranceExpirationDate?: string;
+  /** First month insurance should generate (YYYY-MM-DD). Defaults to truck created/active date. */
+  insuranceRecurrenceStart?: string;
+  insuranceRecurrenceActive?: boolean;
+  insuranceRecurrenceEnd?: string;
+  insuranceNextGenerationDate?: string;
   monthlyPayment?: number;
   purchasePrice?: number;
   purchaseDate?: string;

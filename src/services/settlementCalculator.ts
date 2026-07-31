@@ -313,7 +313,7 @@ export function createSettlement(
     driverName: `${input.driver.firstName} ${input.driver.lastName}`,
     payeeId: input.driverId,
     payeeName: `${input.driver.firstName} ${input.driver.lastName}`,
-    payType: input.driver.payment?.type || 'percentage',
+    payType: input.driver.payment?.type || (input.driver.payment?.perMileRate ? 'per_mile' : 'percentage'),
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     period: {

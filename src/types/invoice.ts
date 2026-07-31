@@ -46,6 +46,21 @@ export interface Invoice {
   factoredDate?: string;
   factoredAmount?: number;
   factoringFee?: number;
+  factoringFeePercent?: number;
+  netFundedAmount?: number;
+  /** Factor funding lifecycle — independent of customer invoice status */
+  fundingStatus?:
+    | 'not_submitted'
+    | 'submitted'
+    | 'approved'
+    | 'funded'
+    | 'customer_paid'
+    | 'rejected'
+    | 'repurchased';
+  factorSubmittedDate?: string;
+  factorFundedDate?: string;
+  factorCustomerPaidDate?: string;
+  factoringTransactionId?: string;
   notes?: string;
   createdAt?: string;
   updatedAt?: string;

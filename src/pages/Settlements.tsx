@@ -5,10 +5,56 @@ import { useCompany } from '../context/CompanyContext';
 import { Settlement, Load, LoadStatus } from '../types';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { generateSettlementPDF } from '../services/settlementPDF';
-import { calculateDriverPay } from '../services/businessLogic';
+import { calculateDriverPay, formatDriverPayRate, resolveDriverPayment, getLoadMiles } from '../services/businessLogic';
 import { formatDateOnly } from '../utils/dateOnly';
 
 type SettlementType = 'driver' | 'dispatcher';
+
+/** Resolve live loads for a settlement; fall back to embedded settlement.loads stubs. */
+function resolveSettlementLoads(
+  settlement: Settlement,
+  allLoads: Load[]
+): Array<Load | { id: string; loadNumber: string; originCity: string; originState: string; destCity: string; destState: string; miles: number; rate: number; grandTotal: number; isStub: true; stubPay: number }> {
+  const idSet = new Set<string>();
+  if (settlement.loadId) idSet.add(settlement.loadId);
+  (settlement.loadIds || []).forEach(id => idSet.add(id));
+  (settlement.loads || []).forEach(sl => { if (sl.loadId) idSet.add(sl.loadId); });
+
+  // Reverse lookup: loads that point at this settlement
+  allLoads.forEach(l => {
+    if (l.settlementId === settlement.id || l.dispatcherSettlementId === settlement.id) {
+      idSet.add(l.id);
+    }
+  });
+
+  const byId = new Map(allLoads.map(l => [l.id, l]));
+  const resolved: Array<Load | { id: string; loadNumber: string; originCity: string; originState: string; destCity: string; destState: string; miles: number; rate: number; grandTotal: number; isStub: true; stubPay: number }> = [];
+
+  idSet.forEach(id => {
+    const live = byId.get(id);
+    if (live) {
+      resolved.push(live);
+      return;
+    }
+    const embedded = (settlement.loads || []).find(sl => sl.loadId === id);
+    const stubPay = (embedded?.basePay || 0) + (embedded?.detention || 0) + (embedded?.layover || 0) + (embedded?.tonu || 0);
+    resolved.push({
+      id,
+      loadNumber: id.slice(0, 8),
+      originCity: '—',
+      originState: '',
+      destCity: '—',
+      destState: '',
+      miles: 0,
+      rate: 0,
+      grandTotal: 0,
+      isStub: true,
+      stubPay,
+    });
+  });
+
+  return resolved;
+}
 
 /** True when this load is already paid on a settlement of the same type (driver vs dispatcher stay independent). */
 function isLoadSettledForType(
@@ -144,15 +190,28 @@ const Settlements: React.FC = () => {
 
       // Unpaid delivered loads for this payee. "Show all" only ignores the week filter —
       // already-settled loads for this settlement type are never selectable (blocks double-pay).
+      const dispatcher = settlementType === 'dispatcher'
+        ? employees.find(e => e.id === currentPayeeId)
+        : null;
+      const dispatcherFullName = dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}`.trim() : '';
+
       return loads.filter(load => {
         try {
           const isPayee = settlementType === 'driver'
             ? load.driverId === currentPayeeId
-            : load.dispatcherId === currentPayeeId;
+            : (
+              load.dispatcherId === currentPayeeId ||
+              (!!dispatcherFullName && load.dispatcherName === dispatcherFullName)
+            );
 
           if (!isPayee) return false;
 
-          const isDelivered = load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed;
+          const isDelivered =
+            load.status === LoadStatus.Delivered ||
+            load.status === LoadStatus.DeliveredWithBOL ||
+            load.status === LoadStatus.Invoiced ||
+            load.status === LoadStatus.Paid ||
+            load.status === LoadStatus.Completed;
           if (!isDelivered) return false;
 
           if (isLoadSettledForType(load, settlementType, settlements)) return false;
@@ -183,7 +242,7 @@ const Settlements: React.FC = () => {
       console.error('Error calculating available loads:', error);
       return [];
     }
-  }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads, settlements]);
+  }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads, settlements, employees]);
 
   // Calculate settlement totals with earnings breakdown
   const settlementTotals = useMemo(() => {
@@ -287,7 +346,7 @@ const Settlements: React.FC = () => {
         totalDetentionPay += detentionPay;
         totalLayoverPay += layoverPay;
         totalTonuPay += tonuPay;
-        totalMiles += load.miles || 0;
+        totalMiles += getLoadMiles(load);
       });
 
       const totalDeductions = insuranceDeduction + fuelDeduction + dispatchDeduction + advancesDeduction + otherDeduction + tonuDeduction + layoverDeduction + detentionDeduction;
@@ -346,10 +405,17 @@ const Settlements: React.FC = () => {
     return filtered;
   }, [settlements, settlementType, driverFilter, statusFilter]);
 
-  // Stats — ignore empty / $NaN shells so counts and averages stay accurate
+  // Stats — scoped to current settlement type; ignore empty / $NaN shells
   const stats = useMemo(() => {
-    const valid = settlements.filter(s => {
-      const hasLoads = Array.isArray(s.loadIds) && s.loadIds.length > 0;
+    const typed = settlements.filter(s =>
+      settlementType === 'dispatcher'
+        ? s.type === 'dispatcher' && !!s.dispatcherId
+        : s.type !== 'dispatcher' && !!s.driverId
+    );
+    const valid = typed.filter(s => {
+      const hasLoads =
+        (Array.isArray(s.loadIds) && s.loadIds.length > 0) ||
+        (Array.isArray(s.loads) && s.loads.length > 0);
       const net = parseFloat(String(s.netPay));
       const gross = parseFloat(String(s.grossPay));
       return hasLoads && (Number.isFinite(net) || Number.isFinite(gross));
@@ -376,12 +442,17 @@ const Settlements: React.FC = () => {
       pending,
       avgSettlement,
     };
-  }, [settlements]);
+  }, [settlements, settlementType]);
 
-  // Chart data
+  // Chart data (scoped to active settlement type)
   const weeklyTrendsData = useMemo(() => {
     const weeklyData: Record<string, { settlements: number; totalAmount: number }> = {};
     const today = new Date();
+    const typed = settlements.filter(s =>
+      settlementType === 'dispatcher'
+        ? s.type === 'dispatcher'
+        : s.type !== 'dispatcher'
+    );
 
     for (let i = 7; i >= 0; i--) {
       const weekStart = new Date(today);
@@ -393,7 +464,7 @@ const Settlements: React.FC = () => {
       const weekKey = `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
       weeklyData[weekKey] = { settlements: 0, totalAmount: 0 };
 
-      settlements.forEach(settlement => {
+      typed.forEach(settlement => {
         const dateValue = settlement.createdAt || settlement.date;
         if (!dateValue) return;
         const settlementDate = new Date(dateValue);
@@ -409,21 +480,23 @@ const Settlements: React.FC = () => {
       settlements: weeklyData[week].settlements,
       amount: weeklyData[week].totalAmount,
     }));
-  }, [settlements]);
+  }, [settlements, settlementType]);
 
   const statusChartData = useMemo(() => {
     const statusCounts = { Paid: 0, Pending: 0, Processed: 0 };
-    settlements.forEach(s => {
-      const status = s.status || 'pending';
-      if (status === 'paid') statusCounts.Paid++;
-      else if (status === 'processed') statusCounts.Processed++;
-      else statusCounts.Pending++;
-    });
+    settlements
+      .filter(s => settlementType === 'dispatcher' ? s.type === 'dispatcher' : s.type !== 'dispatcher')
+      .forEach(s => {
+        const status = s.status || 'pending';
+        if (status === 'paid') statusCounts.Paid++;
+        else if (status === 'processed') statusCounts.Processed++;
+        else statusCounts.Pending++;
+      });
     return Object.keys(statusCounts).map(key => ({
       name: key,
       value: statusCounts[key as keyof typeof statusCounts],
     })).filter(item => item.value > 0);
-  }, [settlements]);
+  }, [settlements, settlementType]);
 
   const COLORS = ['#10b981', '#f59e0b', '#3b82f6'];
 
@@ -453,6 +526,27 @@ const Settlements: React.FC = () => {
     if (!Number.isFinite(settlementTotals.grossPay) || !Number.isFinite(settlementTotals.netPay)) {
       alert('Settlement totals are invalid. Check pay/commission settings and try again.');
       return;
+    }
+
+    if (settlementType === 'driver') {
+      const driver = drivers.find(d => d.id === selectedDriverId);
+      if (driver) {
+        const pay = resolveDriverPayment(driver);
+        if (pay.type === 'per_mile') {
+          if (pay.perMileRate <= 0) {
+            alert('This driver has no per-mile rate set. Open Employees and set e.g. $0.65/mi before generating a settlement.');
+            return;
+          }
+          const zeroMileLoads = selectedLoadObjs.filter(l => getLoadMiles(l) <= 0);
+          if (zeroMileLoads.length > 0) {
+            alert(
+              `${zeroMileLoads.length} selected load(s) have 0 miles. Per-mile pay cannot be calculated.\n\n` +
+              `Add miles on: ${zeroMileLoads.map(l => l.loadNumber).join(', ')}`
+            );
+            return;
+          }
+        }
+      }
     }
 
     const payee = employees.find(e => e.id === currentPayeeId);
@@ -814,7 +908,9 @@ const Settlements: React.FC = () => {
       {/* Settlements Table */}
       <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-          <h3 className="text-lg font-semibold text-slate-900">Driver Settlements</h3>
+          <h3 className="text-lg font-semibold text-slate-900">
+            {settlementType === 'driver' ? 'Driver' : 'Dispatcher'} Settlements
+          </h3>
           <div className="flex items-center gap-4">
             <button className="text-slate-600 hover:text-slate-800 flex items-center gap-2">
               <Download size={18} />
@@ -860,12 +956,8 @@ const Settlements: React.FC = () => {
                   const payeeId = settlement.driverId || settlement.dispatcherId || '';
                   const payee = employees.find(e => e.id === payeeId);
                   
-                  // Get loads for this settlement
-                  const settlementLoads = settlement.loadIds 
-                    ? loads.filter(l => settlement.loadIds!.includes(l.id))
-                    : settlement.loads
-                      ? loads.filter(l => settlement.loads!.some(sl => sl.loadId === l.id))
-                      : [];
+                  const settlementLoads = resolveSettlementLoads(settlement, loads);
+                  const liveLoads = settlementLoads.filter(l => !('isStub' in l && l.isStub));
                   
                   return (
                     <tr key={settlement.id} className="hover:bg-slate-50">
@@ -877,10 +969,20 @@ const Settlements: React.FC = () => {
                         {settlementLoads.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
                             {settlementLoads.map((load) => (
-                              <span key={load.id} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-medium">
+                              <span
+                                key={load.id}
+                                className={`px-2 py-1 rounded text-xs font-medium ${
+                                  'isStub' in load && load.isStub
+                                    ? 'bg-amber-50 text-amber-700'
+                                    : 'bg-blue-50 text-blue-700'
+                                }`}
+                              >
                                 {load.loadNumber}
                               </span>
                             ))}
+                            {liveLoads.length === 0 && (
+                              <span className="text-amber-600 text-xs italic ml-1">(unlinked)</span>
+                            )}
                           </div>
                         ) : (
                           <span className="text-slate-400 italic">No loads</span>
@@ -1036,11 +1138,9 @@ const Settlements: React.FC = () => {
                 >
                   <option value="">Select a {settlementType === 'driver' ? 'driver' : 'dispatcher'}...</option>
                   {(settlementType === 'driver' ? drivers : employees.filter(e => e.employeeType === 'dispatcher')).map(p => {
-                    const driver = settlementType === 'driver' ? p : null;
-                    const payRate = driver ? (driver.payPercentage || driver.rateOrSplit || 0) : 0;
-                    const driverType = driver?.type;
-                    const isCompanyDriver = driverType === 'Company';
-                    const displayName = `${p.firstName} ${p.lastName}${settlementType === 'driver' && isCompanyDriver && payRate > 0 ? ` (${payRate}%)` : ''}`;
+                    const driver = settlementType === 'driver' ? (p as typeof drivers[number]) : null;
+                    const rateLabel = driver ? formatDriverPayRate(driver) : '';
+                    const displayName = `${p.firstName} ${p.lastName}${rateLabel && rateLabel !== '—' ? ` (${rateLabel})` : ''}`;
                     return (
                       <option key={p.id} value={p.id}>{displayName}</option>
                     );
@@ -1048,17 +1148,21 @@ const Settlements: React.FC = () => {
                 </select>
                 {settlementType === 'driver' && selectedDriverId && (() => {
                   const selectedDriver = drivers.find(d => d.id === selectedDriverId);
-                  if (selectedDriver) {
-                    const driverType = selectedDriver.type;
-                    const isCompanyDriver = driverType === 'Company';
-                    const payRate = selectedDriver.payPercentage || selectedDriver.rateOrSplit || 0;
-                    if (isCompanyDriver && payRate > 0) {
-                      return (
-                        <p className="text-xs text-blue-600 mt-1">
-                          <strong>Note:</strong> Company drivers are paid {payRate}% of the base rate, not 100%. Accessorials (detention, layover, TONU) are 100% pass-through.
-                        </p>
-                      );
-                    }
+                  if (!selectedDriver) return null;
+                  const pay = resolveDriverPayment(selectedDriver);
+                  if (pay.type === 'per_mile' && pay.perMileRate > 0) {
+                    return (
+                      <p className="text-xs text-blue-600 mt-1">
+                        <strong>Note:</strong> Paid ${pay.perMileRate.toFixed(2)}/mi × load miles. Accessorials (detention, layover, TONU) are 100% pass-through.
+                      </p>
+                    );
+                  }
+                  if (pay.type === 'percentage' && pay.percentageDisplay > 0) {
+                    return (
+                      <p className="text-xs text-blue-600 mt-1">
+                        <strong>Note:</strong> Paid {pay.percentageDisplay.toFixed(pay.percentageDisplay % 1 === 0 ? 0 : 2)}% of load revenue. Accessorials are 100% pass-through.
+                      </p>
+                    );
                   }
                   return null;
                 })()}
@@ -1082,16 +1186,19 @@ const Settlements: React.FC = () => {
                           <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Load #</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Date</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Route</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Formula</th>
                           <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Pay Amount</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-slate-200">
                         {availableLoads.map(load => {
                           let payAmount = 0;
+                          let payFormula = '—';
 
                           if (settlementType === 'dispatcher') {
                             // Use stored commission amount, or calculate if missing
                             payAmount = load.dispatcherCommissionAmount || 0;
+                            payFormula = 'Stored commission';
                             
                             // If commission amount is not set, calculate it from commission type and rate
                             if (!payAmount && load.dispatcherCommissionType && load.dispatcherCommissionRate) {
@@ -1100,44 +1207,43 @@ const Settlements: React.FC = () => {
                               const commissionRate = load.dispatcherCommissionRate;
                               
                               if (commissionType === 'percentage') {
-                                // Percentage: commissionAmount = baseRate * (commissionRate / 100)
                                 payAmount = baseRate * (commissionRate / 100);
+                                payFormula = `$${baseRate.toFixed(2)} × ${commissionRate}%`;
                               } else if (commissionType === 'flat_fee') {
-                                // Flat fee: commissionAmount = commissionRate
                                 payAmount = commissionRate;
+                                payFormula = `Flat $${commissionRate.toFixed(2)}`;
                               } else if (commissionType === 'per_mile') {
-                                // Per mile: commissionAmount = totalMiles * commissionRate
-                                payAmount = (load.miles || 0) * commissionRate;
+                                const miles = getLoadMiles(load);
+                                payAmount = miles * commissionRate;
+                                payFormula = `${miles} mi × $${commissionRate.toFixed(2)}`;
                               }
                             }
                           } else {
-                            // Driver settlement: show total pay including accessorials
                             const driver = drivers.find(d => d.id === selectedDriverId);
-                            
-                            // Use stored driver pay if available
                             if (load.driverBasePay !== undefined || load.driverDetentionPay !== undefined || load.driverLayoverPay !== undefined) {
-                              const basePay = load.driverBasePay || 0;
-                              const detentionPay = load.driverDetentionPay || 0;
-                              const layoverPay = load.driverLayoverPay || 0;
-                              const tonuPay = (load as any).tonuFee || 0;
-                              payAmount = basePay + detentionPay + layoverPay + tonuPay;
-                            } else {
-                              // Calculate on the fly
-                              let payPercentage = 1;
-                              if (driver) {
-                                if (driver.type === 'OwnerOperator' || driver.employeeType === 'owner_operator') {
-                                  payPercentage = (driver.rateOrSplit || 0) / 100;
-                                } else {
-                                  // Company driver: use their percentage (e.g., 35%), NOT 100%
-                                  const rawPercentage = driver.payPercentage || driver.rateOrSplit || 0;
-                                  payPercentage = rawPercentage > 0 ? (rawPercentage / 100) : 1;
-                                }
-                              }
-                              const basePay = load.rate * payPercentage;
+                              payAmount = (load.driverBasePay || 0) + (load.driverDetentionPay || 0) + (load.driverLayoverPay || 0) + (load.tonuFee || 0);
+                              payFormula = 'Stored load pay';
+                            } else if (load.driverTotalGross !== undefined && load.driverTotalGross > 0) {
+                              payAmount = load.driverTotalGross;
+                              payFormula = 'Stored total gross';
+                            } else if (driver) {
+                              const pay = resolveDriverPayment(driver);
+                              const miles = getLoadMiles(load);
+                              const base = calculateDriverPay(load, driver);
                               const detentionPay = load.detentionAmount || 0;
                               const layoverPay = load.layoverAmount || 0;
-                              const tonuPay = (load as any).tonuFee || 0;
-                              payAmount = basePay + detentionPay + layoverPay + tonuPay;
+                              const tonuPay = load.tonuFee || 0;
+                              payAmount = base + detentionPay + layoverPay + tonuPay;
+                              if (pay.type === 'per_mile') {
+                                payFormula = `${miles} mi × $${pay.perMileRate.toFixed(2)}/mi`;
+                              } else if (pay.type === 'percentage') {
+                                payFormula = `Rev × ${pay.percentageDisplay.toFixed(2)}%`;
+                              } else {
+                                payFormula = `Flat $${pay.flatRate.toFixed(2)}`;
+                              }
+                              if (detentionPay || layoverPay || tonuPay) {
+                                payFormula += ' + accessorials';
+                              }
                             }
                           }
                           
@@ -1154,8 +1260,9 @@ const Settlements: React.FC = () => {
                               <td className="px-4 py-2 text-sm font-medium">
                                 {load.loadNumber}
                               </td>
-                              <td className="px-4 py-2 text-sm">{new Date(load.deliveryDate || load.pickupDate || '').toLocaleDateString()}</td>
+                              <td className="px-4 py-2 text-sm">{formatDateOnly(load.deliveryDate || load.pickupDate || '')}</td>
                               <td className="px-4 py-2 text-sm">{load.originCity} → {load.destCity}</td>
+                              <td className="px-4 py-2 text-xs text-slate-500">{payFormula}</td>
                               <td className="px-4 py-2 text-sm text-right font-semibold">{formatCurrency(payAmount)}</td>
                             </tr>
                           );
@@ -1517,7 +1624,11 @@ const Settlements: React.FC = () => {
                           <p className="font-medium text-slate-900">{payee.firstName} {payee.lastName}</p>
                           <p className="text-sm text-slate-500">
                             {previewSettlement.driverId ? 'Driver' : 'Dispatcher'} • 
-                            Pay Rate: {payee.payType === 'percentage' ? `${((payee.payRate || 0) * 100).toFixed(0)}%` : `$${payee.payRate?.toFixed(2) || '0.00'}/mi`}
+                            Pay Rate: {previewSettlement.driverId
+                              ? formatDriverPayRate(payee as any)
+                              : (payee.defaultCommissionRate != null
+                                  ? `${payee.defaultCommissionType === 'per_mile' ? `$${payee.defaultCommissionRate}/mi` : payee.defaultCommissionType === 'flat_fee' ? `$${payee.defaultCommissionRate}` : `${payee.defaultCommissionRate}%`}`
+                                  : '—')}
                           </p>
                         </>
                       ) : (
@@ -1571,7 +1682,7 @@ const Settlements: React.FC = () => {
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold text-slate-700 uppercase flex items-center gap-2">
                   <Truck size={16} />
-                  Loads ({(previewSettlement.loadIds?.length || (previewSettlement.loadId ? 1 : 0))})
+                  Loads ({resolveSettlementLoads(previewSettlement, loads).length})
                 </h3>
                 <div className="border border-slate-200 rounded-lg overflow-hidden">
                   <table className="min-w-full divide-y divide-slate-200">
@@ -1586,8 +1697,7 @@ const Settlements: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       {(() => {
-                        const loadIds = previewSettlement.loadIds || (previewSettlement.loadId ? [previewSettlement.loadId] : []);
-                        const settlementLoads = loads.filter(l => loadIds.includes(l.id));
+                        const settlementLoads = resolveSettlementLoads(previewSettlement, loads);
                         
                         if (settlementLoads.length === 0) {
                           return (
@@ -1600,27 +1710,37 @@ const Settlements: React.FC = () => {
                         }
 
                         return settlementLoads.map(load => {
+                          const isStub = 'isStub' in load && load.isStub;
                           const payee = previewSettlement.driverId 
                             ? drivers.find(d => d.id === previewSettlement.driverId)
                             : employees.find(e => e.id === previewSettlement.dispatcherId);
-                          const driverPay = payee
-                            ? calculateDriverPay(load, payee as any)
-                            : 0;
+                          const driverPay = isStub
+                            ? (load as any).stubPay || 0
+                            : payee
+                              ? calculateDriverPay(load as Load, payee as any)
+                              : 0;
+                          const route = isStub
+                            ? 'Load record unavailable'
+                            : `${load.originCity}, ${load.originState} → ${load.destCity}, ${load.destState}`;
                           
                           return (
                             <tr key={load.id} className="hover:bg-slate-50">
                               <td className="px-4 py-3 text-sm font-medium text-blue-600">{load.loadNumber}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">
-                                <div className="flex items-center gap-1">
-                                  <MapPin size={12} className="text-green-500" />
-                                  {load.originCity}, {load.originState}
-                                  <span className="text-slate-400 mx-1">→</span>
-                                  <MapPin size={12} className="text-red-500" />
-                                  {load.destCity}, {load.destState}
-                                </div>
+                                {isStub ? (
+                                  <span className="text-amber-600 italic">{route}</span>
+                                ) : (
+                                  <div className="flex items-center gap-1">
+                                    <MapPin size={12} className="text-green-500" />
+                                    {load.originCity}, {load.originState}
+                                    <span className="text-slate-400 mx-1">→</span>
+                                    <MapPin size={12} className="text-red-500" />
+                                    {load.destCity}, {load.destState}
+                                  </div>
+                                )}
                               </td>
-                              <td className="px-4 py-3 text-sm text-slate-600 text-right">{(load.miles || 0).toLocaleString()}</td>
-                              <td className="px-4 py-3 text-sm text-slate-600 text-right">${(load.grandTotal || load.rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600 text-right">{getLoadMiles(load as Load).toLocaleString()}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600 text-right">${((load as Load).grandTotal || (load as Load).rate || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                               <td className="px-4 py-3 text-sm font-medium text-green-600 text-right">${driverPay.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                             </tr>
                           );
@@ -1634,13 +1754,9 @@ const Settlements: React.FC = () => {
                           {(previewSettlement.totalMiles || 0).toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-sm font-medium text-slate-700 text-right">
-                          ${(() => {
-                            const loadIds = previewSettlement.loadIds || (previewSettlement.loadId ? [previewSettlement.loadId] : []);
-                            return loads
-                              .filter(l => loadIds.includes(l.id))
-                              .reduce((sum, l) => sum + (l.grandTotal || l.rate || 0), 0)
-                              .toLocaleString('en-US', { minimumFractionDigits: 2 });
-                          })()}
+                          ${resolveSettlementLoads(previewSettlement, loads)
+                              .reduce((sum, l) => sum + ((l as Load).grandTotal || (l as Load).rate || 0), 0)
+                              .toLocaleString('en-US', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="px-4 py-3 text-sm font-bold text-green-700 text-right">
                           ${(previewSettlement.grossPay || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}

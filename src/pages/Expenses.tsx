@@ -25,7 +25,7 @@ const Expenses: React.FC = () => {
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (_event: MouseEvent) => {
       if (openMenuId) {
         setOpenMenuId(null);
       }
@@ -138,7 +138,7 @@ const Expenses: React.FC = () => {
             </div>
           </div>
           <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Total Count</p>
-          <h3 className="text-2xl font-bold text-slate-900 mt-1">{expenses.length}</h3>
+          <h3 className="text-2xl font-bold text-slate-900 mt-1">{filteredExpenses.length}</h3>
         </div>
       </div>
 

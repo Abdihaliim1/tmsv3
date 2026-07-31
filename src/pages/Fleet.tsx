@@ -1,13 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Plus, Truck, CheckCircle, Wrench, Search, Edit, Trash2, X, Calculator, Package } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Truck as TruckType, TruckStatus, TruckOwnership, InsurancePaidBy, NewTruckInput, Trailer, TrailerStatus, TrailerType, NewTrailerInput } from '../types';
+import { Truck as TruckType, TruckStatus, TruckOwnership, NewTruckInput, Trailer, TrailerStatus, TrailerType, NewTrailerInput } from '../types';
 import { useDebounce } from '../utils/debounce';
 
 type ViewType = 'trucks' | 'trailers';
 
 const Fleet: React.FC = () => {
-  const { trucks, trailers, drivers, loads, addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses } = useTMS();
+  const { trucks, trailers, drivers, addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses } = useTMS();
   const [activeView, setActiveView] = useState<ViewType>('trucks');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTruck, setEditingTruck] = useState<TruckType | null>(null);
@@ -69,10 +69,6 @@ const Fleet: React.FC = () => {
       maintenance: trailers.filter(t => t.status === 'maintenance' || t.status === 'repair').length,
     };
   }, [trailers]);
-
-  const formatCurrency = (amount: number) => {
-    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
 
   const getStatusColor = (status: TruckStatus) => {
     const colors = {
@@ -170,8 +166,10 @@ const Fleet: React.FC = () => {
       return; // Expense already exists, skip creation
     }
 
-    // Create new monthly insurance expense
-    const currentMonth = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+    // Create new monthly insurance expense (keyed so recurrence engine won't duplicate)
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const currentMonth = now.toLocaleString('default', { month: 'long', year: 'numeric' });
     const expenseData = {
       type: 'insurance' as const,
       category: 'insurance',
@@ -182,9 +180,11 @@ const Fleet: React.FC = () => {
       truckId: truckId,
       truckNumber: truckNumber,
       vendor: 'Insurance Provider',
-      paidBy: 'company' as const, // Company pays - this is a company expense
+      paidBy: 'company' as const,
       status: 'approved' as const,
-      date: new Date().toISOString(),
+      date: `${ym}-01`,
+      isRecurring: true,
+      recurrenceKey: `${truckId}|insurance|${ym}`,
     };
 
     addExpense(expenseData);
@@ -196,7 +196,6 @@ const Fleet: React.FC = () => {
       return;
     }
 
-    const startDate = new Date(profitDateFrom);
     const endDate = new Date(profitDateTo);
     endDate.setHours(23, 59, 59, 999);
 

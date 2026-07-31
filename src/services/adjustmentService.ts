@@ -20,7 +20,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Adjustment } from '../types';
-import { auditAdjustment } from '../data/audit';
 
 /**
  * Create an adjustment request for a delivered load
@@ -166,7 +165,7 @@ async function applyAdjustment(
   tenantId: string,
   loadId: string,
   adjustmentId: string,
-  appliedBy: string
+  _appliedBy: string
 ): Promise<void> {
   const adjustmentRef = doc(db, `tenants/${tenantId}/loads/${loadId}/adjustments/${adjustmentId}`);
   const adjustmentSnap = await getDoc(adjustmentRef);
@@ -223,8 +222,8 @@ export async function getLoadAdjustments(
 
   const snapshot = await getDocs(q);
   return snapshot.docs.map(doc => ({
-    id: doc.id,
     ...doc.data(),
+    id: doc.id,
   })) as Adjustment[];
 }
 
@@ -234,7 +233,7 @@ export async function getLoadAdjustments(
  * @param tenantId - Tenant ID
  * @returns Array of pending adjustments
  */
-export async function getPendingAdjustments(tenantId: string): Promise<Adjustment[]> {
+export async function getPendingAdjustments(_tenantId: string): Promise<Adjustment[]> {
   // Note: This requires a collection group query or separate index
   // For now, we'll query per load (can be optimized later)
   // This is a simplified version - in production, use collection group query

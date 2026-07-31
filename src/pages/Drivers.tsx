@@ -3,14 +3,11 @@ import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Do
 import { useTMS } from '../context/TMSContext';
 import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType } from '../types';
 import { useDebounce } from '../utils/debounce';
-
-// Pure helper function - moved outside component
-const formatCurrency = (amount: number) => {
-  return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
+import { formatDriverPayRate } from '../services/businessLogic';
+import { hydrateDriverPaymentForm, buildNormalizedPaymentSave } from '../services/driverPaymentNormalize';
 
 const Drivers: React.FC = () => {
-  const { employees, drivers, loads, trucks, addEmployee, updateEmployee, deleteEmployee, addDriver, updateDriver, deleteDriver } = useTMS();
+  const { employees, loads, trucks, addEmployee, updateEmployee, deleteEmployee } = useTMS();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -51,7 +48,7 @@ const Drivers: React.FC = () => {
     const activeDispatchers = employees.filter(e => e.status === 'active' && e.employeeType === 'dispatcher').length;
     
     const deliveredLoads = loads.filter(l => l.status === 'delivered' || l.status === 'completed');
-    const onTimeLoads = deliveredLoads.filter(l => {
+    const onTimeLoads = deliveredLoads.filter(() => {
       // Simplified on-time calculation
       return true; // Would need actual delivery dates
     });
@@ -87,19 +84,7 @@ const Drivers: React.FC = () => {
   }, []);
 
   const getPaymentDisplay = useCallback((driver: Driver) => {
-    if (!driver.payment) {
-      return '-';
-    }
-    const { type, perMileRate, percentage, flatRate } = driver.payment;
-    if (type === 'per_mile') {
-      return `${formatCurrency(perMileRate || 0)}/mi`;
-    } else if (type === 'percentage') {
-      const pct = driver.payPercentage || percentage || 0;
-      return `${(pct > 1 ? pct : pct * 100).toFixed(0)}%`;
-    } else if (type === 'flat_rate') {
-      return `${formatCurrency(flatRate || 0)}/load`;
-    }
-    return '-';
+    return formatDriverPayRate(driver);
   }, []);
 
   const getCurrentTruckDisplay = useCallback((truckId?: string) => {
@@ -529,7 +514,7 @@ interface DriverModalProps {
 }
 
 const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) => {
-  const { employees, trucks } = useTMS();
+  const { trucks } = useTMS();
   const [formData, setFormData] = useState<Partial<NewDriverInput>>({
     employeeNumber: driver?.employeeNumber || driver?.driverNumber || '',
     driverNumber: driver?.driverNumber || driver?.employeeNumber || '',
@@ -557,16 +542,22 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
       endorsements: driver?.license?.endorsements || '',
     },
     medicalExpirationDate: driver?.medicalExpirationDate || '',
-    payment: {
-      type: driver?.payment?.type || 'per_mile',
-      perMileRate: driver?.payment?.perMileRate || 0,
-      percentage: driver?.payment?.percentage || 0,
-      flatRate: driver?.payment?.flatRate || 0,
-      detention: driver?.payment?.detention || 0,
-      layover: driver?.payment?.layover || 0,
-      fuelSurcharge: driver?.payment?.fuelSurcharge || false,
-    },
-    payPercentage: driver?.payPercentage || 0,
+    payment: (() => {
+      const hydrated = hydrateDriverPaymentForm(driver || null);
+      return {
+        type: hydrated.type,
+        perMileRate: hydrated.perMileRate,
+        percentage: hydrated.percentage,
+        flatRate: hydrated.flatRate,
+        detention: driver?.payment?.detention || 0,
+        layover: driver?.payment?.layover || 0,
+        fuelSurcharge: driver?.payment?.fuelSurcharge || false,
+      };
+    })(),
+    payPercentage: hydrateDriverPaymentForm(driver || null).payPercentage,
+    payType: hydrateDriverPaymentForm(driver || null).type,
+    payRate: hydrateDriverPaymentForm(driver || null).payRate,
+    rateOrSplit: hydrateDriverPaymentForm(driver || null).rateOrSplit,
     deductionPreferences: {
       fuel: driver?.deductionPreferences?.fuel || false,
       insurance: driver?.deductionPreferences?.insurance || false,
@@ -587,7 +578,9 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
     },
   });
 
-  const [paymentType, setPaymentType] = useState<PaymentType>(formData.payment?.type || 'per_mile');
+  const [paymentType, setPaymentType] = useState<PaymentType>(
+    hydrateDriverPaymentForm(driver || null).type
+  );
   const [driverType, setDriverType] = useState<DriverType>(formData.type || 'Company');
   const [employeeType, setEmployeeType] = useState<EmployeeType>(formData.employeeType || 'driver');
   
@@ -650,27 +643,43 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Calculate payPercentage for percentage type (only for drivers)
-    if (isDriverOrOwnerOperator && paymentType === 'percentage') {
-      const percentageInput = parseFloat((document.getElementById('percentageRate') as HTMLInputElement)?.value || '0');
-      formData.payPercentage = percentageInput > 1 ? percentageInput / 100 : percentageInput;
-    }
 
-    // Ensure employeeType is set from state
     formData.employeeType = employeeType;
 
-    // For dispatchers and other non-driver employees, ensure type is set correctly
-    if (employeeType === 'dispatcher' || (employeeType !== 'driver' && employeeType !== 'owner_operator')) {
-      // Non-driver employees don't need driver type, but we keep it for backward compatibility
-      if (!formData.type) {
-        formData.type = 'Company'; // Default legacy type
+    if (isDriverOrOwnerOperator) {
+      const percentageInput = paymentType === 'percentage'
+        ? parseFloat((document.getElementById('percentageRate') as HTMLInputElement)?.value || '0')
+        : undefined;
+      const normalized = buildNormalizedPaymentSave(
+        paymentType,
+        formData.payment || {},
+        percentageInput
+      );
+      if (normalized.payType === 'per_mile' && (!normalized.payRate || normalized.payRate <= 0)) {
+        alert('Per-mile drivers require a rate greater than $0.00/mi (e.g. 0.65).');
+        return;
       }
-      // Clear driver-specific fields for non-drivers
+      if (normalized.payType === 'percentage' && (!normalized.payPercentage || normalized.payPercentage <= 0)) {
+        alert('Percentage drivers require a pay percentage greater than 0.');
+        return;
+      }
+      formData.payment = normalized.payment;
+      formData.payType = normalized.payType;
+      formData.payRate = normalized.payRate;
+      formData.rateOrSplit = normalized.rateOrSplit;
+      formData.payPercentage = normalized.payPercentage;
+    }
+
+    if (employeeType === 'dispatcher' || (employeeType !== 'driver' && employeeType !== 'owner_operator')) {
+      if (!formData.type) {
+        formData.type = 'Company';
+      }
       if (employeeType === 'dispatcher') {
-        // Keep dispatcher commission fields, but clear driver payment fields
         formData.payment = undefined;
         formData.payPercentage = undefined;
+        formData.payType = undefined;
+        formData.payRate = undefined;
+        formData.rateOrSplit = undefined;
         formData.currentTruckId = undefined;
         formData.truckId = undefined;
       }
