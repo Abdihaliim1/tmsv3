@@ -28,6 +28,7 @@ import {
   deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
   clearLoadSettlementLinks,
+  clearLoadInvoiceLinks,
   deleteTruck as firestoreDeleteTruck, deleteTrailer as firestoreDeleteTrailer,
   deleteExpense as firestoreDeleteExpense, deleteFactoringCompany as firestoreDeleteFactoringCompany,
   deleteFactoringTransaction as firestoreDeleteFactoringTransaction,
@@ -701,8 +702,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       ...sanitizedUpdates,
       ...commissionPatch,
       adjustmentLog: adjustmentEntries.length > 0 ? newAdjustmentLog : oldLoad.adjustmentLog,
-      isLocked: shouldLock ? true : oldLoad.isLocked,
-      lockedAt: shouldLock ? new Date().toISOString() : oldLoad.lockedAt,
+      isLocked: shouldLock
+        ? true
+        : (sanitizedUpdates.isLocked !== undefined ? !!sanitizedUpdates.isLocked : oldLoad.isLocked),
+      lockedAt: shouldLock
+        ? new Date().toISOString()
+        : (sanitizedUpdates.isLocked === false ? undefined : oldLoad.lockedAt),
       updatedAt: new Date().toISOString()
     };
 
@@ -1239,8 +1244,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addTruck = (input: NewTruckInput): string => {
+    const number = (input.number || input.truckNumber || '').trim();
     const newTruck: Truck = {
       ...input,
+      number,
+      truckNumber: number,
       id: generateShortId(),
       createdAt: new Date().toISOString(),
     };
@@ -1251,7 +1259,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
   const updateTruck = (id: string, updates: Partial<Truck>) => {
     const truck = trucks.find(t => t.id === id);
-    const updatedTruck = truck ? { ...truck, ...updates, updatedAt: new Date().toISOString() } : null;
+    const synced =
+      updates.number !== undefined || updates.truckNumber !== undefined
+        ? {
+            ...updates,
+            number: (updates.number ?? updates.truckNumber ?? truck?.number ?? '').toString(),
+            truckNumber: (updates.truckNumber ?? updates.number ?? truck?.truckNumber ?? '').toString(),
+          }
+        : updates;
+    const updatedTruck = truck ? { ...truck, ...synced, updatedAt: new Date().toISOString() } : null;
 
     setTrucks(prev => prev.map(t => t.id === id ? updatedTruck! : t));
     if (updatedTruck) {
@@ -1346,6 +1362,26 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addInvoice = async (input: Omit<Invoice, 'id'>) => {
+    // Invoice number uniqueness (case-insensitive)
+    const proposedNumber = (input.invoiceNumber || '').trim();
+    if (proposedNumber) {
+      const dup = invoices.find(
+        inv => (inv.invoiceNumber || '').trim().toLowerCase() === proposedNumber.toLowerCase()
+      );
+      if (dup) {
+        throw new Error(`Invoice number "${proposedNumber}" already exists (${dup.id}). Use a unique number.`);
+      }
+    }
+
+    // Clamp factoring percent to 0–100
+    if (input.isFactored && input.factoringFeePercent != null) {
+      const pct = Number(input.factoringFeePercent);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        throw new Error('Factoring fee percentage must be between 0 and 100.');
+      }
+      input = { ...input, factoringFeePercent: pct };
+    }
+
     // DUPLICATE PREVENTION: Check if any of the loads already have an invoice
     const loadIdsToInvoice = input.loadIds || (input.loadId ? [input.loadId] : []);
 
@@ -1554,22 +1590,42 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
     }
 
-    // Proceed with deletion and cleanup
-    // Unlink invoice from loads
+    // Proceed with deletion and unlock/unlink loads
+    const tid = tenantId || 'default';
+    const linkedIds = new Set<string>([
+      ...(invoice.loadId ? [invoice.loadId] : []),
+      ...(invoice.loadIds || []),
+    ]);
+
     setLoads(prev => prev.map(load => {
-      if (load.invoiceId === id || invoice.loadIds?.includes(load.id)) {
-        const updated = { ...load };
-        if (load.invoiceId === id) {
-          delete updated.invoiceId;
-          updated.invoiceNumber = undefined;
-          updated.invoicedAt = undefined;
-        }
-        return updated;
-      }
-      return load;
+      const isLinked = load.invoiceId === id || linkedIds.has(load.id);
+      if (!isLinked) return load;
+
+      const restoredStatus =
+        load.status === LoadStatus.Invoiced || load.status === LoadStatus.Paid
+          ? LoadStatus.Delivered
+          : load.status;
+
+      clearLoadInvoiceLinks(tid, load.id, restoredStatus).catch(e =>
+        console.error('Failed to unlock load after invoice delete:', load.id, e)
+      );
+
+      return {
+        ...load,
+        invoiceId: undefined,
+        invoiceNumber: undefined,
+        invoicedAt: undefined,
+        isLocked: false,
+        lockedAt: undefined,
+        paymentReceived: false,
+        paymentReceivedDate: undefined,
+        paymentAmount: undefined,
+        status: restoredStatus,
+      };
     }));
-    setInvoices(prev => prev.filter(invoice => invoice.id !== id));
-    firestoreDeleteInvoice(tenantId || 'default', id).catch(e => console.error('Failed to delete invoice:', e));
+
+    setInvoices(prev => prev.filter(inv => inv.id !== id));
+    firestoreDeleteInvoice(tid, id).catch(e => console.error('Failed to delete invoice:', e));
   };
 
   const addSettlement = (input: Omit<Settlement, 'id'>): string => {

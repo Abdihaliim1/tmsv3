@@ -19,36 +19,63 @@ export function validatePayment(
   invoice: Invoice,
   paymentAmount: number
 ): { valid: boolean; error?: string; maxAmount?: number } {
+  if (!Number.isFinite(paymentAmount) || Number.isNaN(paymentAmount)) {
+    return { valid: false, error: 'Payment amount must be a valid number' };
+  }
   if (paymentAmount <= 0) {
     return { valid: false, error: 'Payment amount must be greater than 0' };
   }
 
   const currentPaid = calculateTotalPaid(invoice);
-  const total = invoice.amount;
+  const total = invoice.amount || 0;
+  const outstanding = Math.max(0, Math.round((total - currentPaid + Number.EPSILON) * 100) / 100);
   const newTotal = currentPaid + paymentAmount;
 
-  // Allow 1% tolerance for rounding differences
-  if (newTotal > total * 1.01) {
-    const maxAmount = total - currentPaid;
+  // Allow $0.01 tolerance for rounding; block overpayment and negatives
+  if (newTotal > total + 0.01) {
     return {
       valid: false,
-      error: `Payment would exceed invoice amount. Maximum payment: $${maxAmount.toFixed(2)}. Invoice total: $${total.toFixed(2)}, Already paid: $${currentPaid.toFixed(2)}`,
-      maxAmount: maxAmount
+      error: `Payment would exceed invoice amount. Maximum payment: $${outstanding.toFixed(2)}. Invoice total: $${total.toFixed(2)}, Already paid: $${currentPaid.toFixed(2)}`,
+      maxAmount: outstanding,
     };
   }
 
-  return { valid: true };
+  return { valid: true, maxAmount: outstanding };
 }
 
 /**
- * Calculate total paid from payment history
+ * Calculate total paid from payment history.
+ * Prefer payments[] when present; never add payments[] + paidAmount (double-count).
  */
 export function calculateTotalPaid(invoice: Invoice): number {
   if (invoice.payments && invoice.payments.length > 0) {
-    return invoice.payments.reduce((sum, payment) => sum + payment.amount, 0);
+    return Math.round(
+      (invoice.payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0) + Number.EPSILON) * 100
+    ) / 100;
   }
   // Fallback to legacy paidAmount field
-  return invoice.paidAmount || 0;
+  return Math.round(((Number(invoice.paidAmount) || 0) + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Allocate an invoice payment across linked loads by revenue share.
+ * Never writes the full invoice payment onto every load.
+ */
+export function allocatePaymentAcrossLoads(
+  _invoiceAmount: number,
+  totalPaid: number,
+  loadRevenues: Array<{ loadId: string; revenue: number }>
+): Array<{ loadId: string; paymentAmount: number }> {
+  const totalRevenue = loadRevenues.reduce((s, l) => s + (l.revenue || 0), 0);
+  if (loadRevenues.length === 0) return [];
+  if (totalRevenue <= 0) {
+    const even = Math.round((totalPaid / loadRevenues.length + Number.EPSILON) * 100) / 100;
+    return loadRevenues.map(l => ({ loadId: l.loadId, paymentAmount: even }));
+  }
+  return loadRevenues.map(l => ({
+    loadId: l.loadId,
+    paymentAmount: Math.round((totalPaid * ((l.revenue || 0) / totalRevenue) + Number.EPSILON) * 100) / 100,
+  }));
 }
 
 /**
@@ -65,7 +92,6 @@ export function calculateOutstandingBalance(invoice: Invoice): number {
 export function calculateInvoiceStatus(invoice: Invoice): InvoiceStatus {
   const totalPaid = calculateTotalPaid(invoice);
   const total = invoice.amount;
-  const outstanding = total - totalPaid;
 
   // Check if fully paid (99% threshold to account for rounding)
   if (totalPaid >= total * 0.99) {

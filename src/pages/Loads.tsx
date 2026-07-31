@@ -7,6 +7,8 @@ import { useTMS } from '../context/TMSContext';
 import { useAuth } from '../context/AuthContext';
 import { LoadStatus, Load, StatusChangeInfo } from '../types';
 import { PageType } from '../App';
+import { formatDateOnly } from '../utils/dateOnly';
+import { withDispatcherCommission } from '../services/businessLogic';
 
 // ============================================================================
 // Helper Functions
@@ -18,12 +20,12 @@ const formatCurrency = (amount: number) => {
 
 const formatDate = (dateStr: string | undefined) => {
   if (!dateStr) return '-';
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
-  } catch {
-    return dateStr;
-  }
+  return formatDateOnly(dateStr, { month: '2-digit', day: '2-digit', year: 'numeric' });
+};
+
+const getTruckLabel = (truck: { number?: string; truckNumber?: string; make?: string; model?: string }) => {
+  const num = truck.number || truck.truckNumber || '';
+  return num ? `${num} - ${truck.make || ''} ${truck.model || ''}`.trim() : `${truck.make || ''} ${truck.model || ''}`.trim() || 'Truck';
 };
 
 // ============================================================================
@@ -157,6 +159,10 @@ const ViewLoadModal: React.FC<ViewLoadModalProps> = ({ isOpen, onClose, load, on
                   <span className="font-medium">{load.driverName || 'Unassigned'}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-slate-600">Dispatcher:</span>
+                  <span className="font-medium">{load.dispatcherName || '-'}</span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-slate-600">Truck:</span>
                   <span className="font-medium">{load.truckNumber || '-'}</span>
                 </div>
@@ -282,7 +288,8 @@ interface EditLoadModalProps {
 }
 
 const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, onSave, onLinkToTrip }) => {
-  const { drivers, trucks, trailers, trips } = useTMS();
+  const { drivers, trucks, trailers, trips, employees } = useTMS();
+  const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
   const [formData, setFormData] = useState<Partial<Load>>({});
   const [selectedTripId, setSelectedTripId] = useState<string>('');
@@ -290,15 +297,18 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
   // Populate form when load changes
   React.useEffect(() => {
     if (load) {
+      const truck = trucks.find(t => t.id === load.truckId);
       setFormData({
         loadNumber: load.loadNumber,
         status: load.status,
         driverId: load.driverId || '',
         driverName: load.driverName || '',
         truckId: load.truckId || '',
-        truckNumber: load.truckNumber || '',
+        truckNumber: load.truckNumber || truck?.number || truck?.truckNumber || '',
         trailerId: load.trailerId || '',
         trailerNumber: load.trailerNumber || '',
+        dispatcherId: load.dispatcherId || '',
+        dispatcherName: load.dispatcherName || '',
         originCity: load.originCity,
         originState: load.originState,
         destCity: load.destCity,
@@ -314,7 +324,7 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
       });
       setSelectedTripId(load.tripId || '');
     }
-  }, [load]);
+  }, [load, trucks]);
 
   const handleDriverChange = (driverId: string) => {
     const driver = drivers.find(d => d.id === driverId);
@@ -325,12 +335,28 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
     }));
   };
 
+  const handleDispatcherChange = (dispatcherId: string) => {
+    const dispatcher = dispatchers.find(d => d.id === dispatcherId);
+    if (!dispatcher) {
+      setFormData(prev => ({
+        ...prev,
+        dispatcherId: '',
+        dispatcherName: '',
+      }));
+      return;
+    }
+    setFormData(prev => ({
+      ...prev,
+      ...withDispatcherCommission(prev, dispatcher),
+    }));
+  };
+
   const handleTruckChange = (truckId: string) => {
     const truck = trucks.find(t => t.id === truckId);
     setFormData(prev => ({
       ...prev,
       truckId,
-      truckNumber: truck?.truckNumber || '',
+      truckNumber: truck?.number || truck?.truckNumber || '',
     }));
   };
 
@@ -414,7 +440,7 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
           {/* Assignment */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold text-slate-700 mb-3">Assignment</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Driver</label>
                 <select
@@ -431,6 +457,21 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
                 </select>
               </div>
               <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Dispatcher (Booked By)</label>
+                <select
+                  value={formData.dispatcherId || ''}
+                  onChange={(e) => handleDispatcherChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (Self-Dispatched)</option>
+                  {dispatchers.map(dispatcher => (
+                    <option key={dispatcher.id} value={dispatcher.id}>
+                      {dispatcher.firstName} {dispatcher.lastName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Truck</label>
                 <select
                   value={formData.truckId || ''}
@@ -440,7 +481,7 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
                   <option value="">Select Truck</option>
                   {trucks.map(truck => (
                     <option key={truck.id} value={truck.id}>
-                      {truck.truckNumber} - {truck.make} {truck.model}
+                      {getTruckLabel(truck)}
                     </option>
                   ))}
                 </select>

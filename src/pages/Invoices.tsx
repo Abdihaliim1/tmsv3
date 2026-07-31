@@ -23,7 +23,14 @@ import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
 import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { getFactoredLoads, resolveLoadFactoringFee } from '../services/businessLogic';
+import { getFactoredLoads, resolveLoadFactoringFee, getLoadRevenue } from '../services/businessLogic';
+import {
+  addPaymentToInvoice,
+  calculateTotalPaid,
+  calculateOutstandingBalance,
+  validatePayment,
+  allocatePaymentAcrossLoads,
+} from '../services/paymentService';
 import type { FactoringFundingStatus } from '../types';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -497,7 +504,16 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
                     <input
                       type="number"
                       value={factoringFeePercent}
-                      onChange={(e) => setFactoringFeePercent(parseFloat(e.target.value) || 0)}
+                      onChange={(e) => {
+                        const n = parseFloat(e.target.value);
+                        if (!Number.isFinite(n)) {
+                          setFactoringFeePercent(0);
+                          return;
+                        }
+                        setFactoringFeePercent(Math.min(100, Math.max(0, n)));
+                      }}
+                      min={0}
+                      max={100}
                       step="0.1"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                     />
@@ -695,8 +711,8 @@ interface PaymentModalProps {
 }
 
 const PaymentModal: React.FC<PaymentModalProps> = ({ invoice, onClose, onSave }) => {
-  const totalPaid = (invoice.payments || []).reduce((sum, p) => sum + p.amount, 0) + (invoice.paidAmount || 0);
-  const balanceDue = invoice.amount - totalPaid;
+  const totalPaid = calculateTotalPaid(invoice);
+  const balanceDue = calculateOutstandingBalance(invoice);
 
   const [amount, setAmount] = useState(balanceDue.toFixed(2));
   const [method, setMethod] = useState<string>('ACH');
@@ -705,14 +721,10 @@ const PaymentModal: React.FC<PaymentModalProps> = ({ invoice, onClose, onSave })
 
   const handleSubmit = () => {
     const paymentAmount = parseFloat(amount);
-    if (isNaN(paymentAmount) || paymentAmount <= 0) {
-      alert('Please enter a valid payment amount');
+    const validation = validatePayment(invoice, paymentAmount);
+    if (!validation.valid) {
+      alert(validation.error || 'Invalid payment amount');
       return;
-    }
-    if (paymentAmount > balanceDue) {
-      if (!confirm(`Payment amount ($${paymentAmount.toFixed(2)}) exceeds balance due ($${balanceDue.toFixed(2)}). Continue?`)) {
-        return;
-      }
     }
     onSave({ amount: paymentAmount, method, reference, date });
   };
@@ -952,12 +964,21 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
     return filteredInvoices.slice(start, start + itemsPerPage);
   }, [filteredInvoices, currentPage]);
 
-  // Stats
+  // Stats — include partial + draft so summary matches the invoice list
   const stats = useMemo(() => {
-    const pending = invoices.filter(i => i.status === 'pending').reduce((sum, i) => sum + i.amount, 0);
-    const paid = invoices.filter(i => i.status === 'paid').reduce((sum, i) => sum + i.amount, 0);
-    const overdue = invoices.filter(i => i.status === 'overdue').reduce((sum, i) => sum + i.amount, 0);
-    return { pending, paid, overdue, total: pending + paid + overdue };
+    const pending = invoices.filter(i => i.status === 'pending').reduce((sum, i) => sum + (i.amount || 0), 0);
+    const partial = invoices.filter(i => i.status === 'partial').reduce((sum, i) => sum + (i.amount || 0), 0);
+    const draft = invoices.filter(i => i.status === 'draft').reduce((sum, i) => sum + (i.amount || 0), 0);
+    const paid = invoices.filter(i => i.status === 'paid').reduce((sum, i) => sum + (i.amount || 0), 0);
+    const overdue = invoices.filter(i => i.status === 'overdue').reduce((sum, i) => sum + (i.amount || 0), 0);
+    return {
+      pending: pending + partial,
+      partial,
+      draft,
+      paid,
+      overdue,
+      total: pending + partial + draft + paid + overdue,
+    };
   }, [invoices]);
 
   const getStatusBadge = (status: InvoiceStatus) => {
@@ -984,53 +1005,53 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
     if (!paymentModalInvoice) return;
 
     const invoice = paymentModalInvoice;
-    const paidAt = new Date(paymentData.date).toISOString();
+    try {
+      const { invoice: updated } = addPaymentToInvoice(invoice, {
+        amount: paymentData.amount,
+        date: paymentData.date,
+        method: paymentData.method as 'ACH' | 'Check' | 'Wire' | 'Credit' | 'Factoring' | 'Other',
+        reference: paymentData.reference || undefined,
+      });
 
-    // Calculate total paid including this payment
-    const existingPayments = invoice.payments || [];
-    const existingPaidAmount = existingPayments.reduce((sum, p) => sum + p.amount, 0) + (invoice.paidAmount || 0);
-    const newTotalPaid = existingPaidAmount + paymentData.amount;
+      updateInvoice(invoice.id, {
+        status: updated.status,
+        paidAt: updated.paidAt,
+        paidAmount: updated.paidAmount,
+        paymentMethod: paymentData.method,
+        paymentReference: paymentData.reference || undefined,
+        payments: updated.payments,
+      });
 
-    // Create new payment record
-    const newPayment = {
-      id: `pay_${Date.now()}`,
-      invoiceId: invoice.id,
-      amount: paymentData.amount,
-      date: paymentData.date,
-      method: paymentData.method as 'ACH' | 'Check' | 'Wire' | 'Credit' | 'Factoring' | 'Other',
-      reference: paymentData.reference || undefined,
-      createdAt: new Date().toISOString()
-    };
+      const loadIds = [
+        ...(invoice.loadId ? [invoice.loadId] : []),
+        ...(invoice.loadIds || []),
+      ];
+      const uniqueLoadIds = Array.from(new Set(loadIds));
+      const allocations = allocatePaymentAcrossLoads(
+        invoice.amount || 0,
+        updated.paidAmount || 0,
+        uniqueLoadIds.map(loadId => {
+          const load = loads.find(l => l.id === loadId);
+          return { loadId, revenue: load ? getLoadRevenue(load) : 0 };
+        })
+      );
 
-    // Determine new status: paid if fully paid, partial if partially paid
-    const isPaidInFull = newTotalPaid >= invoice.amount * 0.99; // 99% threshold for rounding
-    const newStatus: InvoiceStatus = isPaidInFull ? 'paid' : 'partial';
-
-    updateInvoice(invoice.id, {
-      status: newStatus,
-      paidAt: isPaidInFull ? paidAt : undefined,
-      paidAmount: newTotalPaid,
-      paymentMethod: paymentData.method,
-      paymentReference: paymentData.reference || undefined,
-      payments: [...existingPayments, newPayment]
-    });
-
-    // Update associated loads if fully paid
-    if (isPaidInFull && invoice.loadIds) {
-      for (const loadId of invoice.loadIds) {
-        const load = loads.find(l => l.id === loadId);
-        if (load) {
-          try {
-            await updateLoad(loadId, {
-              paymentReceived: true,
-              paymentReceivedDate: paidAt,
-              paymentAmount: newTotalPaid
-            });
-          } catch (error) {
-            console.error('Error updating load payment status:', error);
-          }
+      const paidAt = updated.paidAt || new Date(paymentData.date).toISOString();
+      const isPaidInFull = updated.status === 'paid';
+      for (const alloc of allocations) {
+        try {
+          await updateLoad(alloc.loadId, {
+            paymentReceived: isPaidInFull,
+            paymentReceivedDate: isPaidInFull ? paidAt : undefined,
+            paymentAmount: alloc.paymentAmount,
+          });
+        } catch (error) {
+          console.error('Error updating load payment status:', error);
         }
       }
+    } catch (error: any) {
+      alert(error?.message || 'Failed to record payment');
+      return;
     }
 
     setPaymentModalInvoice(null);
@@ -1388,6 +1409,7 @@ const FactoredLoadsTab: React.FC = () => {
       return dateB - dateA;
     });
   }, [loads, invoices, factoringCompanies, factoringTransactions, selectedCompanyId]);
+  // factoringCompanies used via resolveLoadFactoringFee inside
 
   const filteredFactoredData = useMemo(() => {
     return factoredData.filter(item => {
@@ -1448,7 +1470,7 @@ const FactoredLoadsTab: React.FC = () => {
 
       if (months[monthKey]) {
         const amount = item.load.grandTotal || item.load.rate || 0;
-        const fee = item.load.factoringFee || (amount * ((item.load.factoringFeePercent || item.factoringCompany?.feePercentage || 2.5) / 100));
+        const fee = resolveLoadFactoringFee(item.load, item.invoice, factoringCompanies);
         months[monthKey].factored += amount;
         months[monthKey].fees += fee;
       }

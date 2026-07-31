@@ -7,7 +7,8 @@ import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { Invoice, InvoiceStatus, LoadStatus, FactoringCompany, NewFactoringCompanyInput, Load, Payment } from '../types';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { addPaymentToInvoice, validatePayment, calculateAging, calculateARAgingSummary, calculateInvoiceStatus, calculateTotalPaid, calculateOutstandingBalance, getDaysOutstanding } from '../services/paymentService';
+import { addPaymentToInvoice, validatePayment, calculateAging, calculateARAgingSummary, calculateInvoiceStatus, calculateTotalPaid, calculateOutstandingBalance, getDaysOutstanding, allocatePaymentAcrossLoads } from '../services/paymentService';
+import { getLoadRevenue } from '../services/businessLogic';
 import { canInvoiceLoad } from '../services/documentService';
 import { useTenant } from '../context/TenantContext';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
@@ -208,41 +209,70 @@ const AccountReceivables: React.FC = () => {
   };
 
   const handleMarkAsPaid = async (invoice: Invoice) => {
-    const paidAmount = prompt('Enter paid amount:', invoice.amount.toString());
-    if (!paidAmount) return;
-    
+    const outstanding = calculateOutstandingBalance(invoice);
+    const paidAmountRaw = prompt(
+      `Enter payment amount (outstanding $${outstanding.toFixed(2)}):`,
+      outstanding.toFixed(2)
+    );
+    if (paidAmountRaw === null) return;
+
+    const paidAmount = parseFloat(paidAmountRaw);
+    const validation = validatePayment(invoice, paidAmount);
+    if (!validation.valid) {
+      alert(validation.error || 'Invalid payment amount');
+      return;
+    }
+
     const paymentMethod = prompt('Payment method (ACH, Check, Wire, etc.):', 'ACH');
     if (!paymentMethod) return;
-    
-    const paymentReference = prompt('Payment reference (optional):', '');
-    
-    const paidAt = new Date().toISOString();
-    updateInvoice(invoice.id, {
-      status: 'paid',
-      paidAt,
-      paidAmount: parseFloat(paidAmount),
-      paymentMethod,
-      paymentReference: paymentReference || undefined
-    });
 
-    // Update associated loads
-    if (invoice.loadIds) {
-      // Use for...of loop to properly handle async/await
-      for (const loadId of invoice.loadIds) {
-        const load = loads.find(l => l.id === loadId);
-        if (load) {
-          try {
-            await updateLoad(loadId, {
-              paymentReceived: true,
-              paymentReceivedDate: paidAt,
-              paymentAmount: parseFloat(paidAmount)
-            });
-          } catch (error: any) {
-            console.error('Error updating load payment status:', error);
-            // Continue even if update fails - payment is still recorded
-          }
+    const paymentReference = prompt('Payment reference (optional):', '');
+    const paidAt = new Date().toISOString().split('T')[0];
+
+    try {
+      const { invoice: updated } = addPaymentToInvoice(invoice, {
+        amount: paidAmount,
+        date: paidAt,
+        method: paymentMethod as any,
+        reference: paymentReference || undefined,
+      });
+
+      updateInvoice(invoice.id, {
+        status: updated.status,
+        paidAt: updated.paidAt,
+        paidAmount: updated.paidAmount,
+        paymentMethod,
+        paymentReference: paymentReference || undefined,
+        payments: updated.payments,
+      });
+
+      const loadIds = Array.from(new Set([
+        ...(invoice.loadId ? [invoice.loadId] : []),
+        ...(invoice.loadIds || []),
+      ]));
+      const allocations = allocatePaymentAcrossLoads(
+        invoice.amount || 0,
+        updated.paidAmount || 0,
+        loadIds.map(loadId => {
+          const load = loads.find(l => l.id === loadId);
+          return { loadId, revenue: load ? getLoadRevenue(load) : 0 };
+        })
+      );
+
+      const isPaidInFull = updated.status === 'paid';
+      for (const alloc of allocations) {
+        try {
+          await updateLoad(alloc.loadId, {
+            paymentReceived: isPaidInFull,
+            paymentReceivedDate: isPaidInFull ? updated.paidAt : undefined,
+            paymentAmount: alloc.paymentAmount,
+          });
+        } catch (error: any) {
+          console.error('Error updating load payment status:', error);
         }
       }
+    } catch (error: any) {
+      alert(error?.message || 'Failed to record payment');
     }
   };
 

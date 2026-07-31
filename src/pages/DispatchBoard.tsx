@@ -31,6 +31,7 @@ import { Load, LoadStatus, DocumentType } from '../types';
 import { getMissingDocuments } from '../services/documentService';
 import { TmsDocument } from '../types';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
+import { formatDateOnly } from '../utils/dateOnly';
 import AddLoadModal from '../components/AddLoadModal';
 import DocumentUploadModal from '../components/DocumentUploadModal';
 import DriverAssignmentModal from '../components/DriverAssignmentModal';
@@ -176,11 +177,11 @@ const LoadCard: React.FC<LoadCardProps> = ({
       {/* Dates */}
       <div className="flex items-center gap-2 mb-3 text-xs text-slate-500">
         <Calendar className="w-3 h-3" />
-        <span>Pickup: {load.pickupDate ? new Date(load.pickupDate).toLocaleDateString() : 'N/A'}</span>
+        <span>Pickup: {load.pickupDate ? formatDateOnly(load.pickupDate) : 'N/A'}</span>
         {load.deliveryDate && (
           <>
             <span>•</span>
-            <span>Delivery: {new Date(load.deliveryDate).toLocaleDateString()}</span>
+            <span>Delivery: {formatDateOnly(load.deliveryDate)}</span>
           </>
         )}
       </div>
@@ -433,7 +434,7 @@ const DispatchBoard: React.FC = () => {
         loadIds: [loadId],
         customerId: load.brokerId || '',
         customerName: load.brokerName || load.customerName || 'Unknown',
-        amount: load.rate || 0,
+        amount: load.grandTotal || load.rate || 0,
         status: 'pending',
         date: new Date().toISOString().split('T')[0],
         dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days

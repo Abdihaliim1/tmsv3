@@ -1019,7 +1019,12 @@ const TruckModal: React.FC<TruckModalProps> = ({ truck, onClose, onSave }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData as NewTruckInput);
+    const number = (formData.number || formData.truckNumber || '').trim();
+    onSave({
+      ...formData,
+      number,
+      truckNumber: number,
+    } as NewTruckInput);
   };
 
   const TRUCK_MAKES = ['Freightliner', 'Peterbilt', 'Kenworth', 'Volvo', 'Mack', 'International', 'Western Star'];

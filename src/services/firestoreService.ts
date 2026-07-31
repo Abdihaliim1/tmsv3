@@ -310,6 +310,28 @@ export async function clearLoadSettlementLinks(
   });
   await updateDocument(tenantId, 'loads', loadId, updates);
 }
+
+/** Unlock a load after invoice deletion and clear invoice/payment link fields. */
+export async function clearLoadInvoiceLinks(
+  tenantId: string,
+  loadId: string,
+  restoredStatus?: string
+): Promise<void> {
+  const updates: Record<string, unknown> = {
+    updatedAt: new Date().toISOString(),
+    invoiceId: deleteField(),
+    invoiceNumber: deleteField(),
+    invoicedAt: deleteField(),
+    lockedAt: deleteField(),
+    paymentReceivedDate: deleteField(),
+    paymentAmount: deleteField(),
+    isLocked: false,
+    paymentReceived: false,
+  };
+  if (restoredStatus) updates.status = restoredStatus;
+  const docRef = getDocRef(tenantId, 'loads', loadId);
+  await updateDoc(docRef, updates);
+}
 export const saveInvoice = (tenantId: string, invoice: Invoice) => saveDocument(tenantId, 'invoices', invoice);
 export const saveSettlement = (tenantId: string, settlement: Settlement) => saveDocument(tenantId, 'settlements', settlement);
 export const saveEmployee = (tenantId: string, employee: Employee) => saveDocument(tenantId, 'employees', employee);
