@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Download, Printer, RefreshCw, Eye, Trash2, DollarSign, Users, Clock, Calculator, Search, X, Truck, MapPin, Calendar } from 'lucide-react';
+import { Plus, Download, Printer, RefreshCw, Eye, Trash2, DollarSign, Users, Clock, Calculator, Search, X, Truck, MapPin, Calendar, CheckCircle } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { Settlement, Load, LoadStatus } from '../types';
@@ -113,7 +113,7 @@ function isLoadSettledForType(
 }
 
 const Settlements: React.FC = () => {
-  const { settlements, drivers, loads, addSettlement, deleteSettlement, updateLoad, employees } = useTMS();
+  const { settlements, drivers, loads, addSettlement, deleteSettlement, updateSettlement, updateLoad, employees } = useTMS();
   const { companyProfile } = useCompany();
   const [settlementType, setSettlementType] = useState<SettlementType>('driver');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -397,6 +397,28 @@ const Settlements: React.FC = () => {
     }
   }, [selectedWeek]);
 
+  /** Settlement period bounds (prefer periodStart/End over createdAt). */
+  const getSettlementPeriodBounds = (s: Settlement): { start: Date; end: Date } | null => {
+    const startRaw = s.periodStart || (typeof s.period === 'object' ? s.period?.start : undefined);
+    const endRaw = s.periodEnd || (typeof s.period === 'object' ? s.period?.end : undefined);
+    if (startRaw && endRaw) {
+      const start = new Date(startRaw);
+      const end = new Date(endRaw);
+      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        return { start, end };
+      }
+    }
+    const fallback = s.createdAt || s.date;
+    if (!fallback) return null;
+    const d = new Date(fallback);
+    if (Number.isNaN(d.getTime())) return null;
+    return { start: d, end: d };
+  };
+
+  const periodsOverlap = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) =>
+    aStart <= bEnd && aEnd >= bStart;
+
   // Filtered settlements
   const filteredSettlements = useMemo(() => {
     let filtered = settlements;
@@ -416,8 +438,27 @@ const Settlements: React.FC = () => {
     }
     
     if (statusFilter) filtered = filtered.filter(s => s.status === statusFilter);
+
+    if (weekFilter) {
+      const [yearStr, weekStr] = weekFilter.split('-W');
+      const year = parseInt(yearStr, 10);
+      const week = parseInt(weekStr, 10);
+      if (Number.isFinite(year) && Number.isFinite(week)) {
+        const weekStart = getDateOfISOWeek(week, year);
+        weekStart.setHours(0, 0, 0, 0);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        weekEnd.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(s => {
+          const bounds = getSettlementPeriodBounds(s);
+          if (!bounds) return false;
+          return periodsOverlap(bounds.start, bounds.end, weekStart, weekEnd);
+        });
+      }
+    }
+
     return filtered;
-  }, [settlements, settlementType, driverFilter, statusFilter]);
+  }, [settlements, settlementType, driverFilter, statusFilter, weekFilter]);
 
   // Stats — scoped to current settlement type; ignore empty / $NaN shells
   const stats = useMemo(() => {
@@ -436,13 +477,19 @@ const Settlements: React.FC = () => {
     });
     const now = new Date();
     const weekStart = getWeekStart(now);
+    weekStart.setHours(0, 0, 0, 0);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
     const safeNet = (s: Settlement) => {
       const n = parseFloat(String(s.netPay));
       return Number.isFinite(n) ? n : 0;
     };
+    // This Week = settlements whose pay period overlaps the current ISO week
     const thisWeekSettlements = valid.filter(s => {
-      const created = new Date(s.createdAt || s.date || '');
-      return created >= weekStart;
+      const bounds = getSettlementPeriodBounds(s);
+      if (!bounds) return false;
+      return periodsOverlap(bounds.start, bounds.end, weekStart, weekEnd);
     });
     const thisWeekTotal = thisWeekSettlements.reduce((sum, s) => sum + safeNet(s), 0);
     const pending = valid.filter(s => s.status === 'pending').length;
@@ -458,7 +505,7 @@ const Settlements: React.FC = () => {
     };
   }, [settlements, settlementType]);
 
-  // Chart data (scoped to active settlement type)
+  // Chart data (scoped to active settlement type) — bucket by settlement period
   const weeklyTrendsData = useMemo(() => {
     const weeklyData: Record<string, { settlements: number; totalAmount: number }> = {};
     const today = new Date();
@@ -479,10 +526,9 @@ const Settlements: React.FC = () => {
       weeklyData[weekKey] = { settlements: 0, totalAmount: 0 };
 
       typed.forEach(settlement => {
-        const dateValue = settlement.createdAt || settlement.date;
-        if (!dateValue) return;
-        const settlementDate = new Date(dateValue);
-        if (settlementDate >= weekStart && settlementDate <= weekEnd) {
+        const bounds = getSettlementPeriodBounds(settlement);
+        if (!bounds) return;
+        if (periodsOverlap(bounds.start, bounds.end, weekStart, weekEnd)) {
           weeklyData[weekKey].settlements++;
           weeklyData[weekKey].totalAmount += settlement.netPay || 0;
         }
@@ -765,6 +811,18 @@ const Settlements: React.FC = () => {
       setSelectedLoads(allLoadIds);
     } else {
       setSelectedLoads([]);
+    }
+  };
+
+  const handleAdvanceStatus = (settlement: Settlement) => {
+    const status = settlement.status || 'pending';
+    if (status === 'pending') {
+      updateSettlement(settlement.id, { status: 'processed' });
+    } else if (status === 'processed') {
+      updateSettlement(settlement.id, {
+        status: 'paid',
+        paidAt: new Date().toISOString(),
+      });
     }
   };
 
@@ -1115,6 +1173,24 @@ const Settlements: React.FC = () => {
                         >
                           <Eye size={18} />
                         </button>
+                        {(settlement.status || 'pending') === 'pending' && (
+                          <button
+                            onClick={() => handleAdvanceStatus(settlement)}
+                            className="text-amber-600 hover:text-amber-800"
+                            title="Mark Processed"
+                          >
+                            <Clock size={18} />
+                          </button>
+                        )}
+                        {(settlement.status || 'pending') === 'processed' && (
+                          <button
+                            onClick={() => handleAdvanceStatus(settlement)}
+                            className="text-green-600 hover:text-green-800"
+                            title="Mark Paid"
+                          >
+                            <CheckCircle size={18} />
+                          </button>
+                        )}
                         <button 
                           onClick={() => {
                             if (payee) {

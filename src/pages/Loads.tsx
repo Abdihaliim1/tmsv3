@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Calendar, Plus, Search, Eye, Edit, Copy, ChevronLeft, ChevronRight,
   Download, X, MapPin, Truck, DollarSign, FileText, Users, Box, Clock, Check, Trash2
@@ -710,7 +710,8 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
   const { user } = useAuth();
 
   // State
-  const [deliveryFilter, setDeliveryFilter] = useState<'future' | 'today' | 'past'>('today');
+  const [deliveryFilter, setDeliveryFilter] = useState<'future' | 'today' | 'past' | 'all'>('today');
+  const [alertLoadIds, setAlertLoadIds] = useState<string[] | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
@@ -719,24 +720,62 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
   const [viewingLoad, setViewingLoad] = useState<Load | null>(null);
   const [editingLoad, setEditingLoad] = useState<Load | null>(null);
 
+  // Consume Dashboard alert / selected-load navigation keys
+  useEffect(() => {
+    try {
+      const filterOverride = sessionStorage.getItem('loadsDeliveryFilter');
+      if (filterOverride === 'all' || filterOverride === 'future' || filterOverride === 'today' || filterOverride === 'past') {
+        setDeliveryFilter(filterOverride);
+        sessionStorage.removeItem('loadsDeliveryFilter');
+      }
+      const rawAlertIds = sessionStorage.getItem('alertLoadIds');
+      if (rawAlertIds) {
+        const ids = JSON.parse(rawAlertIds);
+        if (Array.isArray(ids) && ids.length > 0) {
+          setAlertLoadIds(ids.filter((id): id is string => typeof id === 'string'));
+          setDeliveryFilter('all');
+        }
+        sessionStorage.removeItem('alertLoadIds');
+      }
+      const selectedId = sessionStorage.getItem('selectedLoadId');
+      if (selectedId) {
+        sessionStorage.removeItem('selectedLoadId');
+        const load = loads.find(l => l.id === selectedId);
+        if (load) {
+          setDeliveryFilter('all');
+          setViewingLoad(load);
+        }
+      }
+    } catch {
+      // ignore bad session values
+    }
+  }, [loads]);
+
   // Filter loads based on delivery date
   const filteredLoads = useMemo(() => {
     if (!loads || !Array.isArray(loads)) return [];
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const alertSet = alertLoadIds ? new Set(alertLoadIds) : null;
 
     return loads.filter(load => {
       if (!load) return false;
 
-      // Date filter
-      const deliveryDate = load.deliveryDate ? new Date(load.deliveryDate) : null;
-      if (deliveryDate) {
-        deliveryDate.setHours(0, 0, 0, 0);
+      if (alertSet && !alertSet.has(load.id)) return false;
 
-        if (deliveryFilter === 'future' && deliveryDate <= today) return false;
-        if (deliveryFilter === 'today' && deliveryDate.getTime() !== today.getTime()) return false;
-        if (deliveryFilter === 'past' && deliveryDate >= today) return false;
+      // Date filter
+      if (deliveryFilter !== 'all') {
+        const deliveryDate = load.deliveryDate ? new Date(load.deliveryDate) : null;
+        if (deliveryDate) {
+          deliveryDate.setHours(0, 0, 0, 0);
+
+          if (deliveryFilter === 'future' && deliveryDate <= today) return false;
+          if (deliveryFilter === 'today' && deliveryDate.getTime() !== today.getTime()) return false;
+          if (deliveryFilter === 'past' && deliveryDate >= today) return false;
+        } else if (deliveryFilter === 'today') {
+          return false;
+        }
       }
 
       // Search filter
@@ -760,7 +799,7 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
       const dateB = b.deliveryDate ? new Date(b.deliveryDate).getTime() : 0;
       return dateB - dateA;
     });
-  }, [loads, deliveryFilter, searchTerm]);
+  }, [loads, deliveryFilter, searchTerm, alertLoadIds]);
 
   // Pagination
   const totalPages = Math.ceil(filteredLoads.length / itemsPerPage);
@@ -861,9 +900,19 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
-          onClick={() => { setDeliveryFilter('future'); setCurrentPage(1); }}
+          onClick={() => { setDeliveryFilter('all'); setAlertLoadIds(null); setCurrentPage(1); }}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            deliveryFilter === 'all'
+              ? 'bg-emerald-600 text-white'
+              : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          All loads{alertLoadIds ? ` (alerts: ${alertLoadIds.length})` : ''}
+        </button>
+        <button
+          onClick={() => { setDeliveryFilter('future'); setAlertLoadIds(null); setCurrentPage(1); }}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             deliveryFilter === 'future'
               ? 'bg-blue-600 text-white'
@@ -873,7 +922,7 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
           Loads delivered in the future
         </button>
         <button
-          onClick={() => { setDeliveryFilter('today'); setCurrentPage(1); }}
+          onClick={() => { setDeliveryFilter('today'); setAlertLoadIds(null); setCurrentPage(1); }}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             deliveryFilter === 'today'
               ? 'bg-yellow-500 text-white'
@@ -883,7 +932,7 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
           Loads delivered today
         </button>
         <button
-          onClick={() => { setDeliveryFilter('past'); setCurrentPage(1); }}
+          onClick={() => { setDeliveryFilter('past'); setAlertLoadIds(null); setCurrentPage(1); }}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             deliveryFilter === 'past'
               ? 'bg-slate-600 text-white'

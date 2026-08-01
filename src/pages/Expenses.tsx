@@ -1,10 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2, X } from 'lucide-react';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useTMS } from '../context/TMSContext';
+import { useTenant } from '../context/TenantContext';
 import { Expense } from '../types';
+import { downloadCSV } from '../services/exportService';
+import { storage } from '../lib/firebase';
 
 const Expenses: React.FC = () => {
   const { drivers, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
+  const { activeTenantId } = useTenant();
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
@@ -102,7 +108,30 @@ const Expenses: React.FC = () => {
           <p className="text-slate-500 mt-1">Track fuel, maintenance, lumper fees, and all receipts</p>
         </div>
         <div className="flex gap-3">
-          <button className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const rows = [
+                ['Date', 'Type', 'Description', 'Driver', 'Truck', 'Amount', 'Status', 'Vendor', 'Receipt'],
+                ...filteredExpenses.map(e => [
+                  e.date || '',
+                  e.type || '',
+                  (e.description || '').replace(/"/g, '""'),
+                  e.driverName || '',
+                  e.truckNumber || e.truckId || '',
+                  String(e.amount ?? 0),
+                  e.status || '',
+                  e.vendor || '',
+                  e.receipt || '',
+                ]),
+              ];
+              const csv = rows
+                .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+                .join('\n');
+              downloadCSV(csv, `expenses-${new Date().toISOString().slice(0, 10)}.csv`);
+            }}
+            className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 flex items-center gap-2"
+          >
             <Download size={18} />
             <span>Export CSV</span>
           </button>
@@ -231,9 +260,20 @@ const Expenses: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {expense.receipt ? (
-                          <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
-                            View Receipt
-                          </button>
+                          expense.receipt.startsWith('http') ? (
+                            <a
+                              href={expense.receipt}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                            >
+                              View Receipt
+                            </a>
+                          ) : (
+                            <span className="text-slate-500 text-sm" title={expense.receipt}>
+                              {expense.receipt}
+                            </span>
+                          )
                         ) : (
                           <span className="text-slate-400 text-sm">No receipt</span>
                         )}
@@ -480,17 +520,36 @@ const Expenses: React.FC = () => {
                 <input
                   type="file"
                   accept="image/*,.pdf"
-                  onChange={(e) => {
+                  disabled={uploadingReceipt}
+                  onChange={async (e) => {
                     const file = e.target.files?.[0];
-                    if (file) {
-                      // In a real app, you'd upload this to storage
-                      // For now, we'll just store the filename
+                    if (!file) return;
+                    setUploadingReceipt(true);
+                    try {
+                      const tenant = activeTenantId || 'default';
+                      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                      const path = `tenants/${tenant}/expenses/receipts/${Date.now()}_${safeName}`;
+                      const storageRef = ref(storage, path);
+                      await uploadBytes(storageRef, file);
+                      const url = await getDownloadURL(storageRef);
+                      setFormData({ ...formData, receipt: url });
+                    } catch (err) {
+                      console.error('Receipt upload failed:', err);
+                      alert('Receipt upload failed. Saving filename only as fallback.');
                       setFormData({ ...formData, receipt: file.name });
+                    } finally {
+                      setUploadingReceipt(false);
                     }
                   }}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
-                <p className="text-xs text-slate-500 mt-1">Upload receipt image or PDF</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {uploadingReceipt
+                    ? 'Uploading receipt…'
+                    : formData.receipt?.startsWith('http')
+                      ? 'Receipt uploaded to storage'
+                      : 'Upload receipt image or PDF'}
+                </p>
               </div>
 
               {/* Status */}

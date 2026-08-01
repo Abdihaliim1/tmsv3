@@ -70,9 +70,23 @@ export function generateLoadAlerts(load: Load): Alert[] {
     }
   }
 
-  // Missing BOL
-  const hasBOL = documents.some(d => d.type === 'BOL');
-  if (!hasBOL) {
+  const isTerminal =
+    load.status === LoadStatus.Invoiced ||
+    load.status === LoadStatus.Paid ||
+    load.status === LoadStatus.Cancelled ||
+    load.status === LoadStatus.TONU;
+  const needsOpsDocs =
+    !isTerminal &&
+    (load.status === LoadStatus.Available ||
+      load.status === LoadStatus.Dispatched ||
+      load.status === LoadStatus.InTransit ||
+      load.status === LoadStatus.Delivered ||
+      load.status === LoadStatus.DeliveredWithBOL ||
+      load.status === LoadStatus.Completed);
+
+  // Missing BOL — only while load is still operational (not every historical load)
+  const hasBOL = documents.some(d => d.type === 'BOL' || d.type === 'bol');
+  if (needsOpsDocs && !hasBOL) {
     alerts.push({
       id: `alert-${load.id}-missing-bol`,
       type: 'MISSING_BOL',
@@ -87,9 +101,14 @@ export function generateLoadAlerts(load: Load): Alert[] {
     });
   }
 
-  // Missing Rate Confirmation
+  // Missing Rate Confirmation — only before / during active dispatch
+  const needsRateCon =
+    !isTerminal &&
+    (load.status === LoadStatus.Available ||
+      load.status === LoadStatus.Dispatched ||
+      load.status === LoadStatus.InTransit);
   const hasRateCon = documents.some(d => d.type === 'RATE_CON');
-  if (!hasRateCon) {
+  if (needsRateCon && !hasRateCon) {
     alerts.push({
       id: `alert-${load.id}-missing-rate-con`,
       type: 'MISSING_RATE_CON',
@@ -333,11 +352,24 @@ export function getAlertCounts(alerts: Alert[]): {
   info: number;
   total: number;
 } {
+  const critical = alerts.filter(a => a.severity === 'critical' && !a.acknowledged).length;
+  const warning = alerts.filter(a => a.severity === 'warning' && !a.acknowledged).length;
+  const info = alerts.filter(a => a.severity === 'info' && !a.acknowledged).length;
+  // Dashboard badge = actionable alerts only (exclude info noise)
   return {
-    critical: alerts.filter(a => a.severity === 'critical' && !a.acknowledged).length,
-    warning: alerts.filter(a => a.severity === 'warning' && !a.acknowledged).length,
-    info: alerts.filter(a => a.severity === 'info' && !a.acknowledged).length,
-    total: alerts.filter(a => !a.acknowledged).length,
+    critical,
+    warning,
+    info,
+    total: critical + warning,
   };
+}
+
+/** Unique load IDs referenced by alerts (for Loads "View all"). */
+export function getAlertedLoadIds(alerts: Alert[]): string[] {
+  const ids = new Set<string>();
+  alerts.forEach(a => {
+    if (a.entityType === 'load' && a.entityId) ids.add(a.entityId);
+  });
+  return Array.from(ids);
 }
 

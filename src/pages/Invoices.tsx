@@ -24,6 +24,7 @@ import { useDebounce } from '../utils/debounce';
 import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
 import { getFactoredLoads, getLoadRevenue } from '../services/businessLogic';
+import { canInvoiceLoad } from '../services/documentService';
 import {
   addPaymentToInvoice,
   calculateTotalPaid,
@@ -314,6 +315,21 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const handleCreateInvoice = () => {
     if (selectedLoadIds.length === 0) {
       alert('Please select at least one load to invoice');
+      return;
+    }
+
+    const blocked = selectedLoads
+      .map(load => ({ load, check: canInvoiceLoad(load) }))
+      .filter(x => !x.check.canInvoice);
+    if (blocked.length > 0) {
+      alert(
+        `Cannot invoice — missing requirements:\n` +
+          blocked
+            .slice(0, 8)
+            .map(x => `• ${x.load.loadNumber}: ${x.check.reason}`)
+            .join('\n') +
+          (blocked.length > 8 ? `\n…and ${blocked.length - 8} more` : '')
+      );
       return;
     }
 

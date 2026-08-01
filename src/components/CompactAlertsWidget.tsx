@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { AlertTriangle, AlertCircle, Info, ChevronRight } from 'lucide-react';
-import { Alert, generateAllAlerts, getAlertCounts } from '../services/alertsService';
+import { Alert, generateAllAlerts, getAlertCounts, getAlertedLoadIds } from '../services/alertsService';
 import { Load, Invoice } from '../types';
 
 interface CompactAlertsWidgetProps {
@@ -29,9 +29,10 @@ const CompactAlertsWidget: React.FC<CompactAlertsWidgetProps> = ({
     return getAlertCounts(allAlerts);
   }, [allAlerts]);
 
-  // Show only top 3 alerts (prioritize critical, then warning)
+  // Show only top 3 actionable alerts (critical/warning)
   const topAlerts = React.useMemo(() => {
-    const sorted = [...allAlerts].sort((a, b) => {
+    const actionable = allAlerts.filter(a => a.severity !== 'info' && !a.acknowledged);
+    const sorted = [...actionable].sort((a, b) => {
       const severityOrder: Record<string, number> = { critical: 3, warning: 2, info: 1 };
       return severityOrder[b.severity] - severityOrder[a.severity];
     });
@@ -83,9 +84,11 @@ const CompactAlertsWidget: React.FC<CompactAlertsWidgetProps> = ({
         {counts.total > topAlerts.length && (
           <button
             onClick={() => {
-              // Navigate to Loads page where alerts are most relevant
               if (onNavigate) {
-                onNavigate('load', '');
+                const loadIds = getAlertedLoadIds(allAlerts);
+                sessionStorage.setItem('alertLoadIds', JSON.stringify(loadIds));
+                sessionStorage.setItem('loadsDeliveryFilter', 'all');
+                onNavigate('load', '__alerts__');
               }
             }}
             className="text-xs font-medium text-blue-600 hover:text-blue-700"

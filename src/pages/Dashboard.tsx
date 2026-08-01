@@ -298,7 +298,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           onNavigate={(entityType, entityId) => {
             if (onNavigate) {
               if (entityType === 'load') {
-                sessionStorage.setItem('selectedLoadId', entityId);
+                if (entityId && entityId !== '__alerts__') {
+                  sessionStorage.setItem('selectedLoadId', entityId);
+                  sessionStorage.setItem('loadsDeliveryFilter', 'all');
+                }
                 onNavigate('Loads' as PageType);
               } else if (entityType === 'invoice') {
                 onNavigate('AccountReceivables' as PageType);

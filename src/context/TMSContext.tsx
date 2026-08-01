@@ -14,6 +14,7 @@ import { updateTask, deleteTask, reconcileTasks, normalizeTenantId } from '../se
 import { useAuth } from './AuthContext';
 import { auditCreate, auditUpdate, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
+import { canDispatchLoad, canInvoiceLoad } from '../services/documentService';
 // Logging and error handling
 import { logger } from '../services/logger';
 import { errorHandler, ErrorSeverity } from '../services/errorHandler';
@@ -641,6 +642,23 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       );
     }
 
+    // Document / assignment guards for status transitions
+    if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+      const merged = { ...oldLoad, ...sanitizedUpdates } as Load;
+      if (sanitizedUpdates.status === LoadStatus.Dispatched) {
+        const check = canDispatchLoad({ ...merged, status: LoadStatus.Available });
+        if (!check.canDispatch) {
+          return Promise.reject(new Error(check.reason || 'Cannot dispatch load'));
+        }
+      }
+      if (sanitizedUpdates.status === LoadStatus.Invoiced) {
+        const check = canInvoiceLoad({ ...merged, invoiceId: undefined, status: LoadStatus.Delivered });
+        if (!check.canInvoice && !oldLoad.invoiceId) {
+          return Promise.reject(new Error(check.reason || 'Cannot invoice load'));
+        }
+      }
+    }
+
     // Get current user for audit logging
     const actorUid = authUser?.uid || 'system';
     const actorRole = authUser?.role || 'viewer';
@@ -953,6 +971,19 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     if (!statusChangeInfo.changedByRole) {
       return Promise.reject(new Error('Role (admin/dispatcher/driver/viewer) is required'));
+    }
+
+    if (newStatus === LoadStatus.Dispatched) {
+      const check = canDispatchLoad({ ...load, status: LoadStatus.Available });
+      if (!check.canDispatch) {
+        return Promise.reject(new Error(check.reason || 'Cannot dispatch load'));
+      }
+    }
+    if (newStatus === LoadStatus.Invoiced && !load.invoiceId) {
+      const check = canInvoiceLoad({ ...load, status: LoadStatus.Delivered, invoiceId: undefined });
+      if (!check.canInvoice) {
+        return Promise.reject(new Error(check.reason || 'Cannot invoice load'));
+      }
     }
 
     const now = new Date().toISOString();

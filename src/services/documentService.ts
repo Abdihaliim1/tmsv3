@@ -14,7 +14,7 @@
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { storage, db } from "../lib/firebase";
-import { TmsDocument, DocumentType, Load } from "../types";
+import { TmsDocument, DocumentType, Load, LoadStatus } from "../types";
 import { auditCreate } from "../data/audit";
 // Tenant ID should be passed as parameter, not derived from subdomain
 
@@ -475,15 +475,27 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
     return { canInvoice: false, reason: 'Load already invoiced' };
   }
 
-  // Check status - must be delivered or completed
-  const invoiceableStatuses = ['delivered', 'completed'];
-  if (!invoiceableStatuses.includes(load.status)) {
+  // Check status - must be delivered (or delivered with BOL / completed)
+  const invoiceableStatuses = [
+    'delivered',
+    'completed',
+    'delivered_with_bol',
+    LoadStatus.Delivered,
+    LoadStatus.Completed,
+    LoadStatus.DeliveredWithBOL,
+  ];
+  if (!invoiceableStatuses.includes(load.status as LoadStatus)) {
     return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
   }
 
   // Check for required documents (POD is typically required for invoicing)
   const documents = load.documents || [];
-  const hasPOD = documents.some(d => d.type === 'pod' || d.type === 'POD');
+  const hasPOD =
+    !!load.podNumber ||
+    documents.some(d => {
+      const t = String(d.type || '').toLowerCase();
+      return t === 'pod' || t.includes('proof');
+    });
 
   if (!hasPOD) {
     return { canInvoice: false, reason: 'POD document required for invoicing' };
@@ -510,7 +522,7 @@ export function canDispatchLoad(load: Load): { canDispatch: boolean; reason?: st
   }
 
   // Check status - must be available
-  if (load.status !== 'available') {
+  if (String(load.status) !== 'available') {
     return { canDispatch: false, reason: `Load status must be available (current: ${load.status})` };
   }
 
@@ -522,6 +534,12 @@ export function canDispatchLoad(load: Load): { canDispatch: boolean; reason?: st
   // Check for truck
   if (!load.truckId) {
     return { canDispatch: false, reason: 'Truck not assigned' };
+  }
+
+  const documents = load.documents || [];
+  const hasRateCon = documents.some(d => String(d.type || '').toUpperCase() === 'RATE_CON');
+  if (!hasRateCon) {
+    return { canDispatch: false, reason: 'Rate Confirmation document required before dispatch' };
   }
 
   return { canDispatch: true };
