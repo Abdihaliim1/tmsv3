@@ -369,4 +369,96 @@ export const deleteTrip = (tenantId: string, id: string) => deleteDocument(tenan
 export const deleteTaskDoc = (tenantId: string, id: string) => deleteDocument(tenantId, 'tasks', id);
 export const loadTasksCollection = (tenantId: string) => loadCollection<Task>(tenantId, 'tasks');
 
+/**
+ * Atomically save a parent document (invoice/settlement) with linked load updates.
+ * All-or-nothing — avoids orphan invoice/settlement without load links.
+ */
+export async function commitParentWithLinkedLoads(params: {
+  tenantId: string;
+  parentCollection: 'invoices' | 'settlements';
+  parent: { id: string } & Record<string, unknown>;
+  linkedLoads: Array<{ id: string } & Record<string, unknown>>;
+}): Promise<void> {
+  const { tenantId, parentCollection, parent, linkedLoads } = params;
+  const batch = writeBatch(db);
+  const now = new Date().toISOString();
+
+  batch.set(
+    getDocRef(tenantId, parentCollection, parent.id),
+    removeUndefinedValues({ ...parent, updatedAt: now }),
+    { merge: true }
+  );
+
+  for (const load of linkedLoads) {
+    batch.set(
+      getDocRef(tenantId, 'loads', load.id),
+      removeUndefinedValues({ ...load, updatedAt: now }),
+      { merge: true }
+    );
+  }
+
+  await batch.commit();
+  logger.debug(`Committed ${parentCollection}/${parent.id} with ${linkedLoads.length} load links`, {
+    tenantId,
+    parentCollection,
+    parentId: parent.id,
+  });
+}
+
+/**
+ * Atomically delete a settlement and clear settlement link fields on loads.
+ */
+export async function deleteSettlementWithUnlink(params: {
+  tenantId: string;
+  settlementId: string;
+  loadClears: Array<{
+    loadId: string;
+    fields: Array<'settlementId' | 'settlementNumber' | 'dispatcherSettlementId' | 'dispatcherSettlementNumber'>;
+  }>;
+}): Promise<void> {
+  const { tenantId, settlementId, loadClears } = params;
+  const batch = writeBatch(db);
+  batch.delete(getDocRef(tenantId, 'settlements', settlementId));
+  for (const clear of loadClears) {
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    clear.fields.forEach(f => {
+      updates[f] = deleteField();
+    });
+    batch.update(getDocRef(tenantId, 'loads', clear.loadId), updates);
+  }
+  await batch.commit();
+}
+
+/**
+ * Atomically delete an invoice and clear invoice links on loads.
+ */
+export async function deleteInvoiceWithUnlink(params: {
+  tenantId: string;
+  invoiceId: string;
+  loadIds: string[];
+  restoredStatusByLoadId?: Record<string, string>;
+}): Promise<void> {
+  const { tenantId, invoiceId, loadIds, restoredStatusByLoadId = {} } = params;
+  const batch = writeBatch(db);
+  batch.delete(getDocRef(tenantId, 'invoices', invoiceId));
+  for (const loadId of loadIds) {
+    const updates: Record<string, unknown> = {
+      updatedAt: new Date().toISOString(),
+      invoiceId: deleteField(),
+      invoiceNumber: deleteField(),
+      invoicedAt: deleteField(),
+      lockedAt: deleteField(),
+      paymentReceivedDate: deleteField(),
+      paymentAmount: deleteField(),
+      isLocked: false,
+      paymentReceived: false,
+    };
+    if (restoredStatusByLoadId[loadId]) {
+      updates.status = restoredStatusByLoadId[loadId];
+    }
+    batch.update(getDocRef(tenantId, 'loads', loadId), updates);
+  }
+  await batch.commit();
+}
+
 

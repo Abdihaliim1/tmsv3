@@ -502,8 +502,18 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     }
 
     // Normal submit (new load or non-material changes to delivered load)
-    onSubmit(formData);
-    onClose();
+    try {
+      const result = onSubmit(formData) as unknown;
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        void (result as Promise<unknown>).then(() => onClose()).catch(() => {
+          /* parent shows error; keep modal open */
+        });
+        return;
+      }
+      onClose();
+    } catch {
+      /* keep open on sync throw */
+    }
   };
 
   // Handle adjustment confirmation
@@ -515,16 +525,48 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
     // Submit with adjustment reason
     // The reason will be passed to the updateLoad function which logs it
-    onSubmit({ ...formData, adjustmentReason: adjustmentReason.trim() } as any);
-    setShowAdjustmentModal(false);
-    setAdjustmentReason('');
-    setPendingChanges(null);
+    try {
+      const result = onSubmit({
+        ...formData,
+        adjustmentReason: adjustmentReason.trim(),
+      } as NewLoadInput & { adjustmentReason: string }) as unknown;
+      setShowAdjustmentModal(false);
+      setAdjustmentReason('');
+      setPendingChanges(null);
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        void (result as Promise<unknown>).then(() => onClose()).catch(() => {
+          /* keep open */
+        });
+        return;
+      }
+      onClose();
+    } catch {
+      /* keep open */
+    }
+  };
+
+  const requestClose = () => {
+    const dirty =
+      JSON.stringify({
+        ...formData,
+        documents: undefined,
+      }) !==
+      JSON.stringify({
+        ...(editingLoad || initialState),
+        documents: undefined,
+        id: undefined,
+        loadNumber: undefined,
+        createdAt: undefined,
+        updatedAt: undefined,
+        statusHistory: undefined,
+      });
+    if (dirty && !window.confirm('Discard unsaved changes?')) return;
     onClose();
   };
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
-      onClose();
+      requestClose();
     }
   };
 
@@ -624,7 +666,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
           <h2 className="text-lg font-semibold text-slate-900">{editingLoad ? 'Edit Load' : 'Create New Load'}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+          <button onClick={requestClose} className="text-slate-400 hover:text-slate-600 transition-colors">
             <X size={20} />
           </button>
         </div>
@@ -1420,6 +1462,24 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                   </div>
 
                   <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-600">Commission Base</label>
+                    <select
+                      name="dispatcherCommissionBase"
+                      value={formData.dispatcherCommissionBase || 'gross'}
+                      onChange={(e) =>
+                        setFormData(prev => ({
+                          ...prev,
+                          dispatcherCommissionBase: e.target.value as 'gross' | 'linehaul',
+                        }))
+                      }
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    >
+                      <option value="gross">Total Income (linehaul + FSC + accessorials)</option>
+                      <option value="linehaul">Linehaul only</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-600">
                       Commission Rate
                       {formData.dispatcherCommissionType === 'percentage' && ' (%)'}
@@ -1528,7 +1588,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
         {/* Footer Actions */}
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
+          <button type="button" onClick={requestClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
             Cancel
           </button>
           <button form="add-load-form" type="submit" className="btn-primary px-4 py-2 text-sm font-medium rounded-lg shadow-sm transition-colors">

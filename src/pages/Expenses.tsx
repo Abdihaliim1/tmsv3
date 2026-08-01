@@ -6,6 +6,7 @@ import { useTenant } from '../context/TenantContext';
 import { Expense } from '../types';
 import { downloadCSV } from '../services/exportService';
 import { storage } from '../lib/firebase';
+import { getTodayDateString } from '../utils/dateOnly';
 
 const Expenses: React.FC = () => {
   const { drivers, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
@@ -20,11 +21,7 @@ const Expenses: React.FC = () => {
   
   // Form state
   const [formData, setFormData] = useState<Omit<Expense, 'id'>>({
-    date: new Date().toISOString().split('T')[0],
-    type: 'fuel',
-    description: '',
-    amount: 0,
-    status: 'pending',
+    date: getTodayDateString(),
   });
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
@@ -396,11 +393,7 @@ const Expenses: React.FC = () => {
               }
               // Reset form
               setFormData({
-                date: new Date().toISOString().split('T')[0],
-                type: 'fuel',
-                description: '',
-                amount: 0,
-                status: 'pending',
+                date: getTodayDateString(),
               });
               setSelectedDriverId('');
               setSelectedTruckId('');
@@ -577,11 +570,7 @@ const Expenses: React.FC = () => {
                     setIsEditModalOpen(false);
                     setEditingExpenseId(null);
                     setFormData({
-                      date: new Date().toISOString().split('T')[0],
-                      type: 'fuel',
-                      description: '',
-                      amount: 0,
-                      status: 'pending',
+                date: getTodayDateString(),
                     });
                     setSelectedDriverId('');
                     setSelectedTruckId('');

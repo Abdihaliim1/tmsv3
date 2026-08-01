@@ -541,6 +541,14 @@ export function canDispatchLoad(load: Load): { canDispatch: boolean; reason?: st
     return { canDispatch: false, reason: 'Truck not assigned' };
   }
 
+  if (!load.dispatcherId) {
+    return { canDispatch: false, reason: 'Dispatcher not assigned' };
+  }
+
+  if (!load.trailerId && !load.trailerNumber) {
+    return { canDispatch: false, reason: 'Trailer not assigned' };
+  }
+
   const documents = load.documents || [];
   const hasRateCon = documents.some(d => String(d.type || '').toUpperCase() === 'RATE_CON');
   if (!hasRateCon) {

@@ -70,4 +70,14 @@ describe('allocatePaymentAcrossLoads', () => {
     expect(alloc.every(a => a.paymentAmount === 10000)).toBe(false);
     expect(alloc.every(a => a.paymentAmount === 5000)).toBe(true);
   });
+
+  it('puts rounding remainder on the last load so allocations sum exactly', () => {
+    const alloc = allocatePaymentAcrossLoads(1000, 100, [
+      { loadId: 'A', revenue: 333 },
+      { loadId: 'B', revenue: 333 },
+      { loadId: 'C', revenue: 334 },
+    ]);
+    const sum = alloc.reduce((s, a) => s + a.paymentAmount, 0);
+    expect(sum).toBe(100);
+  });
 });

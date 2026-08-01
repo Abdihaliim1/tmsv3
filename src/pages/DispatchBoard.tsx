@@ -147,19 +147,33 @@ const LoadCard: React.FC<LoadCardProps> = ({
         </span>
       </div>
 
-      {/* Driver */}
-      <div className="flex items-center gap-2 mb-3 text-sm">
-        <User className="w-4 h-4 text-slate-400" />
-        <span className="text-slate-700">
-          {load.driverName || (
+      {/* Driver / Dispatcher */}
+      <div className="space-y-1 mb-3 text-sm">
+        <div className="flex items-center gap-2">
+          <User className="w-4 h-4 text-slate-400" />
+          <span className="text-slate-700">
+            {load.driverName || (
+              <button
+                onClick={() => onAssignDriver(load.id)}
+                className="text-blue-600 hover:text-blue-700 underline"
+              >
+                Assign Driver
+              </button>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 pl-6 text-xs text-slate-500">
+          {load.dispatcherName ? (
+            <span>Dispatcher: {load.dispatcherName}</span>
+          ) : (
             <button
               onClick={() => onAssignDriver(load.id)}
               className="text-blue-600 hover:text-blue-700 underline"
             >
-              Assign Driver
+              Assign Dispatcher
             </button>
           )}
-        </span>
+        </div>
       </div>
 
       {/* Financial Info */}
@@ -539,18 +553,20 @@ const DispatchBoard: React.FC = () => {
           editingLoad={editingLoad}
           onSubmit={async (loadData) => {
             if (editingLoad) {
+              const adjustmentReason = (loadData as { adjustmentReason?: string }).adjustmentReason;
+              const cleanLoadData = { ...loadData };
+              delete (cleanLoadData as { adjustmentReason?: string }).adjustmentReason;
               try {
-                // Extract adjustment reason if provided (from adjustment workflow)
-                const adjustmentReason = (loadData as any).adjustmentReason;
-                const cleanLoadData = { ...loadData };
-                delete (cleanLoadData as any).adjustmentReason;
-
                 await updateLoad(editingLoad.id, cleanLoadData, adjustmentReason);
                 toast.success('Load Updated', 'Load details saved successfully');
-              } catch (error: any) {
-                toast.error('Update Failed', error.message || 'Failed to update load.');
-                console.error('Load update error:', error);
+                setIsModalOpen(false);
+                setEditingLoad(null);
+              } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : 'Failed to update load.';
+                toast.error('Update Failed', message);
+                throw error; // keep AddLoadModal open
               }
+              return;
             }
             setIsModalOpen(false);
             setEditingLoad(null);

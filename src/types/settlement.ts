@@ -47,6 +47,10 @@ export interface Settlement {
     layover?: number;
     tonu?: number;
     dispatchFee?: number;
+    /** Immutable dispatcher commission metadata at settlement time */
+    commissionType?: 'percentage' | 'flat_fee' | 'per_mile';
+    commissionRate?: number;
+    commissionBase?: 'gross' | 'linehaul';
   }>;
   /** Pay rate captured at generation time (per-mile $, percent as stored, or flat). */
   payRateSnapshot?: number;

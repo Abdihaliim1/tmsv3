@@ -7,7 +7,8 @@
 import React, { useState, useMemo } from 'react';
 import { X, User, Truck, Search } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Load, Driver } from '../types';
+import { Load } from '../types';
+import { withDispatcherCommission } from '../services/businessLogic';
 
 interface DriverAssignmentModalProps {
   isOpen: boolean;
@@ -22,11 +23,17 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
   load,
   onAssign,
 }) => {
-  const { drivers, trucks, updateLoad } = useTMS();
+  const { drivers, trucks, trailers, employees, updateLoad } = useTMS();
   const [selectedDriverId, setSelectedDriverId] = useState<string>(load.driverId || '');
   const [selectedTruckId, setSelectedTruckId] = useState<string>(load.truckId || '');
+  const [selectedTrailerId, setSelectedTrailerId] = useState<string>(load.trailerId || '');
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState<string>(load.dispatcherId || '');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const dispatchers = useMemo(
+    () => employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active'),
+    [employees]
+  );
 
   // Filter active drivers
   const activeDrivers = useMemo(() => {
@@ -56,15 +63,30 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
     try {
       const driver = drivers.find(d => d.id === selectedDriverId);
       const truck = trucks.find(t => t.id === selectedTruckId);
+      const trailer = trailers.find(t => t.id === selectedTrailerId);
+      const dispatcher = employees.find(e => e.id === selectedDispatcherId);
 
-      const updates: Partial<Load> = {
+      let updates: Partial<Load> = {
         driverId: selectedDriverId,
         driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
       };
 
       if (selectedTruckId) {
         updates.truckId = selectedTruckId;
-        updates.truckNumber = truck?.truckNumber;
+        updates.truckNumber = truck?.truckNumber || truck?.number;
+      }
+      if (selectedTrailerId) {
+        updates.trailerId = selectedTrailerId;
+        updates.trailerNumber = trailer?.trailerNumber || trailer?.number;
+      }
+      if (selectedDispatcherId && dispatcher) {
+        updates = {
+          ...updates,
+          ...withDispatcherCommission(
+            { ...load, ...updates, dispatcherId: selectedDispatcherId },
+            dispatcher
+          ),
+        };
       }
 
       await updateLoad(load.id, updates);
@@ -90,7 +112,7 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Assign Driver</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Assign Crew</h2>
             <p className="text-sm text-slate-500">Load {load.loadNumber}</p>
           </div>
           <button
@@ -165,11 +187,33 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
             </div>
           </div>
 
-          {/* Truck Selection (Optional) */}
+          {/* Dispatcher */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Assign Dispatcher
+            </label>
+            <select
+              value={selectedDispatcherId}
+              onChange={(e) => setSelectedDispatcherId(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">Select dispatcher...</option>
+              {dispatchers.map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.firstName} {d.lastName}
+                  {d.dispatcherCommissionRate
+                    ? ` (${d.dispatcherCommissionRate}${d.dispatcherCommissionType === 'percentage' ? '%' : ''})`
+                    : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Truck Selection */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">
               <Truck className="w-4 h-4 inline mr-1" />
-              Assign Truck (Optional)
+              Assign Truck
             </label>
             <select
               value={selectedTruckId}
@@ -179,7 +223,26 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
               <option value="">Select a truck...</option>
               {availableTrucks.map((truck) => (
                 <option key={truck.id} value={truck.id}>
-                  {truck.truckNumber} - {truck.make} {truck.model} ({truck.year || 'N/A'})
+                  {truck.truckNumber || truck.number} - {truck.make} {truck.model} ({truck.year || 'N/A'})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Trailer */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Assign Trailer
+            </label>
+            <select
+              value={selectedTrailerId}
+              onChange={(e) => setSelectedTrailerId(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">Select a trailer...</option>
+              {trailers.map(trailer => (
+                <option key={trailer.id} value={trailer.id}>
+                  {trailer.trailerNumber || trailer.number || trailer.id}
                 </option>
               ))}
             </select>
@@ -217,7 +280,7 @@ const DriverAssignmentModal: React.FC<DriverAssignmentModalProps> = ({
                 Assigning...
               </>
             ) : (
-              'Assign Driver'
+              'Save Assignment'
             )}
           </button>
         </div>

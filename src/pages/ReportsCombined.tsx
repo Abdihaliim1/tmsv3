@@ -22,6 +22,7 @@ import {
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import { sumStateMiles } from '../services/stateMiles';
+import { formatExpenseCategoryLabel, normalizeExpenseCategory } from '../services/expenseCategory';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
@@ -1411,10 +1412,12 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
     const driverExpenses = accrued.total;
     const isEstimated = accrued.isEstimated;
 
-    // Calculate other operating expenses by category
+    // Calculate other operating expenses by canonical category (no overlap)
     const expensesByCategory: Record<string, number> = {};
     filteredExpenses.forEach(expense => {
-      const category = expense.category || expense.type || 'Other';
+      const category = formatExpenseCategoryLabel(
+        normalizeExpenseCategory(expense.type, expense.category)
+      );
       expensesByCategory[category] = (expensesByCategory[category] || 0) + (expense.amount || 0);
     });
 
@@ -1577,6 +1580,48 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
           Print
         </button>
         <button
+          type="button"
+          onClick={() => {
+            if (!reportData) return;
+            const rows: string[][] = [
+              ['Section', 'Line', 'Amount'],
+              ['Income', 'Primary Fees', String(reportData.income.primaryFees)],
+              ['Income', 'Fuel Surcharge', String(reportData.income.fuelSurcharge)],
+              ['Income', 'Accessory Fees', String(reportData.income.accessoryFees)],
+              ['Income', 'Other Revenue', String(reportData.income.otherRevenue)],
+              ['Income', 'Total Income', String(reportData.income.totalIncome)],
+              [
+                'Expense',
+                reportData.expenses.isEstimated ? 'Drivers (Est.)' : 'Drivers',
+                String(reportData.expenses.drivers),
+              ],
+              [
+                'Expense',
+                reportData.expenses.dispatcherEstimated
+                  ? 'Dispatcher Commission (Estimated)'
+                  : 'Dispatcher Commission',
+                String(reportData.expenses.dispatcher),
+              ],
+              ['Expense', 'Factoring Fees', String(reportData.expenses.factoring)],
+              ...Object.entries(reportData.expenses.byCategory).map(([cat, amt]) => [
+                'Expense',
+                cat,
+                String(amt),
+              ]),
+              ['Expense', 'Total Expenses', String(reportData.expenses.total)],
+              ['Profit', 'Profit / (Loss)', String(reportData.profitLoss)],
+            ];
+            const csv = rows
+              .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+              .join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pnl-${beginDate}-to-${endDate}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
           className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors border border-slate-600"
         >
           <Download className="w-4 h-4" />

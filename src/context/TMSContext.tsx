@@ -34,6 +34,7 @@ import {
   saveExpense, saveFactoringCompany, saveFactoringTransaction, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
   deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
+  commitParentWithLinkedLoads, deleteSettlementWithUnlink, deleteInvoiceWithUnlink,
   clearLoadSettlementLinks,
   clearLoadInvoiceLinks,
   deleteTruck as firestoreDeleteTruck, deleteTrailer as firestoreDeleteTrailer,
@@ -107,7 +108,10 @@ interface TMSContextType {
   addInvoice: (invoice: Omit<Invoice, 'id'>) => void;
   updateInvoice: (id: string, invoice: Partial<Invoice>) => void;
   deleteInvoice: (id: string, force?: boolean) => void;
-  addSettlement: (settlement: Omit<Settlement, 'id'>) => string;
+  addSettlement: (
+    settlement: Omit<Settlement, 'id'>,
+    options?: { linkLoadIds?: string[]; linkAs?: 'driver' | 'dispatcher' }
+  ) => Promise<string>;
   updateSettlement: (id: string, settlement: Partial<Settlement>) => void;
   deleteSettlement: (id: string, force?: boolean) => void;
   addExpense: (expense: NewExpenseInput) => void;
@@ -203,7 +207,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addInvoice: () => { },
         updateInvoice: () => { },
         deleteInvoice: () => { },
-        addSettlement: () => '',
+        addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },
         addExpense: () => { },
@@ -820,10 +824,27 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         ? withDispatcherCommission({ ...oldLoad, ...sanitizedUpdates }, dispatcher)
         : {};
 
+    // Append statusHistory when status changes via generic edit (same trail as updateLoadStatus)
+    let statusHistory = oldLoad.statusHistory || [];
+    if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+      statusHistory = [
+        ...statusHistory,
+        {
+          status: sanitizedUpdates.status as LoadStatus,
+          timestamp: new Date().toISOString(),
+          changedBy: authUser?.displayName || authUser?.email || 'system',
+          changedByRole: (authUser?.role as 'admin' | 'dispatcher' | 'driver' | 'viewer') || 'system',
+          changedByUserId: actorUid,
+          note: reason?.trim() || 'Status changed via load edit',
+        },
+      ];
+    }
+
     const updatedLoad = {
       ...oldLoad,
       ...sanitizedUpdates,
       ...commissionPatch,
+      statusHistory,
       adjustmentLog: adjustmentEntries.length > 0 ? newAdjustmentLog : oldLoad.adjustmentLog,
       isLocked: shouldLock
         ? true
@@ -1680,11 +1701,10 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       invoiceNumber,
       createdAt: new Date().toISOString(),
     };
-    setInvoices(prev => [newInvoice, ...prev]);
-    saveInvoice(tenantId || 'default', newInvoice).catch(e => console.error('Failed to save invoice:', e));
 
     // Link invoice to loads and update Load status to 'invoiced' (TruckingOffice Step 6)
     const invoicedAt = new Date().toISOString();
+    const linkedLoadDocs: Load[] = [];
     const nextLoads =
       invoiceLoadIds.length > 0
         ? loads.map(load => {
@@ -1701,17 +1721,49 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
                   factoredDate: newInvoice.factoredDate || newInvoice.factorSubmittedDate,
                 }
               : {};
-            return {
+            const linked: Load = {
               ...load,
               ...factoredPatch,
               invoiceId: newInvoice.id,
               invoiceNumber: newInvoice.invoiceNumber,
               invoicedAt,
               status: LoadStatus.Invoiced,
+              statusHistory: [
+                ...(load.statusHistory || []),
+                {
+                  status: LoadStatus.Invoiced,
+                  timestamp: invoicedAt,
+                  changedBy: authUser?.displayName || authUser?.email || 'system',
+                  changedByRole: (authUser?.role as 'admin' | 'dispatcher' | 'driver' | 'viewer') || 'system',
+                  changedByUserId: authUser?.uid,
+                  note: `Invoiced as ${newInvoice.invoiceNumber}`,
+                },
+              ],
             };
+            linkedLoadDocs.push(linked);
+            return linked;
           })
         : loads;
 
+    // Atomic: invoice + all load links succeed or fail together
+    try {
+      await commitParentWithLinkedLoads({
+        tenantId: tenantId || 'default',
+        parentCollection: 'invoices',
+        parent: newInvoice as unknown as { id: string } & Record<string, unknown>,
+        linkedLoads: linkedLoadDocs as unknown as Array<{ id: string } & Record<string, unknown>>,
+      });
+    } catch (e) {
+      await releaseUniqueKey({
+        tenantId: tenantId || 'default',
+        kind: 'invoiceNumber',
+        value: invoiceNumber,
+        entityId: invoiceId,
+      }).catch(() => {});
+      throw e;
+    }
+
+    setInvoices(prev => [newInvoice, ...prev]);
     if (invoiceLoadIds.length > 0) {
       setLoads(nextLoads);
 
@@ -1811,25 +1863,24 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
     }
 
-    // Proceed with deletion and unlock/unlink loads
+    // Proceed with deletion and unlock/unlink loads atomically
     const tid = tenantId || 'default';
-    const linkedIds = new Set<string>([
+    const linkedIds = Array.from(new Set<string>([
       ...(invoice.loadId ? [invoice.loadId] : []),
       ...(invoice.loadIds || []),
-    ]);
+      ...loads.filter(l => l.invoiceId === id).map(l => l.id),
+    ]));
 
-    setLoads(prev => prev.map(load => {
-      const isLinked = load.invoiceId === id || linkedIds.has(load.id);
+    const restoredStatusByLoadId: Record<string, string> = {};
+    const nextLoads = loads.map(load => {
+      const isLinked = load.invoiceId === id || linkedIds.includes(load.id);
       if (!isLinked) return load;
 
       const restoredStatus =
         load.status === LoadStatus.Invoiced || load.status === LoadStatus.Paid
           ? LoadStatus.Delivered
           : load.status;
-
-      clearLoadInvoiceLinks(tid, load.id, restoredStatus).catch(e =>
-        console.error('Failed to unlock load after invoice delete:', load.id, e)
-      );
+      restoredStatusByLoadId[load.id] = restoredStatus;
 
       return {
         ...load,
@@ -1843,10 +1894,23 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         paymentAmount: undefined,
         status: restoredStatus,
       };
-    }));
+    });
 
+    void deleteInvoiceWithUnlink({
+      tenantId: tid,
+      invoiceId: id,
+      loadIds: linkedIds,
+      restoredStatusByLoadId,
+    }).catch(e => {
+      console.error('Failed atomic invoice delete; falling back', e);
+      firestoreDeleteInvoice(tid, id).catch(() => {});
+      linkedIds.forEach(loadId => {
+        clearLoadInvoiceLinks(tid, loadId, restoredStatusByLoadId[loadId]).catch(() => {});
+      });
+    });
+
+    setLoads(nextLoads);
     setInvoices(prev => prev.filter(inv => inv.id !== id));
-    firestoreDeleteInvoice(tid, id).catch(e => console.error('Failed to delete invoice:', e));
     if (invoice.invoiceNumber) {
       releaseUniqueKey({
         tenantId: tid,
@@ -1857,7 +1921,10 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
   };
 
-  const addSettlement = (input: Omit<Settlement, 'id'>): string => {
+  const addSettlement = async (
+    input: Omit<Settlement, 'id'>,
+    options?: { linkLoadIds?: string[]; linkAs?: 'driver' | 'dispatcher' }
+  ): Promise<string> => {
     const settlementId = generateShortId();
     const settlementNumber =
       input.settlementNumber || `ST-${new Date().getFullYear()}-${settlements.length + 1001}`;
@@ -1867,15 +1934,57 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       settlementNumber,
       createdAt: input.createdAt || new Date().toISOString(),
     };
-    // Claim number (fire-and-await via void); Settlements page also awaits before linking
-    void claimUniqueKey({
+
+    await claimUniqueKey({
       tenantId: tenantId || 'default',
       kind: 'settlementNumber',
       value: settlementNumber,
       entityId: settlementId,
-    }).catch(e => console.error('Failed to claim settlement number:', e));
+    });
+
+    const linkLoadIds = options?.linkLoadIds || input.loadIds || [];
+    const linkAs = options?.linkAs || (input.type === 'dispatcher' ? 'dispatcher' : 'driver');
+    const linkedLoadDocs: Load[] = [];
+
+    const nextLoads =
+      linkLoadIds.length > 0
+        ? loads.map(load => {
+            if (!linkLoadIds.includes(load.id)) return load;
+            const patch =
+              linkAs === 'dispatcher'
+                ? {
+                    dispatcherSettlementId: settlementId,
+                    dispatcherSettlementNumber: settlementNumber,
+                  }
+                : {
+                    settlementId,
+                    settlementNumber,
+                  };
+            const linked = { ...load, ...patch };
+            linkedLoadDocs.push(linked);
+            return linked;
+          })
+        : loads;
+
+    try {
+      await commitParentWithLinkedLoads({
+        tenantId: tenantId || 'default',
+        parentCollection: 'settlements',
+        parent: newSettlement as unknown as { id: string } & Record<string, unknown>,
+        linkedLoads: linkedLoadDocs as unknown as Array<{ id: string } & Record<string, unknown>>,
+      });
+    } catch (e) {
+      await releaseUniqueKey({
+        tenantId: tenantId || 'default',
+        kind: 'settlementNumber',
+        value: settlementNumber,
+        entityId: settlementId,
+      }).catch(() => {});
+      throw e;
+    }
+
     setSettlements(prev => [newSettlement, ...prev]);
-    saveSettlement(tenantId || 'default', newSettlement).catch(e => console.error('Failed to save settlement:', e));
+    if (linkLoadIds.length > 0) setLoads(nextLoads);
     return newSettlement.id;
   };
 
@@ -1921,42 +2030,51 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
     }
 
-    // Proceed with deletion and cleanup
-    setSettlements(prev => prev.filter(settlement => settlement.id !== id));
-    firestoreDeleteSettlement(tenantId || 'default', id).catch(e => console.error('Failed to delete settlement:', e));
+    // Proceed with atomic deletion + unlink
+    const tid = tenantId || 'default';
+    const loadClears: Array<{
+      loadId: string;
+      fields: Array<'settlementId' | 'settlementNumber' | 'dispatcherSettlementId' | 'dispatcherSettlementNumber'>;
+    }> = [];
+
+    const nextLoads = loads.map(load => {
+      let next = load;
+      const fields: Array<
+        'settlementId' | 'settlementNumber' | 'dispatcherSettlementId' | 'dispatcherSettlementNumber'
+      > = [];
+
+      if (load.settlementId === id) {
+        next = { ...next, settlementId: undefined, settlementNumber: undefined };
+        fields.push('settlementId', 'settlementNumber');
+      }
+      if (load.dispatcherSettlementId === id) {
+        next = { ...next, dispatcherSettlementId: undefined, dispatcherSettlementNumber: undefined };
+        fields.push('dispatcherSettlementId', 'dispatcherSettlementNumber');
+      }
+      if (fields.length > 0) {
+        loadClears.push({ loadId: load.id, fields });
+      }
+      return next;
+    });
+
+    void deleteSettlementWithUnlink({ tenantId: tid, settlementId: id, loadClears }).catch(e => {
+      console.error('Failed atomic settlement delete; falling back', e);
+      firestoreDeleteSettlement(tid, id).catch(() => {});
+      loadClears.forEach(clear => {
+        clearLoadSettlementLinks(tid, clear.loadId, clear.fields).catch(() => {});
+      });
+    });
+
+    setSettlements(prev => prev.filter(s => s.id !== id));
+    setLoads(nextLoads);
     if (settlement.settlementNumber) {
       releaseUniqueKey({
-        tenantId: tenantId || 'default',
+        tenantId: tid,
         kind: 'settlementNumber',
         value: settlement.settlementNumber,
         entityId: id,
       }).catch(() => {});
     }
-
-    // Unlink loads in memory + persist Field deletes (undefined + merge leaves stale links)
-    const tid = tenantId || 'default';
-    setLoads(prev => prev.map(load => {
-      let next = load;
-      const driverFields: Array<'settlementId' | 'settlementNumber'> = [];
-      const dispatcherFields: Array<'dispatcherSettlementId' | 'dispatcherSettlementNumber'> = [];
-
-      if (load.settlementId === id) {
-        next = { ...next, settlementId: undefined, settlementNumber: undefined };
-        driverFields.push('settlementId', 'settlementNumber');
-      }
-      if (load.dispatcherSettlementId === id) {
-        next = { ...next, dispatcherSettlementId: undefined, dispatcherSettlementNumber: undefined };
-        dispatcherFields.push('dispatcherSettlementId', 'dispatcherSettlementNumber');
-      }
-
-      const fields = [...driverFields, ...dispatcherFields];
-      if (fields.length > 0) {
-        clearLoadSettlementLinks(tid, load.id, fields).catch(e =>
-          console.error('Failed to unlink settlement from load:', load.id, e)
-        );
-      }
-      return next;
-    }));
   };
 
   const addExpense = (input: NewExpenseInput) => {
@@ -2725,6 +2843,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       return;
     }
 
+    if (isLoadLocked(load) && tripId !== null && load.tripId && load.tripId !== tripId) {
+      console.error('Cannot reassign delivered/locked load to another trip without adjustment');
+      alert(
+        `Load ${load.loadNumber} is locked (delivered). Unlink or edit with an adjustment reason before reassigning trips.`
+      );
+      return;
+    }
+
     const now = new Date().toISOString();
     let loadUpdates: Partial<Load> = { updatedAt: now };
 
@@ -2994,7 +3120,7 @@ export const useTMS = () => {
         addInvoice: () => { },
         updateInvoice: () => { },
         deleteInvoice: () => { },
-        addSettlement: () => '',
+        addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },
         addExpense: () => { },

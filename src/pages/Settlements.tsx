@@ -21,7 +21,15 @@ import {
   type SettlementLoadPay,
   type SettlementMoneyInputs,
 } from '../services/settlementMath';
-import { formatDateOnly } from '../utils/dateOnly';
+import { formatDateOnly, formatLocalDate } from '../utils/dateOnly';
+import {
+  getISOWeekParts,
+  getDateOfISOWeek,
+  shiftISOWeekKey,
+  currentISOWeekKey,
+} from '../utils/isoWeek';
+import { canPerformAction } from '../services/rbac';
+import { useAuth } from '../context/AuthContext';
 
 type SettlementType = 'driver' | 'dispatcher';
 
@@ -114,8 +122,11 @@ function isLoadSettledForType(
 }
 
 const Settlements: React.FC = () => {
-  const { settlements, drivers, loads, addSettlement, deleteSettlement, updateSettlement, updateLoad, employees } = useTMS();
+  const { settlements, drivers, loads, addSettlement, deleteSettlement, updateSettlement, employees } = useTMS();
   const { companyProfile } = useCompany();
+  const { role } = useAuth();
+  const canCreateSettlement = canPerformAction(role || 'viewer', 'settlements', 'create');
+  const canDeleteSettlement = canPerformAction(role || 'viewer', 'settlements', 'delete');
   const [settlementType, setSettlementType] = useState<SettlementType>('driver');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -137,25 +148,9 @@ const Settlements: React.FC = () => {
   const [previewSettlement, setPreviewSettlement] = useState<Settlement | null>(null);
 
   // Helper functions (defined before useMemo and useEffect)
-  const getWeekNumber = (date: Date): number => {
-    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-    const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  };
+  const getWeekNumber = (date: Date): number => getISOWeekParts(date).week;
 
-  const getDateOfISOWeek = (week: number, year: number): Date => {
-    const simple = new Date(year, 0, 1 + (week - 1) * 7);
-    const dow = simple.getDay();
-    const ISOweekStart = new Date(simple);
-    if (dow <= 4) {
-      ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
-    } else {
-      ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
-    }
-    return ISOweekStart;
-  };
+  const getDateOfISOWeekLocal = (week: number, year: number): Date => getDateOfISOWeek(week, year);
 
   const getWeekStart = (date: Date): Date => {
     const d = new Date(date);
@@ -168,12 +163,9 @@ const Settlements: React.FC = () => {
     return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
   };
 
-  // Set current week
+  // Set current ISO week (supports week 53 / ISO week-year)
   useEffect(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const weekNum = getWeekNumber(now);
-    const weekStr = `${year}-W${weekNum.toString().padStart(2, '0')}`;
+    const weekStr = currentISOWeekKey();
     setSelectedWeek(weekStr);
     setWeekFilter(weekStr);
   }, []);
@@ -318,9 +310,10 @@ const Settlements: React.FC = () => {
       const dispatcher = employees.find(e => e.id === selectedDispatcherId);
       selectedLoadsData.forEach(load => {
         // Prefer recomputed gross-base commission so locked snapshot matches P&L
-        const commission = resolveDispatcherCommission(load, dispatcher, {
+        const resolved = resolveDispatcherCommission(load, dispatcher, {
           ignoreStored: true,
-        }).amount;
+        });
+        const commission = resolved.amount;
         loadPays.push({ basePay: commission });
         settlementLoads.push({
           loadId: load.id,
@@ -330,6 +323,9 @@ const Settlements: React.FC = () => {
           tonu: 0,
           layover: 0,
           dispatchFee: commission,
+          commissionType: resolved.type,
+          commissionRate: resolved.rate,
+          commissionBase: resolved.base || dispatcher?.commissionBase || 'gross',
         });
         totalMiles += getLoadMiles(load);
       });
@@ -662,7 +658,10 @@ const Settlements: React.FC = () => {
       if (settlementType === 'dispatcher') {
         const dispatcher = employees.find(e => e.id === selectedDispatcherId);
         selectedLoadsData.forEach(load => {
-          const commission = resolveDispatcherCommission(load, dispatcher).amount;
+          const resolved = resolveDispatcherCommission(load, dispatcher, {
+            ignoreStored: true,
+          });
+          const commission = resolved.amount;
           loadPaysLocal.push({ basePay: commission });
           settlementLoadsLocal.push({
             loadId: load.id,
@@ -672,7 +671,11 @@ const Settlements: React.FC = () => {
             tonu: 0,
             layover: 0,
             dispatchFee: commission,
+            commissionType: resolved.type,
+            commissionRate: resolved.rate,
+            commissionBase: resolved.base || dispatcher?.commissionBase || 'gross',
           });
+          miles += getLoadMiles(load);
         });
       } else {
         const driver = drivers.find(d => d.id === selectedDriverId);
@@ -748,7 +751,7 @@ const Settlements: React.FC = () => {
 
     const settlementNumber = nextSettlementNumber(settlementType === 'driver' ? 'ST' : 'DSP');
     const [year, week] = selectedWeek.split('-W');
-    const weekStart = getDateOfISOWeek(parseInt(week), parseInt(year));
+    const weekStart = getDateOfISOWeekLocal(parseInt(week, 10), parseInt(year, 10));
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
 
@@ -817,8 +820,8 @@ const Settlements: React.FC = () => {
       netPay: payResult.netPay,
       totalMiles,
       status: 'pending',
-      periodStart: weekStart.toISOString().split('T')[0],
-      periodEnd: weekEnd.toISOString().split('T')[0],
+      periodStart: formatLocalDate(weekStart),
+      periodEnd: formatLocalDate(weekEnd),
       createdAt: new Date().toISOString(),
       period: {
         start: weekStart.toISOString(),
@@ -827,22 +830,16 @@ const Settlements: React.FC = () => {
       }
     };
 
-    const settlementId = addSettlement(newSettlement);
-
-    // Link loads with type-specific fields so driver vs dispatcher never overwrite each other
-    for (const loadId of loadsToSettle) {
-      try {
-        if (settlementType === 'driver') {
-          await updateLoad(loadId, { settlementId, settlementNumber });
-        } else {
-          await updateLoad(loadId, {
-            dispatcherSettlementId: settlementId,
-            dispatcherSettlementNumber: settlementNumber,
-          });
-        }
-      } catch (error: any) {
-        console.error('Error linking settlement to load:', error);
-      }
+    try {
+      // Atomic create + load links (all-or-nothing)
+      await addSettlement(newSettlement, {
+        linkLoadIds: loadsToSettle,
+        linkAs: settlementType,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to create settlement';
+      alert(message);
+      return;
     }
 
     setIsModalOpen(false);
@@ -891,9 +888,48 @@ const Settlements: React.FC = () => {
 
   // Delete settlement
   const handleDelete = (id: string) => {
+    if (!canDeleteSettlement) {
+      alert('You do not have permission to delete settlements.');
+      return;
+    }
     if (confirm('Are you sure you want to delete this settlement?')) {
       deleteSettlement(id);
     }
+  };
+
+  /** Repair $0 dispatcher settlements (e.g. DSP-2026-1002) — unlocks linked loads */
+  const zeroDollarDispatcherSettlements = useMemo(
+    () =>
+      settlements.filter(
+        s =>
+          s.type === 'dispatcher' &&
+          (Number(s.grossPay) || 0) <= 0 &&
+          ((s.loadIds && s.loadIds.length > 0) || (s.loads && s.loads.length > 0))
+      ),
+    [settlements]
+  );
+
+  const handleRepairZeroDollarDispatcherSettlements = () => {
+    if (!canDeleteSettlement) {
+      alert('You do not have permission to repair settlements.');
+      return;
+    }
+    if (zeroDollarDispatcherSettlements.length === 0) {
+      alert('No $0 dispatcher settlements found.');
+      return;
+    }
+    const list = zeroDollarDispatcherSettlements
+      .map(s => s.settlementNumber || s.id)
+      .join(', ');
+    if (
+      !confirm(
+        `Delete ${zeroDollarDispatcherSettlements.length} zero-dollar dispatcher settlement(s) and unlock their loads?\n\n${list}`
+      )
+    ) {
+      return;
+    }
+    zeroDollarDispatcherSettlements.forEach(s => deleteSettlement(s.id, true));
+    alert('Zero-dollar dispatcher settlements removed. Loads are unlocked for recalculation.');
   };
 
   // Format currency (never show $NaN)
@@ -921,13 +957,27 @@ const Settlements: React.FC = () => {
           <h1 className="text-3xl font-bold text-slate-900">Settlements</h1>
           <p className="text-slate-600 mt-2">Manage {settlementType === 'driver' ? 'driver' : 'dispatcher'} payments and settlements</p>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="btn-primary px-6 py-3 rounded-lg flex items-center gap-2"
-        >
-          <Plus size={18} />
-          Generate Settlement
-        </button>
+        <div className="flex items-center gap-2">
+          {zeroDollarDispatcherSettlements.length > 0 && canDeleteSettlement && (
+            <button
+              type="button"
+              onClick={handleRepairZeroDollarDispatcherSettlements}
+              className="px-4 py-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-sm font-medium hover:bg-amber-100"
+            >
+              Repair {zeroDollarDispatcherSettlements.length} $0 DSP settlement
+              {zeroDollarDispatcherSettlements.length === 1 ? '' : 's'}
+            </button>
+          )}
+          {canCreateSettlement && (
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="btn-primary px-6 py-3 rounded-lg flex items-center gap-2"
+            >
+              <Plus size={18} />
+              Generate Settlement
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -1308,16 +1358,7 @@ const Settlements: React.FC = () => {
                         type="button"
                         onClick={() => {
                           if (selectedWeek) {
-                            const [year, week] = selectedWeek.split('-W');
-                            const weekNum = parseInt(week);
-                            const yearNum = parseInt(year);
-                            let newWeek = weekNum - 1;
-                            let newYear = yearNum;
-                            if (newWeek < 1) {
-                              newWeek = 52;
-                              newYear = yearNum - 1;
-                            }
-                            changeSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                            changeSelectedWeek(shiftISOWeekKey(selectedWeek, -1));
                           }
                         }}
                         className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
@@ -1335,16 +1376,7 @@ const Settlements: React.FC = () => {
                         type="button"
                         onClick={() => {
                           if (selectedWeek) {
-                            const [year, week] = selectedWeek.split('-W');
-                            const weekNum = parseInt(week);
-                            const yearNum = parseInt(year);
-                            let newWeek = weekNum + 1;
-                            let newYear = yearNum;
-                            if (newWeek > 52) {
-                              newWeek = 1;
-                              newYear = yearNum + 1;
-                            }
-                            changeSelectedWeek(`${newYear}-W${newWeek.toString().padStart(2, '0')}`);
+                            changeSelectedWeek(shiftISOWeekKey(selectedWeek, 1));
                           }
                         }}
                         className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"

@@ -70,12 +70,28 @@ export function allocatePaymentAcrossLoads(
   if (loadRevenues.length === 0) return [];
   if (totalRevenue <= 0) {
     const even = Math.round((totalPaid / loadRevenues.length + Number.EPSILON) * 100) / 100;
-    return loadRevenues.map(l => ({ loadId: l.loadId, paymentAmount: even }));
+    const parts = loadRevenues.map(l => ({ loadId: l.loadId, paymentAmount: even }));
+    // Fix rounding remainder on last load
+    const sum = parts.reduce((s, p) => s + p.paymentAmount, 0);
+    const diff = Math.round((totalPaid - sum + Number.EPSILON) * 100) / 100;
+    if (parts.length > 0 && diff !== 0) {
+      parts[parts.length - 1].paymentAmount =
+        Math.round((parts[parts.length - 1].paymentAmount + diff + Number.EPSILON) * 100) / 100;
+    }
+    return parts;
   }
-  return loadRevenues.map(l => ({
+  const parts = loadRevenues.map(l => ({
     loadId: l.loadId,
     paymentAmount: Math.round((totalPaid * ((l.revenue || 0) / totalRevenue) + Number.EPSILON) * 100) / 100,
   }));
+  // Put any 1¢ rounding remainder on the last load so allocations sum to totalPaid
+  const sum = parts.reduce((s, p) => s + p.paymentAmount, 0);
+  const diff = Math.round((totalPaid - sum + Number.EPSILON) * 100) / 100;
+  if (parts.length > 0 && diff !== 0) {
+    parts[parts.length - 1].paymentAmount =
+      Math.round((parts[parts.length - 1].paymentAmount + diff + Number.EPSILON) * 100) / 100;
+  }
+  return parts;
 }
 
 /**
