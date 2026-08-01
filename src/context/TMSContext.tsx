@@ -114,7 +114,7 @@ interface TMSContextType {
   addTrip: (trip: NewTripInput) => string;
   updateTrip: (id: string, trip: Partial<Trip>) => void;
   deleteTrip: (id: string) => void;
-  dispatchPlannedLoadsToTrip: (plannedLoadIds: string[], tripData: NewTripInput) => Promise<string>;
+  dispatchPlannedLoadsToTrip: (plannedLoadIds: string[], tripData: NewTripInput, existingTripId?: string) => Promise<string>;
   linkLoadToTrip: (loadId: string, tripId: string | null) => void; // Link/unlink load to trip
   // Task management
   updateTaskStatus: (taskId: string, status: Task['status']) => void;
@@ -2317,7 +2317,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
    * 2. Updates PlannedLoad status to 'dispatched'
    * 3. Creates Load entries for the Loads page and Dispatch Board
    */
-  const dispatchPlannedLoadsToTrip = async (plannedLoadIds: string[], tripData: NewTripInput): Promise<string> => {
+  const dispatchPlannedLoadsToTrip = async (
+    plannedLoadIds: string[],
+    tripData: NewTripInput,
+    existingTripId?: string
+  ): Promise<string> => {
     // Validate all loads exist and are in "planned" status
     const loadsToDispatch = plannedLoadIds.map(id => plannedLoads.find(pl => pl.id === id)).filter(Boolean) as PlannedLoad[];
 
@@ -2348,13 +2352,19 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     loadsToDispatch.forEach(pl => inFlightPlannedDispatchIds.add(pl.id));
 
     try {
-    // Create the trip
-    const tripId = addTrip({
+    // Attach to existing trip, or create a new one
+    const tripId = existingTripId || addTrip({
       ...tripData,
       plannedLoadIds,
     });
+    if (existingTripId && !trips.find(t => t.id === existingTripId)) {
+      throw new Error('Trip not found');
+    }
 
-    const tripNumber = trips.find(t => t.id === tripId)?.tripNumber || tripData.tripNumber || '';
+    const tripNumber =
+      trips.find(t => t.id === tripId)?.tripNumber ||
+      tripData.tripNumber ||
+      '';
 
     // Mark all planned loads dispatched in one state update before creating Loads
     const now = new Date().toISOString();

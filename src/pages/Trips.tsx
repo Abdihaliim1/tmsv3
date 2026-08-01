@@ -678,7 +678,7 @@ interface ViewTripModalProps {
 }
 
 const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, onEdit }) => {
-  const { plannedLoads, loads, drivers, trucks, trailers, addLoad, updatePlannedLoad } = useTMS();
+  const { plannedLoads, loads, drivers, trucks, trailers, dispatchPlannedLoadsToTrip } = useTMS();
   const [isDispatching, setIsDispatching] = React.useState(false);
 
   if (!isOpen || !trip) return null;
@@ -696,100 +696,37 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
 
   // Handle dispatching planned loads to create Load entries linked to THIS trip
   const handleDispatchPlannedLoads = async () => {
-    if (undispatchedPlannedLoads.length === 0) return;
+    if (undispatchedPlannedLoads.length === 0 || isDispatching) return;
 
     setIsDispatching(true);
     try {
-      const now = new Date().toISOString();
-
-      // For each undispatched planned load, create a Load entry linked to this trip
-      for (const plannedLoad of undispatchedPlannedLoads) {
-        const firstPickup = plannedLoad.pickups?.[0];
-        const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
-
-        // Update the planned load status
-        updatePlannedLoad(plannedLoad.id, {
-          status: 'dispatched',
-          currentStep: 2,
-          tripId: trip.id,
+      await dispatchPlannedLoadsToTrip(
+        undispatchedPlannedLoads.map(pl => pl.id),
+        {
           tripNumber: trip.tripNumber,
           driverId: trip.driverId,
           driverName: trip.driverName,
-          updatedAt: now,
-        });
-
-        // Create a Load entry linked to this existing trip
-        const newLoad = {
-          loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
-          status: 'dispatched' as const,
-
-          // Customer/Broker info
-          customerName: plannedLoad.customer?.name || '',
-          customerId: plannedLoad.customerId,
-          brokerName: plannedLoad.customer?.name || '',
-
-          // Driver assignment from trip
-          driverId: trip.driverId,
-          driverName: trip.driverName,
-
-          // Equipment from trip
           truckId: trip.truckId,
           truckNumber: trip.truckNumber,
           trailerId: trip.trailerId,
           trailerNumber: trip.trailerNumber,
-
-          // Route - from first pickup to last delivery
-          originCity: firstPickup?.shipper?.city || trip.fromCity || '',
-          originState: firstPickup?.shipper?.state || trip.fromState || '',
-          destCity: lastDelivery?.consignee?.city || trip.toCity || '',
-          destState: lastDelivery?.consignee?.state || trip.toState || '',
-
-          // Dates
-          pickupDate: firstPickup?.pickupDate || trip.pickupDate,
-          deliveryDate: lastDelivery?.deliveryDate || trip.deliveryDate,
-
-          // Financial
-          rate: plannedLoad.fees?.primaryFee || 0,
-          miles: plannedLoad.totalMiles || trip.totalMiles || 0,
-          ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
-            ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
-            : 0,
-          grandTotal: plannedLoad.totalCharge || plannedLoad.fees?.primaryFee || 0,
-
-          // FSC
-          hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
-          fscAmount: plannedLoad.fees?.fscAmount || 0,
-
-          // Accessorials
-          hasDetention: (plannedLoad.fees?.accessoryFees?.detention || 0) > 0,
-          detentionAmount: plannedLoad.fees?.accessoryFees?.detention || 0,
-          hasLumper: (plannedLoad.fees?.accessoryFees?.lumper || 0) > 0,
-          lumperAmount: plannedLoad.fees?.accessoryFees?.lumper || 0,
-          totalAccessorials:
-            (plannedLoad.fees?.accessoryFees?.detention || 0) +
-            (plannedLoad.fees?.accessoryFees?.lumper || 0) +
-            (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
-            (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
-
-          // Document numbers
-          bolNumber: firstPickup?.bolNumber,
-
-          // Trip Linking - this is the key part!
-          tripId: trip.id,
-          tripNumber: trip.tripNumber,
-
-          // Notes
-          notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${trip.tripNumber}`,
-        };
-
-        // Add the load
-        addLoad(newLoad);
-      }
+          fromCity: trip.fromCity,
+          fromState: trip.fromState,
+          toCity: trip.toCity,
+          toState: trip.toState,
+          pickupDate: trip.pickupDate,
+          deliveryDate: trip.deliveryDate,
+          totalMiles: trip.totalMiles,
+          dispatcherId: trip.dispatcherId,
+          dispatcherName: trip.dispatcherName,
+        } as any,
+        trip.id
+      );
 
       alert(`Successfully dispatched ${undispatchedPlannedLoads.length} load(s) to the Loads board!`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error dispatching planned loads:', error);
-      alert('Failed to dispatch loads. Please try again.');
+      alert(error?.message || 'Failed to dispatch loads. Please try again.');
     } finally {
       setIsDispatching(false);
     }
