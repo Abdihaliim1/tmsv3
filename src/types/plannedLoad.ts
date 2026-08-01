@@ -31,6 +31,8 @@ export interface Customer {
   phone?: string;
   email?: string;
   contactName?: string;
+  /** Set when a Rate Confirmation document is attached to the planned load */
+  rateConAttached?: boolean;
 }
 
 export interface Location {

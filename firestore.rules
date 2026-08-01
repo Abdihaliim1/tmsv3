@@ -131,15 +131,15 @@ service cloud.firestore {
       
       allow create: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
       
       allow update: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
       
       allow delete: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        isAdmin(request.auth.uid); // Only admins can delete
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid));
       
       // Load adjustments
       match /adjustments/{adjId} {

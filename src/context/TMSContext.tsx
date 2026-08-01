@@ -48,6 +48,7 @@ import {
   deleteFactoringTransaction as firestoreDeleteFactoringTransaction,
   deleteBroker as firestoreDeleteBroker, deleteCustomer as firestoreDeleteCustomer,
   deletePlannedLoad as firestoreDeletePlannedLoad, deleteTrip as firestoreDeleteTrip,
+  getPlannedLoad, updateDocument as firestoreUpdateDocument,
   batchSave
 } from '../services/firestoreService';
 import { buildDueInsuranceExpenses } from '../services/insuranceRecurrence';
@@ -2548,7 +2549,20 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }));
 
     if (updatedPlannedLoad) {
-      savePlannedLoad(tenantId || 'default', updatedPlannedLoad).catch(e => console.error('Failed to update planned load:', e));
+      // Doc attach already wrote rateConUrl via documentService — use a partial
+      // update so a full setDoc merge cannot wipe those fields / documents.
+      if (updates.rateConUrl || updates.bolUrl || updates.documents) {
+        firestoreUpdateDocument(tenantId || 'default', 'plannedLoads', id, {
+          ...updates,
+          updatedAt: new Date().toISOString(),
+        } as Record<string, unknown>).catch(e =>
+          console.error('Failed to update planned load:', e)
+        );
+      } else {
+        savePlannedLoad(tenantId || 'default', updatedPlannedLoad).catch(e =>
+          console.error('Failed to update planned load:', e)
+        );
+      }
     }
   };
 
@@ -2782,36 +2796,56 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
 
     for (const pl of loadsToDispatch) {
-      // Prefer fresh Firestore copy — local attach can race with save failures
+      // Prefer a direct getDoc — list queries can lag behind Rate Con attach writes
       let plRec = pl as PlannedLoad & {
-        documents?: Array<{ type?: string; url?: string }>;
+        documents?: Array<{ type?: string; url?: string; name?: string; fileName?: string }>;
+        tmsDocuments?: Array<{ type?: string; url?: string; fileName?: string }>;
         rateConfirmationUrl?: string;
         rateConUrl?: string;
         rateConNumber?: string;
         customer?: { rateConAttached?: boolean };
       };
       try {
-        const { loadPlannedLoads } = await import('../services/firestoreService');
-        const all = await loadPlannedLoads(tenantId || 'default');
-        const fresh = all.find(p => p.id === pl.id);
+        const fresh = await getPlannedLoad(tenantId || 'default', pl.id);
         if (fresh) plRec = { ...plRec, ...fresh };
       } catch {
         /* use in-memory copy */
       }
-      const docs = plRec.documents || [];
-      const hasRateCon = docs.some(d => {
-        const t = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
-        return t === 'RATE_CON' || t === 'RATECON' || t.includes('RATE');
-      }) || Boolean(
+      const docs: Array<{ type?: string; url?: string; name?: string; fileName?: string }> = [
+        ...(plRec.documents || []),
+        ...(plRec.tmsDocuments || []),
+      ];
+      const hasRateCon = Boolean(
         plRec.rateConfirmationUrl
         || plRec.rateConUrl
         || plRec.rateConNumber
         || plRec.customer?.rateConAttached
-        || docs.some(d => !!d.url && String(d.name || '').toLowerCase().includes('rate'))
-      );
+      ) || docs.some(d => {
+        const t = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
+        const name = String(d.name || d.fileName || '').toLowerCase();
+        return t === 'RATE_CON' || t === 'RATECON' || t.includes('RATE')
+          || (!!d.url && name.includes('rate'));
+      });
       if (!hasRateCon) {
         throw new Error(
           `Rate Confirmation required before dispatching ${pl.systemLoadNumber}. Attach Rate Con on the planned load, wait for “Rate Con Attached”, then try again.`
+        );
+      }
+      // Keep memory in sync so subsequent UI checks pass
+      if (plRec.rateConUrl || plRec.rateConfirmationUrl || plRec.customer?.rateConAttached) {
+        setPlannedLoads(prev =>
+          prev.map(p =>
+            p.id === pl.id
+              ? {
+                  ...p,
+                  rateConUrl: plRec.rateConUrl || p.rateConUrl,
+                  documents: plRec.documents || p.documents,
+                  customer: plRec.customer
+                    ? { ...p.customer, ...plRec.customer, rateConAttached: true } as PlannedLoad['customer']
+                    : p.customer,
+                }
+              : p
+          )
         );
       }
     }

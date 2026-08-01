@@ -188,14 +188,14 @@ export async function uploadEntityDocument(params: {
       url = await getDownloadURL(snap.ref);
     }
 
-    // Create document metadata
+    // Create document metadata (omit undefined — Firestore rejects it)
     const docMeta: TmsDocument = {
       id: crypto.randomUUID(),
       type: params.type,
       entityType: params.entityType,
       entityId: params.entityId,
       fileName: params.file.name,
-      fileType: params.file.type,
+      fileType: params.file.type || 'application/octet-stream',
       fileSize: params.file.size,
       storagePath,
       url,
@@ -203,8 +203,8 @@ export async function uploadEntityDocument(params: {
       verified: false,
       uploadedBy: params.actorUid,
       uploadedAt: new Date().toISOString(),
-      expiresAt: params.expiresAt,
       tags: params.tags || [],
+      ...(params.expiresAt ? { expiresAt: params.expiresAt } : {}),
     };
 
     // Update entity with new document in Firestore
@@ -213,8 +213,9 @@ export async function uploadEntityDocument(params: {
       extraFields.rateConUrl = url;
       extraFields.rateConfirmationUrl = url;
       if (params.entityType === 'plannedLoad') {
+        const existingCustomer = (snap.data().customer || {}) as Record<string, unknown>;
         extraFields.customer = {
-          ...(snap.data().customer || {}),
+          ...existingCustomer,
           rateConAttached: true,
         };
       }
@@ -225,11 +226,25 @@ export async function uploadEntityDocument(params: {
         extraFields.bolNumber = snap.data().bolNumber || params.file.name;
       }
     }
-    if (params.type === 'POD' && (params.entityType === 'load')) {
+    if (params.type === 'POD' && params.entityType === 'load') {
       extraFields.podNumber = snap.data().podNumber || params.file.name;
     }
+
+    // PlannedLoad UI uses { name, type: 'rate_con' }; also keep canonical TmsDocument.
+    const uiDoc =
+      params.entityType === 'plannedLoad' && (params.type === 'RATE_CON' || params.type === 'BOL')
+        ? {
+            id: docMeta.id,
+            name: docMeta.fileName,
+            url,
+            type: params.type === 'RATE_CON' ? 'rate_con' : 'bol',
+            uploadedAt: docMeta.uploadedAt,
+          }
+        : null;
+
     await updateDoc(entityRef, {
-      documents: arrayUnion(docMeta),
+      documents: arrayUnion(uiDoc || docMeta),
+      tmsDocuments: arrayUnion(docMeta),
       updatedAt: serverTimestamp(),
       updatedBy: params.actorUid,
       ...extraFields,

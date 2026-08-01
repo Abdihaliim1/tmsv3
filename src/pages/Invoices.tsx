@@ -1759,23 +1759,26 @@ const FactoredLoadsTab: React.FC = () => {
     invoiceId?: string;
     companyId?: string;
   }) => {
-    // Use explicit load IDs from the UI so we fund exactly the pending set shown.
-    const idSet = new Set(opts.loadIds);
-    const pending = factoredData.filter(
-      d => idSet.has(d.load.id) && !isLoadFunded(d.load) && !isLoadHeld(d.load)
-    );
+    // Fund every pending (non-held) load in the current filtered view when IDs
+    // were captured at click time — do not re-narrow by company/invoice.
+    const idSet = new Set(opts.loadIds.filter(Boolean));
+    // Resolve against live `loads` so enriched factoredData copies cannot drift.
+    const pending = loads
+      .filter(l => idSet.has(l.id) && !isLoadFunded(l) && !isLoadHeld(l))
+      .map(load => {
+        const item = factoredData.find(d => d.load.id === load.id);
+        return {
+          load,
+          invoice: item?.invoice,
+          factoringCompany: item?.factoringCompany,
+        };
+      });
     if (pending.length === 0) {
       alert('All selected loads are already funded.');
       return;
     }
-    const heldInSelection = factoredData.filter(
-      d => idSet.has(d.load.id) && isLoadHeld(d.load)
-    );
-    if (heldInSelection.length > 0) {
-      alert(
-        `Cannot Mark All Funded: ${heldInSelection.length} load(s) are held/rejected. Clear holds first.`
-      );
-      return;
+    if (pending.length < idSet.size) {
+      // Some IDs were already funded/held — continue with remaining
     }
     const invoice = opts.invoiceId
       ? invoices.find(inv => inv.id === opts.invoiceId)
@@ -1802,19 +1805,32 @@ const FactoredLoadsTab: React.FC = () => {
     try {
       let nextLoads = [...loads];
       const failures: string[] = [];
-      for (const item of pending) {
-        const patch = buildMarkLoadFundedPatch(
-          item.load,
-          item.invoice,
-          item.factoringCompany?.feePercentage,
-          `Factored-All-${label}`
-        );
-        try {
+      // Parallel updates — sequential loops were leaving the 2nd load unfunded when
+      // the first update's snapshot/re-render raced the second call.
+      const results = await Promise.allSettled(
+        pending.map(async item => {
+          const patch = buildMarkLoadFundedPatch(
+            item.load,
+            item.invoice,
+            item.factoringCompany?.feePercentage,
+            `Factored-All-${label}`
+          );
           await updateLoad(item.load.id, patch, 'Factoring: Mark All Funded');
-          nextLoads = nextLoads.map(l => (l.id === item.load.id ? { ...l, ...patch } : l));
-        } catch (err) {
+          return { id: item.load.id, patch, loadNumber: item.load.loadNumber };
+        })
+      );
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const item = pending[i];
+        if (result.status === 'fulfilled') {
+          nextLoads = nextLoads.map(l =>
+            l.id === result.value.id ? { ...l, ...result.value.patch } : l
+          );
+        } else {
           failures.push(
-            `${item.load.loadNumber}: ${err instanceof Error ? err.message : 'update failed'}`
+            `${item.load.loadNumber}: ${
+              result.reason instanceof Error ? result.reason.message : 'update failed'
+            }`
           );
         }
       }
@@ -1997,31 +2013,11 @@ const FactoredLoadsTab: React.FC = () => {
                   const actualReceived = funded
                     ? (Number(load.actualReceived ?? load.paymentAmount) || expectedNet)
                     : 0;
-                  const companyId = load.factoringCompanyId || invoice?.factoringCompanyId || '';
-                  const companyName = (
-                    load.factoringCompanyName || invoice?.factoringCompanyName || company?.name || ''
-                  ).trim().toLowerCase();
-                  const invoicePending = invoice
-                    ? filteredFactoredData.filter(
-                        d => d.invoice?.id === invoice.id && !isLoadFunded(d.load) && !isLoadHeld(d.load)
-                      )
-                    : [];
-                  const companyPending = !invoice
-                    ? filteredFactoredData.filter(d => {
-                        if (d.invoice || isLoadFunded(d.load) || isLoadHeld(d.load)) return false;
-                        const dCompanyId = d.load.factoringCompanyId || '';
-                        if (companyId && dCompanyId && dCompanyId === companyId) return true;
-                        const dName = (
-                          d.load.factoringCompanyName || d.factoringCompany?.name || ''
-                        ).trim().toLowerCase();
-                        if (companyName && dName && dName === companyName) return true;
-                        // No company identity on either side — batch remaining orphan pendings
-                        if (!companyId && !companyName && !dCompanyId && !dName) return true;
-                        return false;
-                      })
-                    : [];
-                  const markAllPending =
-                    invoicePending.length >= 2 ? invoicePending : companyPending;
+                  // Mark All Funded applies to every pending load currently shown
+                  // (after search/company filter) — not a fragile company/invoice subgroup.
+                  const markAllPending = filteredFactoredData.filter(
+                    d => !isLoadFunded(d.load) && !isLoadHeld(d.load)
+                  );
                   const showMarkAll =
                     !funded
                     && !held
@@ -2085,7 +2081,6 @@ const FactoredLoadsTab: React.FC = () => {
                                 handleMarkAllFunded({
                                   loadIds: markAllPending.map(d => d.load.id),
                                   invoiceId: invoice?.id,
-                                  companyId: companyId || undefined,
                                 })
                               }
                               className="text-xs text-slate-600 hover:text-slate-900 underline"

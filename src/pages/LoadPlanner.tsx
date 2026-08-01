@@ -1375,6 +1375,8 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
         file,
         actorUid: user?.uid || 'anonymous',
       });
+      // uploadEntityDocument already persists rateConUrl / documents on Firestore.
+      // Only patch local UI state — do NOT full-save documents (avoids overwrite races).
       const plannedDoc = {
         id: uploaded.id,
         name: uploaded.fileName,
@@ -1392,7 +1394,7 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
         patch.customer = {
           ...load.customer,
           rateConAttached: true,
-        };
+        } as PlannedLoad['customer'];
       }
       updatePlannedLoad(load.id, patch);
       alert(`${docType === 'RATE_CON' ? 'Rate Confirmation' : 'BOL'} attached successfully. You can now Add Trip.`);

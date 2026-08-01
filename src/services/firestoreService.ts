@@ -8,6 +8,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   updateDoc,
@@ -365,6 +366,34 @@ export const deleteBroker = (tenantId: string, id: string) => deleteDocument(ten
 export const deleteDispatcher = (tenantId: string, id: string) => deleteDocument(tenantId, 'dispatchers', id);
 export const deleteCustomer = (tenantId: string, id: string) => deleteDocument(tenantId, 'customers', id);
 export const deletePlannedLoad = (tenantId: string, id: string) => deleteDocument(tenantId, 'plannedLoads', id);
+
+/** Fetch a single planned load (avoids list/orderBy races during Rate Con attach → dispatch). */
+export async function getPlannedLoad(
+  tenantId: string,
+  id: string
+): Promise<PlannedLoad | null> {
+  try {
+    const snap = await getDoc(getDocRef(tenantId, 'plannedLoads', id));
+    if (!snap.exists()) return null;
+    return { ...snap.data(), id: snap.id } as PlannedLoad;
+  } catch (error) {
+    errorHandler.handle(
+      error,
+      { operation: 'get plannedLoad', tenantId, metadata: { docId: id } },
+      { severity: ErrorSeverity.MEDIUM, rethrow: false }
+    );
+    return null;
+  }
+}
+
+/** Partial update helper used by factoring Mark All Funded (avoids full-doc overwrite races). */
+export async function patchLoadFields(
+  tenantId: string,
+  loadId: string,
+  updates: Record<string, unknown>
+): Promise<void> {
+  await updateDocument(tenantId, 'loads', loadId, updates);
+}
 export const deleteTrip = (tenantId: string, id: string) => deleteDocument(tenantId, 'trips', id);
 export const deleteTaskDoc = (tenantId: string, id: string) => deleteDocument(tenantId, 'tasks', id);
 export const loadTasksCollection = (tenantId: string) => loadCollection<Task>(tenantId, 'tasks');
