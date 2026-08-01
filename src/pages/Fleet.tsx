@@ -57,9 +57,11 @@ const Fleet: React.FC = () => {
   const filteredTrailers = useMemo(() => {
     return trailers.filter(trailer => {
       const matchesStatus = !statusFilter || trailer.status === statusFilter;
+      const trailerLabel = (trailer.number || trailer.trailerNumber || '').toLowerCase();
+      const plate = (trailer.licensePlate || '').toLowerCase();
       const matchesSearch = !debouncedSearchTerm ||
-        trailer.number.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
-        trailer.licensePlate.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        trailerLabel.includes(debouncedSearchTerm.toLowerCase()) ||
+        plate.includes(debouncedSearchTerm.toLowerCase()) ||
         (trailer.make && trailer.make.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
         (trailer.model && trailer.model.toLowerCase().includes(debouncedSearchTerm.toLowerCase()));
       return matchesStatus && matchesSearch;

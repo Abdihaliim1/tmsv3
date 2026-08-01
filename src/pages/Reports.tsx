@@ -516,6 +516,8 @@ const Reports: React.FC = () => {
         csvContent += `Total Miles,${data.miles}\n`;
         csvContent += `Loads Completed,${data.loads}\n`;
         csvContent += `Total Driver Pay,${formatCurrency(data.driverPay)}\n`;
+        csvContent += `Dispatcher Commission,${formatCurrency(data.dispatcherCost || data.expenseBreakdown?.dispatchFees || 0)}\n`;
+        csvContent += `Factoring Fees,${formatCurrency(data.factoringExpenses || data.expenseBreakdown?.factoringFees || 0)}\n`;
         csvContent += `Total Expenses,${formatCurrency(data.expenses)}\n`;
         csvContent += `Net Profit,${formatCurrency(data.netProfit)}\n`;
         csvContent += `Profit Margin,${data.profitMargin.toFixed(1)}%\n`;
@@ -777,7 +779,7 @@ const Reports: React.FC = () => {
                   <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.factoringFees || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Dispatch Fees</span>
+                  <span className="text-slate-600">Dispatcher Commission</span>
                   <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.dispatchFees || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">

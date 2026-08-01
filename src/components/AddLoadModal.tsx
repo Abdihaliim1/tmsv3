@@ -546,20 +546,21 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
   };
 
   const requestClose = () => {
-    const dirty =
-      JSON.stringify({
-        ...formData,
-        documents: undefined,
-      }) !==
-      JSON.stringify({
-        ...(editingLoad || initialState),
-        documents: undefined,
-        id: undefined,
-        loadNumber: undefined,
-        createdAt: undefined,
-        updatedAt: undefined,
-        statusHistory: undefined,
+    // Compare only editable form fields to avoid false dirty prompts from lock/invoice metadata
+    const keys = Object.keys(initialState) as Array<keyof typeof formData>;
+    const snapshot = (src: Record<string, unknown>) => {
+      const out: Record<string, unknown> = {};
+      keys.forEach(k => {
+        out[k as string] = src[k as string];
       });
+      delete out.documents;
+      return out;
+    };
+    const baseline = editingLoad
+      ? snapshot(editingLoad as unknown as Record<string, unknown>)
+      : snapshot(initialState as unknown as Record<string, unknown>);
+    const current = snapshot(formData as unknown as Record<string, unknown>);
+    const dirty = JSON.stringify(current) !== JSON.stringify(baseline);
     if (dirty && !window.confirm('Discard unsaved changes?')) return;
     onClose();
   };
@@ -758,7 +759,10 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                       setFormData(prev => ({
                         ...prev,
                         trailerId: trailerId || undefined,
-                        trailerNumber: selectedTrailer?.number || undefined
+                        trailerNumber:
+                          selectedTrailer?.trailerNumber ||
+                          selectedTrailer?.number ||
+                          undefined,
                       }));
                     }}
                     className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
@@ -766,7 +770,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                     <option value="">No Trailer (Bobtail)</option>
                     {trailers.filter(t => t.status === 'available' || t.status === 'in_use').map(trailer => (
                       <option key={trailer.id} value={trailer.id}>
-                        {trailer.number} - {trailer.type.replace('_', ' ')} {trailer.assignedTruckId ? '(Assigned)' : ''}
+                        {trailer.trailerNumber || trailer.number || trailer.id} - {(trailer.type || 'trailer').replace('_', ' ')} {trailer.assignedTruckId ? '(Assigned)' : ''}
                       </option>
                     ))}
                   </select>

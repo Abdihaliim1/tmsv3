@@ -658,7 +658,12 @@ const FactoringCompanyModal: React.FC<FactoringCompanyModalProps> = ({ company, 
       alert('Company name is required');
       return;
     }
-    onSave(formData as NewFactoringCompanyInput);
+    const fee = Number(formData.feePercentage);
+    if (!Number.isFinite(fee) || fee < 0 || fee > 100) {
+      alert('Fee percentage must be between 0 and 100.');
+      return;
+    }
+    onSave({ ...formData, feePercentage: fee } as NewFactoringCompanyInput);
   };
 
   const US_STATES = [
