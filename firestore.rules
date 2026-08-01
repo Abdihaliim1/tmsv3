@@ -7,22 +7,28 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(uid)).data.role;
     }
     
-    // Helper function: Check if user is admin
+    // Helper function: Check if user is admin (tenant-level role)
     function isAdmin(uid) {
       return getUserRole(uid) == 'admin';
     }
+
+    // Platform admin (users/{uid}.isPlatformAdmin == true) — support / multi-tenant ops
+    function isPlatformAdmin(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.isPlatformAdmin == true;
+    }
     
     // Helper function: Check tenant membership (new membership model)
+    // Treat missing `active` as active (legacy docs); only explicit false blocks.
     function isTenantMember(tenantId, uid) {
       let membership = get(/databases/$(database)/documents/users/$(uid)/memberships/$(tenantId));
-      return membership.exists && membership.data.active == true;
+      return membership.exists && membership.data.active != false;
     }
     
     // Helper function: Check if user can access tenant
     function canAccessTenant(tenantId, uid) {
       return request.auth != null && 
         request.auth.uid == uid &&
-        isTenantMember(tenantId, uid);
+        (isPlatformAdmin(uid) || isTenantMember(tenantId, uid));
     }
     
     // Users collection (global)
@@ -74,12 +80,21 @@ service cloud.firestore {
         isAdmin(request.auth.uid);
     }
     
+    // Global tenant directory for Admin Console (platform admins only)
+    match /tenantsIndex/{tenantId} {
+      allow read: if request.auth != null && isPlatformAdmin(request.auth.uid);
+      allow write: if request.auth != null && isPlatformAdmin(request.auth.uid);
+    }
+
     // Tenant documents (for tenant metadata)
     match /tenants/{tenantId} {
-      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow read: if request.auth != null && (
+        canAccessTenant(tenantId, request.auth.uid) ||
+        isPlatformAdmin(request.auth.uid)
+      );
       allow write: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        isAdmin(request.auth.uid);
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid));
     }
     
     // Company Profile

@@ -1,8 +1,8 @@
 /**
  * Tenant Context - Single Domain Multi-Tenant
- * 
+ *
  * AUTO-SELECTS tenant for normal users (no company picker)
- * Only platform admins can switch companies
+ * Platform admins can switch / impersonate companies
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
@@ -26,6 +26,7 @@ interface TenantContextType {
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
 
 const SESSION_STORAGE_KEY = 'somtms_activeTenantId';
+const ADMIN_VIEWING_KEY = 'somtms_adminViewingTenant';
 
 /**
  * Load user profile from Firestore (includes defaultTenantId and isPlatformAdmin)
@@ -59,13 +60,14 @@ async function loadUserMemberships(uid: string): Promise<UserMembership[]> {
   try {
     const membershipsRef = collection(db, `users/${uid}/memberships`);
     const snapshot = await getDocs(membershipsRef);
-    
+
     const memberships: UserMembership[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
       // Use tenantId from data field if available, otherwise use document ID
       const tenantId = data.tenantId || docSnap.id;
-      if (data.active !== false) { // Only active memberships
+      if (data.active !== false) {
+        // Only active memberships (missing active = active)
         memberships.push({
           tenantId: tenantId,
           tenantName: data.tenantName || 'Unknown Company',
@@ -75,7 +77,7 @@ async function loadUserMemberships(uid: string): Promise<UserMembership[]> {
         });
       }
     });
-    
+
     return memberships;
   } catch (error) {
     console.error('Error loading user memberships:', error);
@@ -109,25 +111,47 @@ async function loadTenantData(tenantId: string): Promise<Tenant | null> {
 
 /**
  * Resolve which tenant to use (auto-selection logic)
- * Priority: savedTenantId > defaultTenantId > first membership
+ * Priority: admin viewing > savedTenantId > defaultTenantId > first membership
  */
 function resolveTenantId(
   memberships: UserMembership[],
   savedTenantId: string | null,
-  defaultTenantId: string | undefined
+  defaultTenantId: string | undefined,
+  options?: { isPlatformAdmin?: boolean; adminViewingTenantId?: string | null }
 ): string | null {
-  if (memberships.length === 0) return null;
-  
+  const adminViewing = options?.adminViewingTenantId || null;
+  const platformAdmin = options?.isPlatformAdmin === true;
+
+  // Platform admin restoring an impersonation / last company
+  if (platformAdmin && adminViewing) {
+    return adminViewing;
+  }
+
+  if (memberships.length === 0) {
+    // Platform admins may have no membership docs — use session / default
+    if (platformAdmin) {
+      return savedTenantId || defaultTenantId || null;
+    }
+    return null;
+  }
+
   // 1. Check saved tenant (sessionStorage)
   if (savedTenantId && memberships.find(m => m.tenantId === savedTenantId)) {
     return savedTenantId;
   }
-  
+  // Platform admin: honor saved/default even without a membership row
+  if (platformAdmin && savedTenantId) {
+    return savedTenantId;
+  }
+
   // 2. Check user's defaultTenantId
   if (defaultTenantId && memberships.find(m => m.tenantId === defaultTenantId)) {
     return defaultTenantId;
   }
-  
+  if (platformAdmin && defaultTenantId) {
+    return defaultTenantId;
+  }
+
   // 3. Fall back to first membership
   return memberships[0].tenantId;
 }
@@ -160,14 +184,15 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
       // Load user profile (for defaultTenantId and isPlatformAdmin)
       const profile = await loadUserProfile(user.uid);
-      setIsPlatformAdmin(profile?.isPlatformAdmin === true);
+      const platformAdmin = profile?.isPlatformAdmin === true;
+      setIsPlatformAdmin(platformAdmin);
 
       // Load user memberships
       const userMemberships = await loadUserMemberships(user.uid);
       setMemberships(userMemberships);
 
-      // NO MEMBERSHIPS = BLOCK USER
-      if (userMemberships.length === 0) {
+      // NO MEMBERSHIPS = BLOCK normal users; platform admins may still enter via Admin Console / default
+      if (userMemberships.length === 0 && !platformAdmin) {
         setError('No access. Contact support.');
         setActiveTenantId(null);
         setActiveTenant(null);
@@ -175,31 +200,33 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         return;
       }
 
-      // AUTO-SELECT TENANT (always - no picker for normal users)
       const savedTenantId = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      const adminViewingTenantId = sessionStorage.getItem(ADMIN_VIEWING_KEY);
       const selectedTenantId = resolveTenantId(
         userMemberships,
         savedTenantId,
-        profile?.defaultTenantId
+        profile?.defaultTenantId,
+        { isPlatformAdmin: platformAdmin, adminViewingTenantId }
       );
 
       if (selectedTenantId) {
-        // Load tenant data
         const tenant = await loadTenantData(selectedTenantId);
         if (tenant) {
           setActiveTenantId(selectedTenantId);
           setActiveTenant(tenant);
           sessionStorage.setItem(SESSION_STORAGE_KEY, selectedTenantId);
-        } else {
-          // Tenant not found - try first available
+        } else if (userMemberships[0]) {
+          // Tenant not found - try first available membership
           const fallbackTenant = await loadTenantData(userMemberships[0].tenantId);
           if (fallbackTenant) {
             setActiveTenantId(fallbackTenant.id);
             setActiveTenant(fallbackTenant);
             sessionStorage.setItem(SESSION_STORAGE_KEY, fallbackTenant.id);
-          } else {
+          } else if (!platformAdmin) {
             setError('Company not found. Contact support.');
           }
+        } else if (!platformAdmin) {
+          setError('Company not found. Contact support.');
         }
       }
 
@@ -212,7 +239,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   /**
-   * Select a tenant (admin-only for switching)
+   * Select a tenant (platform-admin impersonation / switch)
    */
   const selectTenant = async (tenantId: string) => {
     try {
@@ -220,21 +247,26 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         throw new Error('User not authenticated');
       }
 
-      if (!isPlatformAdmin) {
+      // Re-read profile so we don't rely on stale state after login
+      const profile = await loadUserProfile(user.uid);
+      const platformAdmin = profile?.isPlatformAdmin === true;
+      setIsPlatformAdmin(platformAdmin);
+
+      if (!platformAdmin) {
         throw new Error('Only platform admins can switch companies');
       }
-      
-      // Reload memberships to ensure we have the latest data
+
+      // Reload memberships (optional for platform admins)
       const currentMemberships = await loadUserMemberships(user.uid);
-      
-      // Verify user has access to this tenant
+      setMemberships(currentMemberships);
+
+      // Platform admins may enter any tenant (impersonation) without a membership row
       const membership = currentMemberships.find(m => m.tenantId === tenantId);
       if (!membership) {
-        throw new Error('Access denied');
+        console.info(
+          `[TenantContext] Platform admin entering ${tenantId} without local membership (impersonation).`
+        );
       }
-      
-      // Update memberships state
-      setMemberships(currentMemberships);
 
       // Load tenant data
       const tenant = await loadTenantData(tenantId);
@@ -245,15 +277,16 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       // Set active tenant
       setActiveTenantId(tenantId);
       setActiveTenant(tenant);
-      
+
       // Persist to sessionStorage
       sessionStorage.setItem(SESSION_STORAGE_KEY, tenantId);
 
       setIsLoading(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error selecting tenant:', err);
-      setError(err.message || 'Failed to switch company');
-      throw err;
+      const message = err instanceof Error ? err.message : 'Failed to switch company';
+      setError(message);
+      throw err instanceof Error ? err : new Error(message);
     }
   };
 

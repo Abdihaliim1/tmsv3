@@ -81,38 +81,50 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
     try {
       // Try tenantsIndex first, fall back to tenants collection
       const tenantsData: TenantIndexEntry[] = [];
-      
-      // Try tenantsIndex
-      const indexSnapshot = await getDocs(collection(db, 'tenantsIndex'));
-      if (!indexSnapshot.empty) {
-        indexSnapshot.forEach((doc) => {
-          const data = doc.data();
-          tenantsData.push({
-            id: doc.id,
-            name: data.name || 'Unknown',
-            status: data.status || 'active',
-            createdAt: data.createdAt,
-            userCount: data.userCount || 0,
-            lastActivityAt: data.lastActivityAt,
-            mcNumber: data.mcNumber,
-            dotNumber: data.dotNumber,
-          });
+      const seen = new Set<string>();
+
+      const pushTenant = (id: string, data: Record<string, unknown>) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        tenantsData.push({
+          id,
+          name: (data.name as string) || id,
+          status: (data.status as TenantIndexEntry['status']) || 'active',
+          createdAt: data.createdAt as string | undefined,
+          userCount: (data.userCount as number) || 0,
+          lastActivityAt: data.lastActivityAt as string | undefined,
+          mcNumber: data.mcNumber as string | undefined,
+          dotNumber: data.dotNumber as string | undefined,
         });
-      } else {
-        // Fall back to tenants collection
+      };
+
+      try {
+        const indexSnapshot = await getDocs(collection(db, 'tenantsIndex'));
+        indexSnapshot.forEach((docSnap) => pushTenant(docSnap.id, docSnap.data()));
+      } catch (indexErr) {
+        console.warn('tenantsIndex read failed, falling back to tenants:', indexErr);
+      }
+
+      if (tenantsData.length === 0) {
         const tenantsSnapshot = await getDocs(collection(db, 'tenants'));
-        tenantsSnapshot.forEach((doc) => {
-          const data = doc.data();
-          tenantsData.push({
-            id: doc.id,
-            name: data.name || 'Unknown',
-            status: data.status || 'active',
-            createdAt: data.createdAt,
-            userCount: 0,
-            mcNumber: data.mcNumber,
-            dotNumber: data.dotNumber,
-          });
-        });
+        tenantsSnapshot.forEach((docSnap) => pushTenant(docSnap.id, docSnap.data()));
+      }
+
+      // Last-resort: restore known session / default company so hard-refresh never dead-ends
+      const sessionTenantId =
+        sessionStorage.getItem('somtms_activeTenantId')
+        || sessionStorage.getItem('somtms_adminViewingTenant');
+      if (sessionTenantId && !seen.has(sessionTenantId)) {
+        try {
+          const snap = await getDoc(doc(db, 'tenants', sessionTenantId));
+          if (snap.exists()) {
+            pushTenant(snap.id, snap.data());
+          } else {
+            pushTenant(sessionTenantId, { name: sessionTenantId, status: 'active' });
+          }
+        } catch {
+          pushTenant(sessionTenantId, { name: sessionTenantId, status: 'active' });
+        }
       }
 
       setTenants(tenantsData);
