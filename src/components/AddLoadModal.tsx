@@ -3,6 +3,7 @@ import { X, MapPin, Calculator, Clock, FileText } from 'lucide-react';
 import { LoadStatus, NewLoadInput, Load, Broker, NewBrokerInput } from '../types';
 import { useTMS } from '../context/TMSContext';
 import { calculateDistance, validatePayPercentage } from '../services/utils';
+import { allocateStateMiles } from '../services/stateMiles';
 import { normalize } from '../services/brokerUtils';
 import { BrokerAutocomplete } from './BrokerAutocomplete';
 import DocumentUpload from './DocumentUpload';
@@ -574,7 +575,15 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
       );
 
       if (dist > 0) {
-        setFormData(prev => ({ ...prev, miles: dist }));
+        setFormData(prev => ({
+          ...prev,
+          miles: dist,
+          stateMiles: allocateStateMiles({
+            originState: prev.originState,
+            destState: prev.destState,
+            miles: dist,
+          }),
+        }));
         // Show success feedback
         const milesInput = document.querySelector('input[name="miles"]') as HTMLInputElement;
         if (milesInput) {

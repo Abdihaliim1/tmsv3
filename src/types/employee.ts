@@ -136,6 +136,8 @@ export interface Employee {
   deactivatedAt?: string;
   /** Immutable history of rate / role / status changes */
   history?: EmployeeHistoryEntry[];
+  /** Linked Firebase Auth uid when appRole was synced */
+  linkedUserId?: string;
 }
 
 export type NewEmployeeInput = Omit<Employee, 'id' | 'createdAt' | 'updatedAt'>;

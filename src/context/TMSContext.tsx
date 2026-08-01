@@ -44,11 +44,25 @@ import {
   getDispatcherAssignmentFields,
 } from '../services/businessLogic';
 import { appendEmployeeHistory } from '../services/employeeHistory';
+import { claimUniqueKey, releaseUniqueKey } from '../services/uniqueKeyService';
+import { allocateStateMiles } from '../services/stateMiles';
+import { syncEmployeeAppRoleToUser } from '../services/userRoleSync';
 
 /** In-flight guards against double-click / concurrent creates (client-side). */
 const inFlightInvoiceKeys = new Set<string>();
 const inFlightPlannedDispatchIds = new Set<string>();
 const inFlightLoadNumbers = new Set<string>();
+
+function withAllocatedStateMiles<T extends Partial<Load>>(load: T): T {
+  const segments = allocateStateMiles({
+    originState: load.originState,
+    destState: load.destState,
+    miles: typeof load.miles === 'number' ? load.miles : Number(load.miles) || 0,
+    existing: load.stateMiles,
+  });
+  if (segments.length === 0) return load;
+  return { ...load, stateMiles: segments };
+}
 
 interface TMSContextType {
   loads: Load[];
@@ -518,7 +532,20 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     inFlightLoadNumbers.add(loadKey);
 
     const newLoadId = generateShortId();
-    const newLoad: Load = {
+    const tid = tenantId || 'default';
+    try {
+      await claimUniqueKey({
+        tenantId: tid,
+        kind: 'loadNumber',
+        value: loadNumber,
+        entityId: newLoadId,
+      });
+    } catch (err) {
+      inFlightLoadNumbers.delete(loadKey);
+      throw err;
+    }
+
+    const newLoad: Load = withAllocatedStateMiles({
       ...sanitizedInput,
       ...withCommission,
       id: newLoadId,
@@ -526,7 +553,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       loadNumber,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
-    };
+    } as Load);
 
     // Optimistic Update - add to state immediately
     setLoads(prev => [newLoad, ...prev]);
@@ -649,6 +676,42 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     ) {
       return Promise.reject(
         new Error(`Load number "${sanitizedUpdates.loadNumber}" already exists. Use a unique load number.`)
+      );
+    }
+
+    if (
+      sanitizedUpdates.loadNumber &&
+      sanitizedUpdates.loadNumber !== oldLoad.loadNumber
+    ) {
+      try {
+        await claimUniqueKey({
+          tenantId: tenantId || 'default',
+          kind: 'loadNumber',
+          value: sanitizedUpdates.loadNumber,
+          entityId: id,
+          previousValue: oldLoad.loadNumber,
+        });
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    }
+
+    // Keep IFTA state miles in sync when route/miles change
+    if (
+      sanitizedUpdates.miles != null ||
+      sanitizedUpdates.originState != null ||
+      sanitizedUpdates.destState != null ||
+      sanitizedUpdates.stateMiles != null
+    ) {
+      const mergedForMiles = { ...oldLoad, ...sanitizedUpdates };
+      Object.assign(
+        sanitizedUpdates,
+        withAllocatedStateMiles({
+          originState: mergedForMiles.originState,
+          destState: mergedForMiles.destState,
+          miles: mergedForMiles.miles,
+          stateMiles: sanitizedUpdates.stateMiles ?? mergedForMiles.stateMiles,
+        })
       );
     }
 
@@ -1188,8 +1251,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     setLoads(prev => prev.filter(l => l.id !== id));
 
     try {
-      // Delete from Firestore
+      // Delete from Firestore and release uniqueness claim
       await firestoreDeleteLoad(tenantId || 'default', id);
+      if (load.loadNumber) {
+        await releaseUniqueKey({
+          tenantId: tenantId || 'default',
+          kind: 'loadNumber',
+          value: load.loadNumber,
+          entityId: id,
+        }).catch(() => {});
+      }
 
       logger.info('[TMSContext] Load deleted successfully', {
         tenantId,
@@ -1232,6 +1303,19 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     };
     setEmployees(prev => [...prev, newEmployee]);
     saveEmployee(tenantId || 'default', newEmployee).catch(e => console.error('Failed to save employee:', e));
+    // Sync appRole → Auth user when email matches
+    if (newEmployee.email && newEmployee.appRole) {
+      syncEmployeeAppRoleToUser({
+        email: newEmployee.email,
+        appRole: newEmployee.appRole,
+        linkedUserId: newEmployee.linkedUserId,
+      }).then(uid => {
+        if (!uid) return;
+        const linked = { ...newEmployee, linkedUserId: uid };
+        setEmployees(prev => prev.map(e => (e.id === newEmployee.id ? linked : e)));
+        saveEmployee(tenantId || 'default', linked).catch(() => {});
+      });
+    }
   };
 
   const updateEmployee = (id: string, updates: Partial<Employee>) => {
@@ -1262,6 +1346,23 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     setEmployees(prev => prev.map(emp => emp.id === id ? updatedEmployee : emp));
     saveEmployee(tenantId || 'default', updatedEmployee).catch(e => console.error('Failed to save employee:', e));
+
+    if (
+      (updates.appRole != null || updates.email != null) &&
+      (updatedEmployee.email || updatedEmployee.linkedUserId) &&
+      updatedEmployee.appRole
+    ) {
+      syncEmployeeAppRoleToUser({
+        email: updatedEmployee.email,
+        appRole: updatedEmployee.appRole,
+        linkedUserId: updatedEmployee.linkedUserId,
+      }).then(uid => {
+        if (!uid || uid === updatedEmployee.linkedUserId) return;
+        const linked = { ...updatedEmployee, linkedUserId: uid };
+        setEmployees(prev => prev.map(e => (e.id === id ? linked : e)));
+        saveEmployee(tenantId || 'default', linked).catch(() => {});
+      });
+    }
   };
 
   const deleteEmployee = (id: string) => {
@@ -1518,6 +1619,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     const invoiceId = generateShortId();
     const invoiceLoadIds = input.loadIds || (input.loadId ? [input.loadId] : []);
+    const invoiceNumber = input.invoiceNumber || generateUniqueInvoiceNumber(tenantId, invoices);
+
+    // Transactional uniqueness claim (cross-tab / concurrent create)
+    await claimUniqueKey({
+      tenantId: tenantId || 'default',
+      kind: 'invoiceNumber',
+      value: invoiceNumber,
+      entityId: invoiceId,
+    });
+
     let factoringExtras: Partial<Invoice> = {};
 
     if (input.isFactored) {
@@ -1559,7 +1670,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       ...input,
       ...factoringExtras,
       id: invoiceId,
-      invoiceNumber: input.invoiceNumber || generateUniqueInvoiceNumber(tenantId, invoices),
+      invoiceNumber,
       createdAt: new Date().toISOString(),
     };
     setInvoices(prev => [newInvoice, ...prev]);
@@ -1729,6 +1840,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     setInvoices(prev => prev.filter(inv => inv.id !== id));
     firestoreDeleteInvoice(tid, id).catch(e => console.error('Failed to delete invoice:', e));
+    if (invoice.invoiceNumber) {
+      releaseUniqueKey({
+        tenantId: tid,
+        kind: 'invoiceNumber',
+        value: invoice.invoiceNumber,
+        entityId: id,
+      }).catch(() => {});
+    }
   };
 
   const addSettlement = (input: Omit<Settlement, 'id'>): string => {

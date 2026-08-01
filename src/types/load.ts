@@ -71,6 +71,11 @@ export interface Load {
   rate: number;
   ratePerMile?: number;
   miles: number;
+  /**
+   * Per-state loaded miles for IFTA/IRP.
+   * When empty, reports allocate miles from origin/dest (50/50).
+   */
+  stateMiles?: Array<{ state: string; miles: number }>;
   
   // Dates
   pickupDate: string;

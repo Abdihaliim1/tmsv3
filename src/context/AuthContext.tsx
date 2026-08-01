@@ -11,6 +11,7 @@ import {
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { setSentryUser, clearSentryUser } from '../lib/sentry';
+import { upsertEmailIndex } from '../services/userRoleSync';
 
 export type UserRole = 'admin' | 'dispatcher' | 'driver' | 'accountant' | 'viewer';
 
@@ -103,6 +104,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (firebaseUser) {
         const convertedUser = await convertFirebaseUser(firebaseUser);
         setUser(convertedUser);
+        // Index email → uid so employee appRole can sync to Auth users
+        upsertEmailIndex(firebaseUser.uid, firebaseUser.email).catch(() => {});
         
         // Set Sentry user context
         if (convertedUser) {
@@ -188,13 +191,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         
         // Create user document in Firestore with role
         await setDoc(doc(db, 'users', userCredential.user.uid), {
-          email,
+          email: email.trim().toLowerCase(),
           displayName,
           role: 'viewer',
           tenants: [],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });
+        await upsertEmailIndex(userCredential.user.uid, email);
       }
     } catch (error: any) {
       console.error('Registration error:', error);

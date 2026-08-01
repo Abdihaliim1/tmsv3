@@ -19,6 +19,7 @@ import {
   calculatePeriodFinancials,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
+import { sumStateMiles } from '../services/stateMiles';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
@@ -420,7 +421,7 @@ const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack })
 const StateMilesReport: React.FC<{ onBack: () => void; title?: string; subtitle?: string }> = ({
   onBack,
   title = 'IRP / IFTA State Miles',
-  subtitle = 'Miles allocated by origin and destination state (proxy until GPS state segments are recorded)',
+  subtitle = 'Uses load.stateMiles when present; otherwise allocates total miles by origin/destination state',
 }) => {
   const { loads } = useTMS();
   return (
@@ -431,32 +432,23 @@ const StateMilesReport: React.FC<{ onBack: () => void; title?: string; subtitle?
           const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
           return d >= periodStart && d <= periodEnd;
         });
-        const byState: Record<string, { miles: number; loads: number }> = {};
-        periodLoads.forEach(l => {
-          const miles = getLoadMiles(l);
-          const origin = (l.originState || '??').toUpperCase();
-          const dest = (l.destState || '??').toUpperCase();
-          // Split loaded miles 50/50 across origin/dest when different; full miles if same
-          if (origin === dest) {
-            if (!byState[origin]) byState[origin] = { miles: 0, loads: 0 };
-            byState[origin].miles += miles;
-            byState[origin].loads += 1;
-          } else {
-            if (!byState[origin]) byState[origin] = { miles: 0, loads: 0 };
-            if (!byState[dest]) byState[dest] = { miles: 0, loads: 0 };
-            byState[origin].miles += miles / 2;
-            byState[dest].miles += miles / 2;
-            byState[origin].loads += 1;
-            byState[dest].loads += 1;
-          }
-        });
+        const withStored = periodLoads.filter(l => (l.stateMiles?.length || 0) > 0).length;
+        const byState = sumStateMiles(
+          periodLoads.map(l => ({
+            stateMiles: l.stateMiles,
+            originState: l.originState,
+            destState: l.destState,
+            miles: getLoadMiles(l),
+          }))
+        );
         const sorted = Object.entries(byState).sort((a, b) => b[1].miles - a[1].miles);
         const total = sorted.reduce((s, [, v]) => s + v.miles, 0);
         return (
           <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
             <div className="px-6 py-3 border-b text-xs text-slate-500">
-              Temporary allocation: 50% origin / 50% destination until per-state GPS miles are stored on loads.
-              Total loaded miles this period: {Math.round(total).toLocaleString()}
+              {withStored} of {periodLoads.length} loads have stored stateMiles.
+              Others use 50/50 origin/destination allocation.
+              Total: {Math.round(total).toLocaleString()} mi
             </div>
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
