@@ -31,6 +31,12 @@ import {
 import { canPerformAction } from '../services/rbac';
 import { useAuth } from '../context/AuthContext';
 import { useTenant } from '../context/TenantContext';
+import {
+  allocateSettlementToPeriod,
+  buildPeriodRepairPatch,
+  deriveSettlementPeriodFromLoads,
+  settlementHasPeriodMismatch,
+} from '../services/settlementPeriod';
 
 type SettlementType = 'driver' | 'dispatcher';
 
@@ -601,13 +607,12 @@ const Settlements: React.FC = () => {
       const n = parseFloat(String(s.netPay));
       return Number.isFinite(n) ? n : 0;
     };
-    // This Week = settlements whose pay period overlaps the current ISO week
-    const thisWeekSettlements = valid.filter(s => {
-      const bounds = getSettlementPeriodBounds(s);
-      if (!bounds) return false;
-      return periodsOverlap(bounds.start, bounds.end, weekStart, weekEnd);
-    });
-    const thisWeekTotal = thisWeekSettlements.reduce((sum, s) => sum + safeNet(s), 0);
+    // This Week = load-date allocated net for loads delivered in the current ISO week
+    // (avoids counting full multi-month settlements like ST-2026-1003 as "this week")
+    const thisWeekTotal = valid.reduce((sum, s) => {
+      const alloc = allocateSettlementToPeriod(s, loads, weekStart, weekEnd);
+      return sum + (alloc.inPeriod ? alloc.netShare : 0);
+    }, 0);
     const pending = valid.filter(s => s.status === 'pending').length;
     const avgSettlement = valid.length > 0
       ? valid.reduce((sum, s) => sum + safeNet(s), 0) / valid.length
@@ -619,7 +624,7 @@ const Settlements: React.FC = () => {
       pending,
       avgSettlement,
     };
-  }, [settlements, settlementType]);
+  }, [settlements, settlementType, loads]);
 
   // Chart data (scoped to active settlement type) — bucket by settlement period
   const weeklyTrendsData = useMemo(() => {
@@ -642,12 +647,10 @@ const Settlements: React.FC = () => {
       weeklyData[weekKey] = { settlements: 0, totalAmount: 0 };
 
       typed.forEach(settlement => {
-        const bounds = getSettlementPeriodBounds(settlement);
-        if (!bounds) return;
-        if (periodsOverlap(bounds.start, bounds.end, weekStart, weekEnd)) {
-          weeklyData[weekKey].settlements++;
-          weeklyData[weekKey].totalAmount += settlement.netPay || 0;
-        }
+        const alloc = allocateSettlementToPeriod(settlement, loads, weekStart, weekEnd);
+        if (!alloc.inPeriod) return;
+        weeklyData[weekKey].settlements++;
+        weeklyData[weekKey].totalAmount += alloc.netShare;
       });
     }
 
@@ -656,7 +659,7 @@ const Settlements: React.FC = () => {
       settlements: weeklyData[week].settlements,
       amount: weeklyData[week].totalAmount,
     }));
-  }, [settlements, settlementType]);
+  }, [settlements, settlementType, loads]);
 
   const statusChartData = useMemo(() => {
     const statusCounts = { Paid: 0, Pending: 0, Processed: 0 };
@@ -1064,7 +1067,7 @@ const Settlements: React.FC = () => {
         `Cannot ${status === 'pending' ? 'process' : 'pay'} ${settlement.settlementNumber || 'this settlement'}:\n\n` +
           `${outside.length} of ${settlementLoads.length} load(s) fall outside the stored period ` +
           `(${settlement.periodStart || '?'} – ${settlement.periodEnd || '?'}).\n\n` +
-          `Delete or recreate this settlement with a correct period. Do not process/pay until loads match the period.`
+          `Use “Fix Period from Loads” first, or delete/recreate. Do not process/pay until the period matches.`
       );
       return;
     }
@@ -1076,6 +1079,61 @@ const Settlements: React.FC = () => {
         paidAt: new Date().toISOString(),
       });
     }
+  };
+
+  /** Migrate a mismatched settlement period to min→max linked load dates (e.g. ST-2026-1003). */
+  const handleRepairPeriodFromLoads = (settlement: Settlement) => {
+    const bounds = deriveSettlementPeriodFromLoads(settlement, loads);
+    if (!bounds) {
+      alert('Cannot derive a period — linked loads have no delivery/pickup dates.');
+      return;
+    }
+    const oldLabel =
+      (typeof settlement.period === 'object' && settlement.period?.display) ||
+      `${settlement.periodStart || '?'} – ${settlement.periodEnd || '?'}`;
+    if (
+      !window.confirm(
+        `Update ${settlement.settlementNumber || 'settlement'} period?\n\n` +
+          `Current: ${oldLabel}\n` +
+          `From loads: ${bounds.display}\n\n` +
+          `This does not change pay amounts — only period attribution for This Week / reports.`
+      )
+    ) {
+      return;
+    }
+    updateSettlement(settlement.id, buildPeriodRepairPatch(bounds));
+  };
+
+  const mismatchedSettlements = useMemo(
+    () => settlements.filter(s => settlementHasPeriodMismatch(s, loads)),
+    [settlements, loads]
+  );
+
+  const handleRepairAllMismatchedPeriods = () => {
+    if (mismatchedSettlements.length === 0) {
+      alert('No settlements with period mismatches.');
+      return;
+    }
+    const list = mismatchedSettlements
+      .map(s => s.settlementNumber || s.id)
+      .slice(0, 12)
+      .join(', ');
+    if (
+      !window.confirm(
+        `Repair period on ${mismatchedSettlements.length} settlement(s) from linked load dates?\n\n${list}` +
+          (mismatchedSettlements.length > 12 ? `\n…and ${mismatchedSettlements.length - 12} more` : '')
+      )
+    ) {
+      return;
+    }
+    let repaired = 0;
+    mismatchedSettlements.forEach(s => {
+      const bounds = deriveSettlementPeriodFromLoads(s, loads);
+      if (!bounds) return;
+      updateSettlement(s.id, buildPeriodRepairPatch(bounds));
+      repaired += 1;
+    });
+    alert(`Repaired period on ${repaired} settlement(s).`);
   };
 
   // Delete settlement
@@ -1150,6 +1208,18 @@ const Settlements: React.FC = () => {
           <p className="text-slate-600 mt-2">Manage {settlementType === 'driver' ? 'driver' : 'dispatcher'} payments and settlements</p>
         </div>
         <div className="flex items-center gap-2">
+          {mismatchedSettlements.length > 0 && (
+            <button
+              type="button"
+              onClick={handleRepairAllMismatchedPeriods}
+              className="px-4 py-3 rounded-lg border border-red-300 bg-red-50 text-red-900 text-sm font-medium hover:bg-red-100 flex items-center gap-2"
+              title="Rewrite stored period from linked load delivery dates"
+            >
+              <Calendar size={16} />
+              Fix {mismatchedSettlements.length} period mismatch
+              {mismatchedSettlements.length === 1 ? '' : 'es'}
+            </button>
+          )}
           {zeroDollarDispatcherSettlements.length > 0 && canDeleteSettlement && (
             <button
               type="button"
@@ -1515,6 +1585,16 @@ const Settlements: React.FC = () => {
                         >
                           <Eye size={18} />
                         </button>
+                        {settlementHasPeriodMismatch(settlement, loads) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRepairPeriodFromLoads(settlement)}
+                            className="text-red-600 hover:text-red-800"
+                            title="Fix Period from Loads"
+                          >
+                            <Calendar size={18} />
+                          </button>
+                        )}
                         {(settlement.status || 'pending') === 'pending' && (
                           <button
                             onClick={() => handleAdvanceStatus(settlement)}

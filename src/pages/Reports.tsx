@@ -14,6 +14,7 @@ import {
   isCompanyRecognizedExpense,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
+import { allocateSettlementToPeriod } from '../services/settlementPeriod';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
@@ -408,12 +409,17 @@ const Reports: React.FC = () => {
         }
       }
     });
-    // Overlay settlement net/deductions for the period
-    filteredSettlements.forEach(settlement => {
-      if (!settlement.driverId || !driverReports[settlement.driverId]) return;
-      driverReports[settlement.driverId].deductions += settlement.totalDeductions || 0;
-      driverReports[settlement.driverId].netPay += settlement.netPay || 0;
-    });
+    // Overlay settlement net/deductions allocated by load dates in this period
+    // (never repeat full settlement.netPay across months for multi-period settlements)
+    if (periodStart && periodEnd) {
+      filteredSettlements.forEach(settlement => {
+        if (!settlement.driverId || !driverReports[settlement.driverId]) return;
+        const alloc = allocateSettlementToPeriod(settlement, loads, periodStart, periodEnd);
+        if (!alloc.inPeriod) return;
+        driverReports[settlement.driverId].deductions += alloc.deductionsShare;
+        driverReports[settlement.driverId].netPay += alloc.netShare;
+      });
+    }
     Object.values(driverReports).forEach(report => {
       if (report.netPay === 0 && report.settledPay > 0) {
         report.netPay = report.settledPay - report.deductions;
@@ -494,7 +500,7 @@ const Reports: React.FC = () => {
       dispatcherCost,
       factoringExpenses,
     };
-  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, employees, settlements, invoices, factoringCompanies, periodStart, periodEnd]);
+  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, employees, settlements, loads, invoices, factoringCompanies, periodStart, periodEnd]);
 
   // Format currency
   const formatCurrency = (amount: number): string => {

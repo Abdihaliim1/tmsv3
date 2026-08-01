@@ -23,6 +23,7 @@ import {
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import { sumStateMiles } from '../services/stateMiles';
 import { formatExpenseCategoryLabel, normalizeExpenseCategory } from '../services/expenseCategory';
+import { allocateSettlementToPeriod } from '../services/settlementPeriod';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
@@ -665,20 +666,6 @@ const MilesPerGallonReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
-/** Include settlements whose period overlaps the report window (not createdAt-only). */
-function settlementOverlapsPeriod(
-  s: import('../types').Settlement,
-  periodStart: Date,
-  periodEnd: Date
-): boolean {
-  const startRaw = s.periodStart || (typeof s.period === 'object' ? s.period?.start : '') || s.date || s.createdAt || '';
-  const endRaw = s.periodEnd || (typeof s.period === 'object' ? s.period?.end : '') || s.periodStart || s.date || s.createdAt || '';
-  const start = parseDateOnlyLocal(String(startRaw));
-  const end = parseDateOnlyLocal(String(endRaw));
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
-  return start <= periodEnd && end >= periodStart;
-}
-
 const SettlementPayeeReport: React.FC<{
   onBack: () => void;
   title: string;
@@ -688,28 +675,29 @@ const SettlementPayeeReport: React.FC<{
   filterSettlements: (s: import('../types').Settlement, drivers: import('../types').Driver[]) => boolean;
   payeeKey: (s: import('../types').Settlement) => string;
 }> = ({ onBack, title, subtitle, payeeColumn, emptyLabel, filterSettlements, payeeKey }) => {
-  const { settlements, drivers } = useTMS();
+  const { settlements, drivers, loads } = useTMS();
   return (
     <MonthScopedReportShell title={title} subtitle={subtitle} onBack={onBack}>
       {({ periodStart, periodEnd }) => {
-        const rows = settlements.filter(s => {
-          if (!filterSettlements(s, drivers)) return false;
-          return settlementOverlapsPeriod(s, periodStart, periodEnd);
-        });
+        // Allocate by load delivery dates — never count full multi-month net in every month
+        const allocated = settlements
+          .filter(s => filterSettlements(s, drivers))
+          .map(s => ({ s, alloc: allocateSettlementToPeriod(s, loads, periodStart, periodEnd) }))
+          .filter(row => row.alloc.inPeriod);
         const byPayee: Record<string, { count: number; gross: number; net: number; paid: number }> = {};
-        rows.forEach(s => {
+        allocated.forEach(({ s, alloc }) => {
           const key = payeeKey(s);
           if (!byPayee[key]) byPayee[key] = { count: 0, gross: 0, net: 0, paid: 0 };
           byPayee[key].count += 1;
-          byPayee[key].gross += s.grossPay || 0;
-          byPayee[key].net += s.netPay || 0;
-          if (s.status === 'paid') byPayee[key].paid += s.netPay || 0;
+          byPayee[key].gross += alloc.grossShare;
+          byPayee[key].net += alloc.netShare;
+          if (s.status === 'paid') byPayee[key].paid += alloc.netShare;
         });
         const sorted = Object.entries(byPayee).sort((a, b) => b[1].gross - a[1].gross);
         return (
           <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b">
-              <span className="font-medium text-slate-700">{rows.length} settlements</span>
+              <span className="font-medium text-slate-700">{allocated.length} settlements (load-date allocated)</span>
             </div>
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
