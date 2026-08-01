@@ -1505,12 +1505,11 @@ const StatsCard: React.FC<StatsCardProps> = ({ icon, label, value, iconBg }) => 
 // ============================================================================
 
 interface AddTripFormProps {
-  onSave: (tripData: NewTripInput, selectedLoadIds: string[]) => void;
   onCancel: () => void;
   preSelectedLoadIds?: string[];
 }
 
-const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, preSelectedLoadIds = [] }) => {
+const AddTripForm: React.FC<AddTripFormProps> = ({ onCancel, preSelectedLoadIds = [] }) => {
   const { drivers, trucks, trailers, plannedLoads, employees, dispatchPlannedLoadsToTrip } = useTMS();
   const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
 
@@ -1525,6 +1524,9 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
   const [selectedTruckId, setSelectedTruckId] = useState('');
   const [selectedTrailerId, setSelectedTrailerId] = useState('');
   const [beginningOdometer, setBeginningOdometer] = useState('');
+  const [totalMiles, setTotalMiles] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [selectedLoadIds, setSelectedLoadIds] = useState<string[]>(preSelectedLoadIds);
 
   // Modal states for create dialogs
@@ -1554,16 +1556,26 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
   };
 
   const handleSubmit = async () => {
+    setFormError(null);
+
     if (!selectedDriverId) {
-      alert('Please select a driver');
+      setFormError('Please select a driver.');
       return;
     }
     if (!selectedTruckId) {
-      alert('Please select a truck');
+      setFormError('Please select a truck.');
+      return;
+    }
+    if (!selectedTrailerId) {
+      setFormError('Please select a trailer.');
+      return;
+    }
+    if (!selectedDispatcherId) {
+      setFormError('Please select a dispatcher (Booked By). Self-dispatch is not allowed for trip create.');
       return;
     }
     if (selectedLoadIds.length === 0) {
-      alert('Please select at least one load');
+      setFormError('Please select at least one planned load that is not already dispatched.');
       return;
     }
 
@@ -1574,19 +1586,30 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
 
     // Get route info from selected loads
     const selectedLoads = availablePlannedLoads.filter(l => selectedLoadIds.includes(l.id));
+    if (selectedLoads.length !== selectedLoadIds.length) {
+      setFormError('One or more selected loads are not available (already dispatched or not planned).');
+      return;
+    }
     const firstLoad = selectedLoads[0];
     const lastLoad = selectedLoads[selectedLoads.length - 1];
+    const derivedMiles = selectedLoads.reduce((sum, l) => sum + (Number(l.totalMiles) || 0), 0);
+    const milesEntered = Number(totalMiles);
+    const tripMiles = milesEntered > 0 ? milesEntered : derivedMiles;
+    if (!(tripMiles > 0)) {
+      setFormError('Total miles must be greater than 0. Enter miles or set miles on the planned load(s).');
+      return;
+    }
 
     const tripData: NewTripInput = {
       tripNumber: customTripNumber || undefined,
       type: 'company',
       driverId: selectedDriverId,
       driverName: driver ? `${driver.firstName} ${driver.lastName}` : '',
-      dispatcherId: selectedDispatcherId || undefined,
+      dispatcherId: selectedDispatcherId,
       dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
       truckId: selectedTruckId,
       truckNumber: truck?.truckNumber,
-      trailerId: selectedTrailerId || undefined,
+      trailerId: selectedTrailerId,
       trailerNumber: trailer?.trailerNumber,
       plannedLoadIds: selectedLoadIds,
       pickupDate: firstLoad?.pickups[0]?.pickupDate || '',
@@ -1596,17 +1619,25 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
       toCity: lastLoad?.deliveries[0]?.consignee?.city || '',
       toState: lastLoad?.deliveries[0]?.consignee?.state || '',
       status: 'today',
-      totalMiles: 0,
+      totalMiles: tripMiles,
       revenue: selectedLoads.reduce((sum, l) => sum + (l.fees?.primaryFee || 0), 0),
       driverPay: accessoryDriverPay,
+      notes: beginningOdometer
+        ? `Beginning odometer: ${beginningOdometer}`
+        : undefined,
     };
 
+    setIsSaving(true);
     try {
       await dispatchPlannedLoadsToTrip(selectedLoadIds, tripData);
       onCancel();
     } catch (error) {
       console.error('Error creating trip:', error);
-      alert('Failed to create trip. Please try again.');
+      const message = error instanceof Error ? error.message : 'Failed to create trip. Please try again.';
+      setFormError(message);
+      alert(message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1675,14 +1706,14 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Dispatcher (Booked By)
+              Dispatcher (Booked By) <span className="text-red-500">*</span>
             </label>
             <select
               value={selectedDispatcherId}
               onChange={(e) => setSelectedDispatcherId(e.target.value)}
               className="w-full max-w-md px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">None (Self-Dispatched)</option>
+              <option value="">Select Dispatcher</option>
               {dispatchers.map((dispatcher) => (
                 <option key={dispatcher.id} value={dispatcher.id}>
                   {dispatcher.firstName} {dispatcher.lastName}
@@ -1690,7 +1721,7 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
               ))}
             </select>
             <p className="text-xs text-slate-500 mt-1">
-              Propagates to created loads with the dispatcher’s commission defaults.
+              Required. Propagates to created loads with the dispatcher’s commission defaults.
             </p>
           </div>
 
@@ -1783,13 +1814,15 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Trailer</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Trailer <span className="text-red-500">*</span>
+            </label>
             <select
               value={selectedTrailerId}
               onChange={(e) => setSelectedTrailerId(e.target.value)}
               className="w-full max-w-md px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">No Trailer</option>
+              <option value="">Select Trailer</option>
               {trailers.map((trailer) => (
                 <option key={trailer.id} value={trailer.id}>
                   {trailer.trailerNumber || trailer.number} - {trailer.type || 'Unknown'}
@@ -1803,6 +1836,24 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
             >
               + Create Trailer
             </button>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Total Miles <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={totalMiles}
+              onChange={(e) => setTotalMiles(e.target.value)}
+              placeholder="Required for dispatch"
+              className="w-full max-w-md px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              Uses planned-load miles when left blank if those loads already have miles set.
+            </p>
           </div>
 
           <div>
@@ -1919,16 +1970,25 @@ const AddTripForm: React.FC<AddTripFormProps> = ({ onSave: _onSave, onCancel, pr
       </div>
 
       {/* Form Actions */}
+      {formError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {formError}
+        </div>
+      )}
       <div className="flex items-center gap-4">
         <button
+          type="button"
           onClick={handleSubmit}
-          className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+          disabled={isSaving}
+          className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Save
+          {isSaving ? 'Saving…' : 'Save'}
         </button>
         <button
+          type="button"
           onClick={onCancel}
-          className="text-slate-600 hover:text-slate-900"
+          disabled={isSaving}
+          className="text-slate-600 hover:text-slate-900 disabled:opacity-50"
         >
           or Cancel
         </button>
@@ -2089,17 +2149,6 @@ const Trips: React.FC = () => {
     setBrokerTripForm({ type: 'broker', status: 'today' });
   }, [brokerTripForm, addTrip]);
 
-  const handleSaveTrip = useCallback(async (tripData: NewTripInput, selectedLoadIds: string[]) => {
-    try {
-      await dispatchPlannedLoadsToTrip(selectedLoadIds, tripData);
-      setShowAddTrip(false);
-      setPreSelectedLoadIds([]);
-    } catch (error) {
-      console.error('Error creating trip:', error);
-      alert('Failed to create trip. Please try again.');
-    }
-  }, [dispatchPlannedLoadsToTrip]);
-
   const handleUpdateTrip = useCallback((updatedData: Partial<Trip>) => {
     if (editingTrip) {
       updateTrip(editingTrip.id, updatedData);
@@ -2119,7 +2168,6 @@ const Trips: React.FC = () => {
   if (showAddTrip) {
     return (
       <AddTripForm
-        onSave={handleSaveTrip}
         onCancel={() => {
           setShowAddTrip(false);
           setPreSelectedLoadIds([]);

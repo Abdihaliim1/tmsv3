@@ -2746,17 +2746,6 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     tripData: NewTripInput,
     existingTripId?: string
   ): Promise<string> => {
-    // Hard requirements before creating live loads
-    if (!tripData.driverId) throw new Error('Driver is required before dispatch');
-    if (!tripData.truckId) throw new Error('Truck is required before dispatch');
-    if (!tripData.dispatcherId) throw new Error('Dispatcher is required before dispatch');
-    if (!tripData.trailerId && !tripData.trailerNumber) {
-      throw new Error('Trailer is required before dispatch');
-    }
-    if (!(tripData.totalMiles > 0)) {
-      throw new Error('Total miles must be greater than 0 before dispatch');
-    }
-
     // Validate all loads exist and are in "planned" status
     const loadsToDispatch = plannedLoadIds.map(id => plannedLoads.find(pl => pl.id === id)).filter(Boolean) as PlannedLoad[];
 
@@ -2769,21 +2758,50 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       throw new Error(`Cannot dispatch loads that are not in "planned" status: ${nonPlannedLoads.map(pl => pl.systemLoadNumber).join(', ')}`);
     }
 
+    // Derive miles from planned loads when the form left totalMiles at 0
+    const derivedMiles = loadsToDispatch.reduce(
+      (sum, pl) => sum + (Number(pl.totalMiles) || 0),
+      0,
+    );
+    const effectiveMiles = Number(tripData.totalMiles) > 0
+      ? Number(tripData.totalMiles)
+      : derivedMiles;
+    tripData = { ...tripData, totalMiles: effectiveMiles };
+
+    // Hard requirements before creating live loads
+    if (!tripData.driverId) throw new Error('Driver is required before dispatch');
+    if (!tripData.truckId) throw new Error('Truck is required before dispatch');
+    if (!tripData.dispatcherId) throw new Error('Dispatcher is required before dispatch');
+    if (!tripData.trailerId && !tripData.trailerNumber) {
+      throw new Error('Trailer is required before dispatch');
+    }
+    if (!(effectiveMiles > 0)) {
+      throw new Error('Total miles must be greater than 0 before dispatch');
+    }
+
     for (const pl of loadsToDispatch) {
       const plRec = pl as PlannedLoad & {
         documents?: Array<{ type?: string }>;
         rateConfirmationUrl?: string;
+        rateConUrl?: string;
         rateConNumber?: string;
         customer?: { rateConAttached?: boolean };
       };
       const docs = plRec.documents || [];
-      const hasRateCon = docs.some(d => String(d.type || '').toUpperCase() === 'RATE_CON');
-      if (!hasRateCon && !plRec.rateConfirmationUrl && !plRec.rateConNumber) {
-        if (!plRec.customer?.rateConAttached) {
-          throw new Error(
-            `Rate Confirmation required before dispatching ${pl.systemLoadNumber}`
-          );
-        }
+      const hasRateCon = docs.some(d => {
+        const t = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
+        return t === 'RATE_CON' || t === 'RATECON';
+      });
+      if (
+        !hasRateCon
+        && !plRec.rateConfirmationUrl
+        && !plRec.rateConUrl
+        && !plRec.rateConNumber
+        && !plRec.customer?.rateConAttached
+      ) {
+        throw new Error(
+          `Rate Confirmation required before dispatching ${pl.systemLoadNumber}`
+        );
       }
     }
 

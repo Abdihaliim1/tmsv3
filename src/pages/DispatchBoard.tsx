@@ -352,7 +352,7 @@ const LoadCard: React.FC<LoadCardProps> = ({
 };
 
 const DispatchBoard: React.FC = () => {
-  const { loads, invoices, updateLoad, addInvoice } = useTMS();
+  const { loads, invoices, updateLoad, addLoad, addInvoice } = useTMS();
   const { activeTenantId } = useTenant();
   const toast = useToast();
 
@@ -576,8 +576,16 @@ const DispatchBoard: React.FC = () => {
               }
               return;
             }
-            setIsModalOpen(false);
-            setEditingLoad(null);
+            try {
+              await addLoad(loadData);
+              toast.success('Load Created', `Load ${loadData.loadNumber || ''} saved successfully`);
+              setIsModalOpen(false);
+              setEditingLoad(null);
+            } catch (error: unknown) {
+              const message = error instanceof Error ? error.message : 'Failed to create load.';
+              toast.error('Create Failed', message);
+              throw error; // keep AddLoadModal open
+            }
           }}
         />
       )}

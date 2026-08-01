@@ -1586,6 +1586,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     deletePlannedLoad,
     drivers,
     trucks,
+    trailers,
     employees,
     dispatchPlannedLoadsToTrip,
     setPendingDispatchLoadIds
@@ -1605,7 +1606,9 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
   const [selectedLoad, setSelectedLoad] = useState<PlannedLoad | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
+  const [selectedTrailerId, setSelectedTrailerId] = useState<string>('');
   const [selectedDispatcherId, setSelectedDispatcherId] = useState<string>('');
+  const [dispatchMiles, setDispatchMiles] = useState<string>('');
 
   // TruckingOffice: Load Planner is a STAGING area - only show 'planned' status loads
   // Dispatched loads move to Trips/Loads pages
@@ -1681,10 +1684,30 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
 
     const driver = drivers.find(d => d.id === selectedDriverId);
     const truck = trucks.find(t => t.id === selectedTruckId);
+    const trailer = trailers.find(t => t.id === selectedTrailerId);
     const dispatcher = employees.find(e => e.id === selectedDispatcherId);
+    const miles = Number(dispatchMiles) > 0
+      ? Number(dispatchMiles)
+      : (Number(selectedLoad.totalMiles) || 0);
 
     if (!driver) {
       alert('Please select a driver');
+      return;
+    }
+    if (!truck) {
+      alert('Please select a truck');
+      return;
+    }
+    if (!trailer) {
+      alert('Please select a trailer');
+      return;
+    }
+    if (!dispatcher) {
+      alert('Please select a dispatcher (Booked By)');
+      return;
+    }
+    if (!(miles > 0)) {
+      alert('Total miles must be greater than 0');
       return;
     }
 
@@ -1695,10 +1718,12 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
           type: 'company',
           driverId: driver.id,
           driverName: `${driver.firstName} ${driver.lastName}`,
-          truckId: truck?.id,
-          truckNumber: truck?.truckNumber,
-          dispatcherId: dispatcher?.id,
-          dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
+          truckId: truck.id,
+          truckNumber: truck.truckNumber,
+          trailerId: trailer.id,
+          trailerNumber: trailer.trailerNumber || trailer.number,
+          dispatcherId: dispatcher.id,
+          dispatcherName: `${dispatcher.firstName} ${dispatcher.lastName}`,
           plannedLoadIds: [selectedLoad.id],
           pickupDate: selectedLoad.pickups[0]?.pickupDate || '',
           deliveryDate: selectedLoad.deliveries[0]?.deliveryDate || '',
@@ -1706,7 +1731,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
           fromState: selectedLoad.pickups[0]?.shipper?.state || '',
           toCity: selectedLoad.deliveries[0]?.consignee?.city || '',
           toState: selectedLoad.deliveries[0]?.consignee?.state || '',
-          totalMiles: 0, // Can be calculated later
+          totalMiles: miles,
           revenue: selectedLoad.fees?.primaryFee || 0,
           status: 'today',
         }
@@ -1715,13 +1740,15 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       setSelectedLoad(null);
       setSelectedDriverId('');
       setSelectedTruckId('');
+      setSelectedTrailerId('');
       setSelectedDispatcherId('');
+      setDispatchMiles('');
       alert('Load dispatched to trip successfully!');
     } catch (error) {
       console.error('Error dispatching load:', error);
-      alert('Failed to dispatch load. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to dispatch load. Please try again.');
     }
-  }, [selectedLoad, selectedDriverId, selectedTruckId, selectedDispatcherId, drivers, trucks, employees, dispatchPlannedLoadsToTrip]);
+  }, [selectedLoad, selectedDriverId, selectedTruckId, selectedTrailerId, selectedDispatcherId, dispatchMiles, drivers, trucks, trailers, employees, dispatchPlannedLoadsToTrip]);
 
   // Handle dispatching from ViewPlannedLoad component (accepts driverId from its internal state)
   const handleDispatchFromView = useCallback(async (driverId: string, dispatcherId?: string) => {
@@ -1734,38 +1761,27 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       alert('Driver not found');
       return;
     }
-
-    try {
-      await dispatchPlannedLoadsToTrip(
-        [selectedLoad.id],
-        {
-          type: driver.type === 'OwnerOperator' ? 'owner_operator' : 'company',
-          driverId: driver.id,
-          driverName: `${driver.firstName} ${driver.lastName}`,
-          truckId: driver.truckId,
-          truckNumber: trucks.find(t => t.id === driver.truckId)?.truckNumber,
-          dispatcherId: dispatcher?.id,
-          dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
-          plannedLoadIds: [selectedLoad.id],
-          pickupDate: selectedLoad.pickups[0]?.pickupDate || '',
-          deliveryDate: selectedLoad.deliveries[0]?.deliveryDate || '',
-          fromCity: selectedLoad.pickups[0]?.shipper?.city || '',
-          fromState: selectedLoad.pickups[0]?.shipper?.state || '',
-          toCity: selectedLoad.deliveries[0]?.consignee?.city || '',
-          toState: selectedLoad.deliveries[0]?.consignee?.state || '',
-          totalMiles: 0, // Can be calculated later
-          revenue: selectedLoad.fees?.primaryFee || 0,
-          status: 'today',
-        }
-      );
-      setViewMode('list');
-      setSelectedLoad(null);
-      alert('Load dispatched to trip successfully! A new Trip and Load entry have been created.');
-    } catch (error) {
-      console.error('Error dispatching load:', error);
-      alert('Failed to dispatch load. Please try again.');
+    if (!dispatcher) {
+      alert('Please select a dispatcher (Booked By) before dispatch');
+      return;
     }
-  }, [selectedLoad, drivers, trucks, employees, dispatchPlannedLoadsToTrip]);
+    if (!driver.truckId) {
+      alert('Selected driver has no truck assigned. Set a truck on the driver or use Dispatch to Trip.');
+      return;
+    }
+    const miles = Number(selectedLoad.totalMiles) || 0;
+    if (!(miles > 0)) {
+      alert('Planned load miles must be greater than 0 before dispatch. Edit the load or use Dispatch to Trip.');
+      return;
+    }
+    // Quick-dispatch from View has no trailer picker — route through the full form.
+    setSelectedDriverId(driver.id);
+    setSelectedTruckId(driver.truckId);
+    setSelectedDispatcherId(dispatcher.id);
+    setDispatchMiles(miles > 0 ? String(miles) : '');
+    setViewMode('addTrip');
+    alert('Select a trailer (and confirm miles), then click Dispatch to Trip.');
+  }, [selectedLoad, drivers, employees]);
 
   // Render based on view mode
   if (viewMode === 'add') {
@@ -1878,13 +1894,15 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Truck</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Truck <span className="text-red-500">*</span>
+                </label>
                 <select
                   value={selectedTruckId}
                   onChange={(e) => setSelectedTruckId(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="">Select Truck (Optional)</option>
+                  <option value="">Select Truck</option>
                   {trucks.map((truck) => (
                     <option key={truck.id} value={truck.id}>
                       {truck.truckNumber} - {truck.make} {truck.model}
@@ -1894,13 +1912,33 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Dispatcher (Booked By)</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Trailer <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={selectedTrailerId}
+                  onChange={(e) => setSelectedTrailerId(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select Trailer</option>
+                  {trailers.map((trailer) => (
+                    <option key={trailer.id} value={trailer.id}>
+                      {trailer.trailerNumber || trailer.number} - {trailer.type || 'Unknown'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Dispatcher (Booked By) <span className="text-red-500">*</span>
+                </label>
                 <select
                   value={selectedDispatcherId}
                   onChange={(e) => setSelectedDispatcherId(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="">None (Self-Dispatched)</option>
+                  <option value="">Select Dispatcher</option>
                   {dispatchers.map((dispatcher) => (
                     <option key={dispatcher.id} value={dispatcher.id}>
                       {dispatcher.firstName} {dispatcher.lastName}
@@ -1909,13 +1947,29 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
                 </select>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Total Miles <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={dispatchMiles}
+                  onChange={(e) => setDispatchMiles(e.target.value)}
+                  placeholder={selectedLoad.totalMiles ? String(selectedLoad.totalMiles) : 'Enter miles'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
               <div className="pt-4 border-t border-slate-200 flex gap-4">
                 <button
                   onClick={() => {
                     setViewMode('view');
                     setSelectedDriverId('');
                     setSelectedTruckId('');
+                    setSelectedTrailerId('');
                     setSelectedDispatcherId('');
+                    setDispatchMiles('');
                   }}
                   className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
                 >
@@ -1923,7 +1977,7 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
                 </button>
                 <button
                   onClick={handleDispatchToTrip}
-                  disabled={!selectedDriverId}
+                  disabled={!selectedDriverId || !selectedTruckId || !selectedTrailerId || !selectedDispatcherId}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
                 >
                   Dispatch to Trip
