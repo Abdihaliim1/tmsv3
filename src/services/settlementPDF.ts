@@ -148,7 +148,29 @@ const drawText = (
 ) => {
   doc.setFont(FONT, opts?.bold ? 'bold' : 'normal');
   doc.setFontSize(opts?.size ?? FONT_SIZES.body);
+  // Avoid maxWidth wrap without matching row height — callers should truncate or use multi-line rows.
   doc.text(text || '', x, y, { align: opts?.align ?? 'left', maxWidth: opts?.maxWidth });
+};
+
+/** Fit text to a single line; append ellipsis when it would overflow the cell. */
+const truncateToWidth = (
+  doc: jsPDF,
+  text: string,
+  maxWidth: number,
+  fontSize: number,
+  bold = false
+): string => {
+  const value = text || '';
+  if (!value || maxWidth <= 0) return value;
+  doc.setFont(FONT, bold ? 'bold' : 'normal');
+  doc.setFontSize(fontSize);
+  if (doc.getTextWidth(value) <= maxWidth) return value;
+  const ellipsis = '…';
+  let truncated = value;
+  while (truncated.length > 1 && doc.getTextWidth(truncated + ellipsis) > maxWidth) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated.length > 0 ? truncated + ellipsis : ellipsis;
 };
 
 const drawLogoPlaceholder = (doc: jsPDF, x: number, y: number) => {
@@ -190,7 +212,11 @@ const drawTableHeader = (doc: jsPDF, x: number, y: number, colWidths: number[], 
   let cx = x;
   for (let i = 0; i < headers.length; i++) {
     doc.rect(cx, y, colWidths[i], h, 'F');
-    doc.text(headers[i], cx + colWidths[i] / 2, y + 0.13, { align: 'center' });
+    const label = truncateToWidth(doc, headers[i], colWidths[i] - 0.08, FONT_SIZES.tableHeader, true);
+    doc.setTextColor(COLORS.white[0], COLORS.white[1], COLORS.white[2]);
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(FONT_SIZES.tableHeader);
+    doc.text(label, cx + colWidths[i] / 2, y + 0.13, { align: 'center' });
     cx += colWidths[i];
   }
   setText(doc);
@@ -212,9 +238,37 @@ const drawTableRow = (
   y: number,
   colWidths: number[],
   values: string[],
-  opts?: { altFill?: boolean; rightCols?: number[]; rowHeight?: number }
+  opts?: {
+    altFill?: boolean;
+    rightCols?: number[];
+    /** Columns that may wrap to multiple lines (others are ellipsis-truncated to 1 line). */
+    wrapCols?: number[];
+    rowHeight?: number;
+    maxLines?: number;
+  }
 ) => {
-  const h = opts?.rowHeight ?? 0.16;
+  const fontSize = FONT_SIZES.tableData;
+  const lineHeight = 0.11;
+  const topPad = 0.04;
+  const cellPadX = 0.06;
+  const wrapCols = new Set(opts?.wrapCols || []);
+  const maxLines = opts?.maxLines ?? 3;
+
+  doc.setFont(FONT, 'normal');
+  doc.setFontSize(fontSize);
+
+  const cellLines = values.map((raw, i) => {
+    const maxW = Math.max(0.05, colWidths[i] - cellPadX * 2);
+    const value = raw || '';
+    if (wrapCols.has(i)) {
+      const lines = doc.splitTextToSize(value, maxW) as string[];
+      return lines.slice(0, maxLines);
+    }
+    return [truncateToWidth(doc, value, maxW, fontSize, false)];
+  });
+
+  const lineCount = Math.max(1, ...cellLines.map(lines => lines.length));
+  const h = opts?.rowHeight ?? Math.max(0.16, topPad * 2 + lineCount * lineHeight);
 
   if (opts?.altFill) {
     doc.setFillColor(COLORS.grayRow[0], COLORS.grayRow[1], COLORS.grayRow[2]);
@@ -228,13 +282,14 @@ const drawTableRow = (
   for (let i = 0; i < colWidths.length; i++) {
     doc.line(cx, y, cx, y + h);
     const align = opts?.rightCols?.includes(i) ? 'right' : 'left';
-    const pad = 0.06;
-    const tx = align === 'right' ? cx + colWidths[i] - pad : cx + pad;
-    drawText(doc, values[i] || '', tx, y + 0.11, {
-      size: FONT_SIZES.tableData,
-      bold: false,
-      align,
-      maxWidth: colWidths[i] - 0.12,
+    const tx = align === 'right' ? cx + colWidths[i] - cellPadX : cx + cellPadX;
+    const lines = cellLines[i];
+    lines.forEach((line, lineIdx) => {
+      drawText(doc, line, tx, y + topPad + 0.08 + lineIdx * lineHeight, {
+        size: fontSize,
+        bold: false,
+        align,
+      });
     });
     cx += colWidths[i];
   }
@@ -428,7 +483,8 @@ export const generateDriverSettlementPDF = (
 
   const payShareLabel = isDispatcher ? 'DISPATCH COMMISSION' : 'DRIVER GROSS SHARE';
   const loadCols = ['LOAD #', 'DATE', 'ROUTE', 'COMPANY GROSS', payShareLabel];
-  const loadW = [1.05, 1.05, 2.75, 1.15, 1.15];
+  // Wider LOAD # so CORE-TEST-* style numbers fit; route may wrap with dynamic row height
+  const loadW = [1.45, 0.95, 2.45, 1.15, 1.15];
 
   const headH = drawTableHeader(doc, margin, y, loadW, loadCols);
   y += headH;
@@ -492,23 +548,29 @@ export const generateDriverSettlementPDF = (
     const loadNumber = li.loadNumber || load?.loadNumber || 'N/A';
     const dateRaw = li.deliveryDate || li.pickupDate || load?.deliveryDate || load?.pickupDate || '';
 
-    y = ensurePageSpace(doc, y, 0.25, margin);
+    y = ensurePageSpace(doc, y, 0.35, margin);
 
-    drawTableRow(
+    const rowH = drawTableRow(
       doc,
       margin,
       y,
       loadW,
       [
-        loadNumber,
+        String(loadNumber),
         dateRaw ? formatDate(dateRaw) : 'N/A',
         route,
         formatCurrency(loadAmount),
         formatCurrency(rowShare),
       ],
-      { altFill: idx % 2 === 0, rightCols: [3, 4] }
+      {
+        altFill: idx % 2 === 0,
+        rightCols: [3, 4],
+        // Only ROUTE wraps; LOAD # / DATE / amounts stay single-line (ellipsis if needed)
+        wrapCols: [2],
+        maxLines: 2,
+      }
     );
-    y += 0.16;
+    y += rowH;
   });
 
   // Totals row (table-like)
