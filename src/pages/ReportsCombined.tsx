@@ -14,9 +14,11 @@ import {
   isRevenueLoadStatus,
   calculateFactoringFees,
   calculateAccruedDriverPay,
+  calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
   getLoadAccessorials,
   calculatePeriodFinancials,
+  resolveLoadFactoringFee,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 import { sumStateMiles } from '../services/stateMiles';
@@ -95,7 +97,7 @@ const MonthScopedReportShell: React.FC<{
 };
 
 const TaxReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { loads, expenses, invoices, settlements, factoringCompanies, drivers } = useTMS();
+  const { loads, expenses, invoices, settlements, factoringCompanies, drivers, employees } = useTMS();
   return (
     <MonthScopedReportShell
       title="Tax Report"
@@ -110,6 +112,7 @@ const TaxReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           invoices,
           factoringCompanies,
           drivers,
+          employees,
           periodStart,
           periodEnd,
         });
@@ -126,9 +129,15 @@ const TaxReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 <p className="text-xl font-bold">{fmtMoney(financials.operatingExpenses)}</p>
               </div>
               <div>
-                <p className="text-sm text-slate-500">Driver Pay + Fees</p>
+                <p className="text-sm text-slate-500">
+                  Dispatcher Commission{financials.dispatcherCostEstimated ? ' (Est.)' : ''}
+                </p>
+                <p className="text-xl font-bold">{fmtMoney(financials.dispatcherCost)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-slate-500">Driver Pay + Factoring</p>
                 <p className="text-xl font-bold">
-                  {fmtMoney(financials.driverPay + financials.factoringFees + financials.dispatcherCost)}
+                  {fmtMoney(financials.driverPay + financials.factoringFees)}
                 </p>
               </div>
               <div>
@@ -340,11 +349,11 @@ const UnitRevenueReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 };
 
 const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { loads, trucks, expenses, drivers } = useTMS();
+  const { loads, trucks, expenses, drivers, employees, settlements, invoices, factoringCompanies } = useTMS();
   return (
     <MonthScopedReportShell
       title="Unit Operating Income"
-      subtitle="Revenue minus truck expenses by unit"
+      subtitle="Revenue minus truck, driver, dispatcher, and factoring costs by unit"
       onBack={onBack}
     >
       {({ periodStart, periodEnd }) => {
@@ -358,18 +367,39 @@ const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack })
           const d = parseDateOnlyLocal(String(e.date || e.createdAt || ''));
           return d >= periodStart && d <= periodEnd;
         });
-        const byUnit: Record<string, { revenue: number; expenses: number; loads: number; miles: number }> = {};
+        const accruedDriver = calculateAccruedDriverPay(periodLoads, settlements, drivers);
+        const accruedDispatcher = calculateAccruedDispatcherCommission(periodLoads, settlements, employees);
+        const byUnit: Record<
+          string,
+          { revenue: number; expenses: number; driver: number; dispatcher: number; factoring: number; loads: number; miles: number }
+        > = {};
         const ensure = (key: string) => {
-          if (!byUnit[key]) byUnit[key] = { revenue: 0, expenses: 0, loads: 0, miles: 0 };
+          if (!byUnit[key]) {
+            byUnit[key] = {
+              revenue: 0,
+              expenses: 0,
+              driver: 0,
+              dispatcher: 0,
+              factoring: 0,
+              loads: 0,
+              miles: 0,
+            };
+          }
           return byUnit[key];
         };
         periodLoads.forEach(l => {
           const truck = trucks.find(t => t.id === l.truckId);
           const key = truck?.number || truck?.truckNumber || l.truckNumber || l.truckId || 'Unassigned';
           const row = ensure(key);
+          const inv = invoices.find(
+            i => i.id === l.invoiceId || (i.loadIds || []).includes(l.id) || i.loadId === l.id
+          );
           row.revenue += getLoadRevenue(l);
           row.loads += 1;
           row.miles += getLoadMiles(l);
+          row.driver += accruedDriver.byLoadId[l.id] || 0;
+          row.dispatcher += accruedDispatcher.byLoadId[l.id] || 0;
+          row.factoring += resolveLoadFactoringFee(l, inv, factoringCompanies);
         });
         periodExpenses.forEach(e => {
           const truck = trucks.find(t => t.id === e.truckId);
@@ -377,7 +407,11 @@ const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack })
           const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
           ensure(key).expenses += Number.isFinite(amount) ? amount : 0;
         });
-        const sorted = Object.entries(byUnit).sort((a, b) => (b[1].revenue - b[1].expenses) - (a[1].revenue - a[1].expenses));
+        const sorted = Object.entries(byUnit).sort(
+          (a, b) =>
+            (b[1].revenue - b[1].expenses - b[1].driver - b[1].dispatcher - b[1].factoring) -
+            (a[1].revenue - a[1].expenses - a[1].driver - a[1].dispatcher - a[1].factoring)
+        );
         return (
           <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
             <table className="min-w-full divide-y divide-slate-200">
@@ -386,22 +420,29 @@ const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack })
                   <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Unit</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Loads</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Revenue</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Expenses</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Op. Exp</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Driver</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Dispatcher</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Factoring</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Op. Income</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {sorted.length === 0 ? (
-                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No unit activity this month</td></tr>
+                  <tr><td colSpan={8} className="px-6 py-8 text-center text-slate-500">No unit activity this month</td></tr>
                 ) : (
                   sorted.map(([unit, data]) => {
-                    const income = data.revenue - data.expenses;
+                    const income =
+                      data.revenue - data.expenses - data.driver - data.dispatcher - data.factoring;
                     return (
                       <tr key={unit}>
                         <td className="px-6 py-3 text-sm text-slate-900">{unit}</td>
                         <td className="px-6 py-3 text-sm text-right text-slate-600">{data.loads}</td>
                         <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.revenue)}</td>
                         <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.expenses)}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.driver)}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.dispatcher)}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.factoring)}</td>
                         <td className={`px-6 py-3 text-sm text-right font-medium ${income >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                           {fmtMoney(income)}
                         </td>
@@ -958,7 +999,7 @@ const MonthlyExpensesReport: React.FC<{ filterType: string; title: string }> = (
 
 // Company Overview Report Component
 const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
-  const { loads, drivers, settlements, expenses, factoringCompanies, invoices } = useTMS();
+  const { loads, drivers, employees, settlements, expenses, factoringCompanies, invoices } = useTMS();
   const currentYear = new Date().getFullYear();
 
   const [startMonth, setStartMonth] = useState(1);
@@ -1033,8 +1074,12 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
 
     const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
-    // Calculate dispatcher cost
-    const dispatcherCost = revenueLoads.reduce((sum, load) => sum + (load.dispatcherCommissionAmount || 0), 0);
+    const accruedDispatcher = calculateAccruedDispatcherCommission(
+      revenueLoads,
+      settlements,
+      employees
+    );
+    const dispatcherCost = accruedDispatcher.total;
 
     // Factoring fees from loads + factored invoices
     const factoringExpenses = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
@@ -1055,6 +1100,8 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       loadsCompleted,
       totalDriverPay,
       isEstimated,
+      dispatcherCost,
+      dispatcherCostEstimated: accruedDispatcher.isEstimated,
       totalExpenses: totalExpensesWithFees,
       netProfit,
       profitMargin,
@@ -1064,7 +1111,7 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       avgMilesPerLoad: loadsCompleted > 0 ? totalMiles / loadsCompleted : 0,
       revenuePerMile: totalMiles > 0 ? totalRevenue / totalMiles : 0,
     };
-  }, [reportGenerated, startMonth, startYear, endMonth, endYear, loads, drivers, settlements, expenses, factoringCompanies, invoices]);
+  }, [reportGenerated, startMonth, startYear, endMonth, endYear, loads, drivers, employees, settlements, expenses, factoringCompanies, invoices]);
 
   const formatCurrency = (amount: number): string => {
     return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1254,6 +1301,13 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
               <span className="text-slate-600">Driver Pay {reportData!.isEstimated && <span className="text-xs text-yellow-600">(Est.)</span>}</span>
               <span className="font-semibold text-blue-600">{formatCurrency(reportData!.totalDriverPay)}</span>
             </div>
+            <div className="flex justify-between items-center py-2 border-b border-slate-100">
+              <span className="text-slate-600">
+                Dispatcher Commission
+                {reportData!.dispatcherCostEstimated && <span className="text-xs text-yellow-600"> (Est.)</span>}
+              </span>
+              <span className="font-semibold text-blue-600">{formatCurrency(reportData!.dispatcherCost)}</span>
+            </div>
             <div className="flex justify-between py-2 pt-4 border-t-2 border-slate-200">
               <span className="font-bold text-slate-900">Net Profit</span>
               <span className={`font-bold ${reportData!.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -1296,16 +1350,24 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
 
 // Profit & Loss Report Component - TruckingOffice Style
 const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
-  const { loads, drivers, settlements, expenses, factoringCompanies, invoices } = useTMS();
+  const { loads, drivers, employees, settlements, expenses, factoringCompanies, invoices } = useTMS();
   const { companyProfile } = useCompany();
 
   const today = new Date();
   const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-  const [beginDate, setBeginDate] = useState(firstDayOfMonth.toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(lastDayOfMonth.toISOString().split('T')[0]);
+  const toLocalDateInput = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const [beginDate, setBeginDate] = useState(toLocalDateInput(firstDayOfMonth));
+  const [endDate, setEndDate] = useState(toLocalDateInput(lastDayOfMonth));
   const [reportGenerated, setReportGenerated] = useState(false);
+  const [dateError, setDateError] = useState<string | null>(null);
 
   // Calculate report data
   const reportData = useMemo(() => {
@@ -1313,6 +1375,7 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
 
     const periodStart = parseDateOnlyLocal(beginDate);
     const periodEnd = parseDateOnlyLocal(endDate);
+    if (periodStart > periodEnd) return null;
     periodEnd.setHours(23, 59, 59, 999);
 
     // Filter loads by period (delivered through paid)
@@ -1355,8 +1418,12 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
       expensesByCategory[category] = (expensesByCategory[category] || 0) + (expense.amount || 0);
     });
 
-    // Calculate dispatcher cost
-    const dispatcherCost = filteredLoads.reduce((sum, load) => sum + (load.dispatcherCommissionAmount || 0), 0);
+    const accruedDispatcher = calculateAccruedDispatcherCommission(
+      filteredLoads,
+      settlements,
+      employees
+    );
+    const dispatcherCost = accruedDispatcher.total;
 
     const factoringExpenses = calculateFactoringFees(filteredLoads, invoices, factoringCompanies);
 
@@ -1380,13 +1447,14 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
         isEstimated,
         byCategory: expensesByCategory,
         dispatcher: dispatcherCost,
+        dispatcherEstimated: accruedDispatcher.isEstimated,
         factoring: factoringExpenses,
         operating: operatingExpenses,
         total: totalExpenses,
       },
       profitLoss,
     };
-  }, [reportGenerated, beginDate, endDate, loads, drivers, settlements, expenses, factoringCompanies, invoices]);
+  }, [reportGenerated, beginDate, endDate, loads, drivers, employees, settlements, expenses, factoringCompanies, invoices]);
 
   const formatCurrency = (amount: number): string => {
     return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1397,11 +1465,23 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
   };
 
   const handleGenerateReport = () => {
+    const start = parseDateOnlyLocal(beginDate);
+    const end = parseDateOnlyLocal(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      setDateError('Enter valid begin and end dates.');
+      return;
+    }
+    if (start > end) {
+      setDateError('Begin date must be on or before end date.');
+      return;
+    }
+    setDateError(null);
     setReportGenerated(true);
   };
 
   const handleRunAgain = () => {
     setReportGenerated(false);
+    setDateError(null);
   };
 
   // Chart data for Revenue vs Expenses
@@ -1426,7 +1506,10 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
               <input
                 type="date"
                 value={beginDate}
-                onChange={(e) => setBeginDate(e.target.value)}
+                onChange={(e) => {
+                  setBeginDate(e.target.value);
+                  setDateError(null);
+                }}
                 className="bg-slate-800 border border-slate-600 text-white rounded-md pl-10 pr-4 py-3 w-64 focus:ring-2 focus:ring-blue-500 focus:border-transparent [color-scheme:dark]"
               />
             </div>
@@ -1440,11 +1523,18 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
               <input
                 type="date"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setDateError(null);
+                }}
                 className="bg-slate-800 border border-slate-600 text-white rounded-md pl-10 pr-4 py-3 w-64 focus:ring-2 focus:ring-blue-500 focus:border-transparent [color-scheme:dark]"
               />
             </div>
           </div>
+
+          {dateError && (
+            <p className="text-center text-red-400 text-sm">{dateError}</p>
+          )}
 
           {/* Buttons */}
           <div className="flex items-center justify-center gap-4 pt-6">
@@ -1573,12 +1663,15 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
                   </td>
                   <td className="py-2 px-4 bg-slate-800 text-right">{formatCurrency(reportData!.expenses.drivers)}</td>
                 </tr>
-                {reportData!.expenses.dispatcher > 0 && (
-                  <tr className="border-b border-slate-700">
-                    <td className="py-2 px-4">Dispatcher Commission</td>
-                    <td className="py-2 px-4 text-right">{formatCurrency(reportData!.expenses.dispatcher)}</td>
-                  </tr>
-                )}
+                <tr className="border-b border-slate-700">
+                  <td className="py-2 px-4">
+                    Dispatcher Commission
+                    {reportData!.expenses.dispatcherEstimated && (
+                      <span className="text-yellow-400 text-xs"> (Estimated)</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-4 text-right">{formatCurrency(reportData!.expenses.dispatcher)}</td>
+                </tr>
                 <tr className="border-b border-slate-700">
                   <td className="py-2 px-4 bg-slate-800">Factoring Fees</td>
                   <td className="py-2 px-4 bg-slate-800 text-right">{formatCurrency(reportData!.expenses.factoring)}</td>

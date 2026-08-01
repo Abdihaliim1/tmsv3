@@ -104,6 +104,8 @@ export interface Employee {
   defaultCommissionRate?: number;
   dispatcherCommissionType?: 'percentage' | 'flat_fee' | 'per_mile';
   dispatcherCommissionRate?: number;
+  /** Base for % commission: gross = rate+FSC+accessorials (default); linehaul = rate only */
+  commissionBase?: 'gross' | 'linehaul';
   
   // Deductions
   deductionPreferences?: Record<string, number | boolean>;

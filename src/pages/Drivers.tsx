@@ -657,6 +657,7 @@ const DriverModal: React.FC<DriverModalProps> = ({
     currentTruckId: driver?.currentTruckId || driver?.truckId || '',
     dispatcherCommissionType: driver?.dispatcherCommissionType,
     dispatcherCommissionRate: driver?.dispatcherCommissionRate || 0,
+    commissionBase: driver?.commissionBase || 'gross',
     dob: driver?.dob || '',
     ssn: driver?.ssn || '',
     address: driver?.address || '',
@@ -997,6 +998,26 @@ const DriverModal: React.FC<DriverModalProps> = ({
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
                         placeholder="0.00"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Commission Base</label>
+                      <select
+                        name="commissionBase"
+                        value={formData.commissionBase || 'gross'}
+                        onChange={(e) =>
+                          setFormData(prev => ({
+                            ...prev,
+                            commissionBase: e.target.value as 'gross' | 'linehaul',
+                          }))
+                        }
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="gross">Total Income (linehaul + FSC + accessorials)</option>
+                        <option value="linehaul">Linehaul only</option>
+                      </select>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Default is Total Income / Gross Revenue for % commission.
+                      </p>
                     </div>
                   </>
                 )}

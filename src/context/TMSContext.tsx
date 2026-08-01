@@ -10,7 +10,13 @@ import { generateSearchKey, generatePrefixes } from '../services/brokerUtils';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateShortId, generateStopId } from '../utils/idGenerator';
 import { triggerLoadCreated, triggerLoadStatusChanged, triggerLoadDelivered, triggerInvoiceCreated } from '../services/workflow/workflowEngine';
-import { updateTask, deleteTask, reconcileTasks, normalizeTenantId } from '../services/workflow/taskService';
+import {
+  updateTask,
+  deleteTask,
+  reconcileTasks,
+  normalizeTenantId,
+  hydrateTasksFromBackend,
+} from '../services/workflow/taskService';
 import { useAuth } from './AuthContext';
 import { auditCreate, auditUpdate, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
@@ -373,8 +379,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           }
         }
 
-        // Load + reconcile tasks against current loads/invoices
+        // Load shared tasks from Firestore (+ local cache), then reconcile
         try {
+          await hydrateTasksFromBackend(normalizeTenantId(tenantId));
           const tasksData = reconcileTasks(normalizeTenantId(tenantId), {
             loads: loadsData,
             invoices: invoicesData,
@@ -1851,15 +1858,25 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addSettlement = (input: Omit<Settlement, 'id'>): string => {
+    const settlementId = generateShortId();
+    const settlementNumber =
+      input.settlementNumber || `ST-${new Date().getFullYear()}-${settlements.length + 1001}`;
     const newSettlement: Settlement = {
       ...input,
-      id: generateShortId(),
-      settlementNumber: input.settlementNumber || `ST-${new Date().getFullYear()}-${settlements.length + 1001}`,
+      id: settlementId,
+      settlementNumber,
       createdAt: input.createdAt || new Date().toISOString(),
     };
+    // Claim number (fire-and-await via void); Settlements page also awaits before linking
+    void claimUniqueKey({
+      tenantId: tenantId || 'default',
+      kind: 'settlementNumber',
+      value: settlementNumber,
+      entityId: settlementId,
+    }).catch(e => console.error('Failed to claim settlement number:', e));
     setSettlements(prev => [newSettlement, ...prev]);
     saveSettlement(tenantId || 'default', newSettlement).catch(e => console.error('Failed to save settlement:', e));
-    return newSettlement.id; // Return the ID so it can be used to mark loads
+    return newSettlement.id;
   };
 
   const updateSettlement = (id: string, updates: Partial<Settlement>) => {
@@ -1907,6 +1924,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     // Proceed with deletion and cleanup
     setSettlements(prev => prev.filter(settlement => settlement.id !== id));
     firestoreDeleteSettlement(tenantId || 'default', id).catch(e => console.error('Failed to delete settlement:', e));
+    if (settlement.settlementNumber) {
+      releaseUniqueKey({
+        tenantId: tenantId || 'default',
+        kind: 'settlementNumber',
+        value: settlement.settlementNumber,
+        entityId: id,
+      }).catch(() => {});
+    }
 
     // Unlink loads in memory + persist Field deletes (undefined + merge leaves stale links)
     const tid = tenantId || 'default';

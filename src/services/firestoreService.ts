@@ -19,7 +19,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, FactoringTransaction, Broker, Dispatcher, CustomerEntity, PlannedLoad, Trip } from '../types';
+import { Load, Invoice, Settlement, Employee, Truck, Trailer, Expense, FactoringCompany, FactoringTransaction, Broker, Dispatcher, CustomerEntity, PlannedLoad, Trip, Task } from '../types';
 import { logger } from './logger';
 import { errorHandler, ErrorSeverity } from './errorHandler';
 
@@ -39,6 +39,7 @@ const COLLECTIONS = {
   customers: 'customers',
   plannedLoads: 'plannedLoads',
   trips: 'trips',
+  tasks: 'tasks',
 } as const;
 
 type CollectionName = keyof typeof COLLECTIONS;
@@ -345,6 +346,7 @@ export const saveDispatcher = (tenantId: string, dispatcher: Dispatcher) => save
 export const saveCustomer = (tenantId: string, customer: CustomerEntity) => saveDocument(tenantId, 'customers', customer);
 export const savePlannedLoad = (tenantId: string, plannedLoad: PlannedLoad) => saveDocument(tenantId, 'plannedLoads', plannedLoad);
 export const saveTrip = (tenantId: string, trip: Trip) => saveDocument(tenantId, 'trips', trip);
+export const saveTask = (tenantId: string, task: Task) => saveDocument(tenantId, 'tasks', task);
 
 // =============================================
 // Type-specific deleters
@@ -364,5 +366,7 @@ export const deleteDispatcher = (tenantId: string, id: string) => deleteDocument
 export const deleteCustomer = (tenantId: string, id: string) => deleteDocument(tenantId, 'customers', id);
 export const deletePlannedLoad = (tenantId: string, id: string) => deleteDocument(tenantId, 'plannedLoads', id);
 export const deleteTrip = (tenantId: string, id: string) => deleteDocument(tenantId, 'trips', id);
+export const deleteTaskDoc = (tenantId: string, id: string) => deleteDocument(tenantId, 'tasks', id);
+export const loadTasksCollection = (tenantId: string) => loadCollection<Task>(tenantId, 'tasks');
 
 

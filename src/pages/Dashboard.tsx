@@ -40,7 +40,7 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
-  const { loads, kpis, addLoad, drivers, invoices, settlements, expenses, factoringCompanies, tasks } = useTMS();
+  const { loads, kpis, addLoad, drivers, employees, invoices, settlements, expenses, factoringCompanies, tasks } = useTMS();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   // Revenue trends (last 6 months) — booked grand total, same formula as Analytics/P&L
@@ -121,10 +121,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       invoices,
       factoringCompanies,
       drivers,
+      employees,
       periodStart: start,
       periodEnd: end,
     });
-  }, [loads, drivers, settlements, expenses, factoringCompanies, invoices]);
+  }, [loads, drivers, employees, settlements, expenses, factoringCompanies, invoices]);
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-8">

@@ -54,19 +54,42 @@ export function getDispatcherAssignmentFields(dispatcher: Employee | undefined |
   };
 }
 
+export type CommissionBase = 'gross' | 'linehaul';
+
+/** Gross (rate+FSC+accessorials) by default; linehaul = primary rate only. */
+export function getDispatcherCommissionBaseAmount(
+  load: Partial<Load>,
+  dispatcher?: Employee | null
+): { base: CommissionBase; amount: number } {
+  const base: CommissionBase =
+    load.dispatcherCommissionBase ||
+    dispatcher?.commissionBase ||
+    'gross';
+  if (base === 'linehaul') {
+    return { base, amount: roundMoney(coerceMoney(load.rate)) };
+  }
+  return { base, amount: getLoadRevenue(load) };
+}
+
 /**
  * Resolve dispatcher commission for a load.
- * Prefers load fields, then falls back to the dispatcher's employee defaults.
+ * Prefers stored load amount (unless ignoreStored), then load/employee type+rate.
+ * Percentage commission defaults to Total Income / Gross Revenue.
  */
 export function resolveDispatcherCommission(
   load: Load,
-  dispatcher?: Employee | null
-): { type?: DispatcherCommissionType; rate: number; amount: number; formula: string } {
-  if (load.dispatcherCommissionAmount !== undefined && load.dispatcherCommissionAmount > 0) {
+  dispatcher?: Employee | null,
+  options?: { ignoreStored?: boolean }
+): { type?: DispatcherCommissionType; rate: number; amount: number; formula: string; base?: CommissionBase } {
+  if (
+    !options?.ignoreStored &&
+    load.dispatcherCommissionAmount !== undefined &&
+    load.dispatcherCommissionAmount > 0
+  ) {
     return {
       type: load.dispatcherCommissionType,
       rate: load.dispatcherCommissionRate || 0,
-      amount: load.dispatcherCommissionAmount,
+      amount: roundMoney(load.dispatcherCommissionAmount),
       formula: 'Stored commission',
     };
   }
@@ -90,18 +113,24 @@ export function resolveDispatcherCommission(
     return { type, rate: rate || 0, amount: 0, formula: 'No commission configured on load or dispatcher' };
   }
 
-  const baseRate = load.rate || 0;
   const miles = getLoadMiles(load);
+  const { base, amount: commissionBaseAmount } = getDispatcherCommissionBaseAmount(load, dispatcher);
 
   if (type === 'percentage') {
-    const amount = baseRate * (rate / 100);
-    return { type, rate, amount, formula: `$${baseRate.toFixed(2)} × ${rate}%` };
+    const amount = roundMoney(commissionBaseAmount * (rate / 100));
+    return {
+      type,
+      rate,
+      amount,
+      base,
+      formula: `$${commissionBaseAmount.toFixed(2)} (${base}) × ${rate}%`,
+    };
   }
   if (type === 'flat_fee') {
-    return { type, rate, amount: rate, formula: `Flat $${rate.toFixed(2)}` };
+    return { type, rate, amount: roundMoney(rate), formula: `Flat $${rate.toFixed(2)}` };
   }
   if (type === 'per_mile') {
-    const amount = miles * rate;
+    const amount = roundMoney(miles * rate);
     return { type, rate, amount, formula: `${miles} mi × $${rate.toFixed(2)}` };
   }
 
@@ -264,6 +293,7 @@ export type PeriodFinancials = {
   operatingExpenses: number;
   factoringFees: number;
   dispatcherCost: number;
+  dispatcherCostEstimated: boolean;
   netProfit: number;
   profitMargin: number;
   revenueLoads: Load[];
@@ -280,6 +310,8 @@ export function calculatePeriodFinancials(input: {
   invoices: Invoice[];
   factoringCompanies?: Array<{ id: string; feePercentage?: number }>;
   drivers: Driver[];
+  /** All employees (drivers + dispatchers) — used for dispatcher commission accrual */
+  employees?: Employee[];
   periodStart: Date;
   periodEnd: Date;
 }): PeriodFinancials {
@@ -290,6 +322,7 @@ export function calculatePeriodFinancials(input: {
     invoices,
     factoringCompanies = [],
     drivers,
+    employees = drivers as unknown as Employee[],
     periodStart,
     periodEnd,
   } = input;
@@ -310,9 +343,12 @@ export function calculatePeriodFinancials(input: {
   );
 
   const factoringFees = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
-  const dispatcherCost = roundMoney(
-    revenueLoads.reduce((sum, load) => sum + coerceMoney(load.dispatcherCommissionAmount), 0)
+  const accruedDispatcher = calculateAccruedDispatcherCommission(
+    revenueLoads,
+    settlements,
+    employees
   );
+  const dispatcherCost = accruedDispatcher.total;
 
   const netProfit = roundMoney(revenue - operatingExpenses - factoringFees - dispatcherCost - driverPay);
   const profitMargin = revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0;
@@ -323,6 +359,7 @@ export function calculatePeriodFinancials(input: {
     operatingExpenses,
     factoringFees,
     dispatcherCost,
+    dispatcherCostEstimated: accruedDispatcher.isEstimated,
     netProfit,
     profitMargin,
     revenueLoads,
@@ -791,6 +828,7 @@ export type AccruedDriverPayResult = {
   unsettled: number;
   /** True when any load used an estimate (unsettled or settled without line pay). */
   isEstimated: boolean;
+  byLoadId: Record<string, number>;
 };
 
 /**
@@ -824,6 +862,7 @@ export function calculateAccruedDriverPay(
   let settled = 0;
   let unsettled = 0;
   let isEstimated = false;
+  const byLoadId: Record<string, number> = {};
 
   revenueLoads.forEach(load => {
     if (!load.driverId) return;
@@ -833,15 +872,20 @@ export function calculateAccruedDriverPay(
     const linePay = settledLinePay.get(load.id);
     const isSettled = !!(load.settlementId || (linePay !== undefined && linePay > 0));
 
+    let pay = 0;
     if (isSettled && linePay !== undefined && linePay > 0) {
-      settled += linePay;
+      pay = linePay;
+      settled += pay;
     } else if (isSettled) {
       isEstimated = true;
-      settled += calculateDriverPay(load, driver);
+      pay = calculateDriverPay(load, driver);
+      settled += pay;
     } else {
       isEstimated = true;
-      unsettled += calculateDriverPay(load, driver);
+      pay = calculateDriverPay(load, driver);
+      unsettled += pay;
     }
+    byLoadId[load.id] = pay;
   });
 
   return {
@@ -849,6 +893,7 @@ export function calculateAccruedDriverPay(
     settled: roundMoney(settled),
     unsettled: roundMoney(unsettled),
     isEstimated,
+    byLoadId,
   };
 }
 
@@ -875,6 +920,77 @@ export function calculatePeriodDriverPay(
   });
 
   return calculateAccruedDriverPay(periodLoads, settlements, drivers).total;
+}
+
+export type AccruedDispatcherCommissionResult = {
+  total: number;
+  settled: number;
+  unsettled: number;
+  /** True when any load used an estimate (unsettled or $0 settlement line). */
+  isEstimated: boolean;
+  /** Per-load amounts used in the accrual (settlement snapshot or estimate). */
+  byLoadId: Record<string, number>;
+};
+
+/**
+ * Per-load dispatcher commission for P&L / overview:
+ *   settled loads with settlement line pay → locked snapshot (never double-count estimate)
+ *   unsettled (or $0 settlement lines) → estimate from employee/load rate on gross revenue
+ */
+export function calculateAccruedDispatcherCommission(
+  revenueLoads: Load[],
+  settlements: Settlement[],
+  employees: Employee[]
+): AccruedDispatcherCommissionResult {
+  const settledLinePay = new Map<string, number>();
+
+  settlements.forEach(settlement => {
+    if (settlement.type !== 'dispatcher') return;
+    (settlement.loads || []).forEach(entry => {
+      if (!entry.loadId) return;
+      const pay = coerceMoney(entry.basePay) || coerceMoney(entry.dispatchFee);
+      if (pay > 0) {
+        settledLinePay.set(entry.loadId, roundMoney(pay));
+      }
+    });
+  });
+
+  let settled = 0;
+  let unsettled = 0;
+  let isEstimated = false;
+  const byLoadId: Record<string, number> = {};
+
+  revenueLoads.forEach(load => {
+    if (!load.dispatcherId) return;
+    const dispatcher =
+      employees.find(e => e.id === load.dispatcherId) ||
+      null;
+
+    const linePay = settledLinePay.get(load.id);
+    if (linePay !== undefined && linePay > 0) {
+      settled += linePay;
+      byLoadId[load.id] = linePay;
+      return;
+    }
+
+    // Unsettled, or locked to a $0 settlement — estimate on gross base (not $0 lock)
+    isEstimated = true;
+    const recomputed = resolveDispatcherCommission(load, dispatcher, { ignoreStored: true }).amount;
+    const estimated =
+      recomputed > 0
+        ? recomputed
+        : resolveDispatcherCommission(load, dispatcher, { ignoreStored: false }).amount;
+    unsettled += estimated;
+    byLoadId[load.id] = estimated;
+  });
+
+  return {
+    total: roundMoney(settled + unsettled),
+    settled: roundMoney(settled),
+    unsettled: roundMoney(unsettled),
+    isEstimated,
+    byLoadId,
+  };
 }
 
 /**

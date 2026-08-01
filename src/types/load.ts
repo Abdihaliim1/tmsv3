@@ -155,6 +155,8 @@ export interface Load {
   dispatcherCommissionType?: 'percentage' | 'flat_fee' | 'per_mile';
   dispatcherCommissionRate?: number;
   dispatcherCommissionAmount?: number;
+  /** Overrides employee commissionBase when set */
+  dispatcherCommissionBase?: 'gross' | 'linehaul';
   isExternalDispatch?: boolean;
   
   // Factoring Information

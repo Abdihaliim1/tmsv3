@@ -3,11 +3,16 @@
  *
  * Handles:
  * - Task creation with deduplication (idempotent)
- * - Task storage in localStorage (tenant-aware)
+ * - Shared Firestore storage + localStorage cache (tenant-aware)
  * - Reconciliation against live load/invoice state
  */
 
 import { Task, NewTaskInput, Load, Invoice, LoadStatus } from '../../types';
+import {
+  loadTasksCollection,
+  saveTask as saveTaskDoc,
+  deleteTaskDoc,
+} from '../firestoreService';
 
 export function normalizeTenantId(tenantId: string | null | undefined): string {
   return tenantId || 'default';
@@ -56,13 +61,74 @@ export function loadTasks(tenantId: string | null): Task[] {
   return [];
 }
 
-export function saveTasks(tenantId: string | null, tasks: Task[]): void {
+function saveTasksLocal(tenantId: string | null, tasks: Task[]): void {
   try {
     const storageKey = getStorageKey(tenantId);
     localStorage.setItem(storageKey, JSON.stringify(tasks));
   } catch (error) {
     console.error('Error saving tasks to localStorage:', error);
   }
+}
+
+function syncTasksRemote(tenantId: string | null, tasks: Task[]): void {
+  const tid = normalizeTenantId(tenantId);
+  void Promise.all(
+    tasks.map(task =>
+      saveTaskDoc(tid, { ...task, tenantId: tid }).catch(err =>
+        console.warn('Failed to sync task to Firestore', task.id, err)
+      )
+    )
+  );
+}
+
+/** Persist tasks locally and sync to shared Firestore backend. */
+export function saveTasks(tenantId: string | null, tasks: Task[]): void {
+  saveTasksLocal(tenantId, tasks);
+  syncTasksRemote(tenantId, tasks);
+}
+
+/**
+ * Load tasks from Firestore, merge with local cache, and persist the union.
+ * Call once on tenant bootstrap so multi-user Tasks share the same store.
+ */
+export async function hydrateTasksFromBackend(tenantId: string | null): Promise<Task[]> {
+  const tid = normalizeTenantId(tenantId);
+  const local = loadTasks(tid);
+  let remote: Task[] = [];
+  try {
+    remote = await loadTasksCollection(tid);
+  } catch (error) {
+    console.warn('Failed to load tasks from Firestore; using local cache', error);
+  }
+
+  const byId = new Map<string, Task>();
+  [...local, ...remote].forEach(task => {
+    const existing = byId.get(task.id);
+    if (!existing) {
+      byId.set(task.id, task);
+      return;
+    }
+    const existingTs = existing.updatedAt || existing.createdAt || '';
+    const nextTs = task.updatedAt || task.createdAt || '';
+    byId.set(task.id, nextTs >= existingTs ? task : existing);
+  });
+
+  const merged = Array.from(byId.values());
+  try {
+    localStorage.setItem(getStorageKey(tid), JSON.stringify(merged));
+  } catch {
+    /* ignore quota */
+  }
+  // Push any local-only tasks up so other users can see them
+  const remoteIds = new Set(remote.map(t => t.id));
+  void Promise.all(
+    merged
+      .filter(t => !remoteIds.has(t.id))
+      .map(task =>
+        saveTaskDoc(tid, { ...task, tenantId: tid }).catch(() => undefined)
+      )
+  );
+  return merged;
 }
 
 function logicalTaskKey(task: Pick<Task, 'entityType' | 'entityId' | 'templateKey' | 'title'>): string {
@@ -225,7 +291,18 @@ export function deleteTask(tenantId: string | null, taskId: string): boolean {
     return false;
   }
 
-  saveTasks(tid, filtered);
+  try {
+    localStorage.setItem(getStorageKey(tid), JSON.stringify(filtered));
+  } catch {
+    /* ignore */
+  }
+  void deleteTaskDoc(tid, taskId).catch(() => undefined);
+  // Re-sync remaining without re-uploading deleted id via saveTasks
+  void Promise.all(
+    filtered.map(task =>
+      saveTaskDoc(tid, { ...task, tenantId: tid }).catch(() => undefined)
+    )
+  );
   return true;
 }
 
@@ -358,6 +435,7 @@ export function reconcileTasks(
       return task;
     });
 
-  saveTasks(tid, tasks);
+  // Reconcile is local-cache only; create/update/delete paths sync to Firestore
+  saveTasksLocal(tid, tasks);
   return tasks;
 }

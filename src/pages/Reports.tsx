@@ -10,6 +10,7 @@ import {
   isRevenueLoadStatus,
   calculateFactoringFees,
   calculateAccruedDriverPay,
+  calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
 } from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
@@ -21,7 +22,7 @@ type TabType = 'overview' | 'revenue' | 'expenses' | 'drivers' | 'customers' | '
 type PeriodType = 'current_month' | 'last_month' | 'current_quarter' | 'current_year' | 'all_time' | 'custom_month' | 'custom_range';
 
 const Reports: React.FC = () => {
-  const { loads, drivers, invoices, settlements, expenses, factoringCompanies } = useTMS();
+  const { loads, drivers, employees, invoices, settlements, expenses, factoringCompanies } = useTMS();
   const [currentTab, setCurrentTab] = useState<TabType>('overview');
   const [reportPeriod, setReportPeriod] = useState<PeriodType>('current_month');
   const [customMonth, setCustomMonth] = useState(() => {
@@ -419,6 +420,12 @@ const Reports: React.FC = () => {
       }
     });
 
+    const accruedDispatcher = calculateAccruedDispatcherCommission(
+      revenueLoads,
+      settlements,
+      employees
+    );
+
     // Dispatcher-specific reports
     const dispatcherReports: Record<string, {
       loadsBooked: number;
@@ -437,13 +444,13 @@ const Reports: React.FC = () => {
           };
         }
         dispatcherReports[load.dispatcherId].loadsBooked += 1;
-        dispatcherReports[load.dispatcherId].revenueBooked += load.grandTotal || load.rate || 0;
-        dispatcherReports[load.dispatcherId].commissionEarned += load.dispatcherCommissionAmount || 0;
+        dispatcherReports[load.dispatcherId].revenueBooked += getLoadRevenue(load);
+        dispatcherReports[load.dispatcherId].commissionEarned +=
+          accruedDispatcher.byLoadId[load.id] || 0;
       }
     });
 
-    // Calculate dispatcher cost for profitability (after dispatcherReports is defined)
-    const dispatcherCost = Object.values(dispatcherReports).reduce((sum, report) => sum + report.commissionEarned, 0);
+    const dispatcherCost = accruedDispatcher.total;
 
     // Factoring fees from factored loads and/or factored invoices
     const periodInvoices = invoices.filter(inv => {
@@ -487,7 +494,7 @@ const Reports: React.FC = () => {
       dispatcherCost,
       factoringExpenses,
     };
-  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, factoringCompanies]);
+  }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, employees, settlements, invoices, factoringCompanies, periodStart, periodEnd]);
 
   // Format currency
   const formatCurrency = (amount: number): string => {

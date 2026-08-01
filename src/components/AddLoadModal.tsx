@@ -4,6 +4,7 @@ import { LoadStatus, NewLoadInput, Load, Broker, NewBrokerInput } from '../types
 import { useTMS } from '../context/TMSContext';
 import { calculateDistance, validatePayPercentage } from '../services/utils';
 import { allocateStateMiles } from '../services/stateMiles';
+import { resolveDispatcherCommission } from '../services/businessLogic';
 import { normalize } from '../services/brokerUtils';
 import { BrokerAutocomplete } from './BrokerAutocomplete';
 import DocumentUpload from './DocumentUpload';
@@ -393,31 +394,38 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     }
   }, [formData.driverId, formData.rate, formData.miles, formData.detentionAmount, formData.layoverAmount, drivers]);
 
-  // Auto-calculate dispatcher commission
-  // Commission Calculation Logic:
-  // - percentage: commissionAmount = totalRate * (commissionRate / 100)
-  // - flat_fee: commissionAmount = commissionRate
-  // - per_mile: commissionAmount = totalMiles * commissionRate
+  // Auto-calculate dispatcher commission on gross revenue (rate+FSC+accessorials) by default
   useEffect(() => {
     if (formData.dispatcherCommissionType && formData.dispatcherCommissionRate > 0) {
-      let commissionAmount = 0;
-
-      if (formData.dispatcherCommissionType === 'percentage') {
-        // Percentage: commissionAmount = totalRate * (commissionRate / 100)
-        commissionAmount = formData.rate * (formData.dispatcherCommissionRate / 100);
-      } else if (formData.dispatcherCommissionType === 'flat_fee') {
-        // Flat fee: commissionAmount = commissionRate
-        commissionAmount = formData.dispatcherCommissionRate;
-      } else if (formData.dispatcherCommissionType === 'per_mile') {
-        // Per mile: commissionAmount = totalMiles * commissionRate
-        commissionAmount = formData.miles * formData.dispatcherCommissionRate;
-      }
-
-      setFormData(prev => ({ ...prev, dispatcherCommissionAmount: commissionAmount }));
+      const dispatcher = employees.find(e => e.id === formData.dispatcherId) || null;
+      const resolved = resolveDispatcherCommission(
+        {
+          ...formData,
+          rate: formData.rate || 0,
+          miles: formData.miles || 0,
+          grandTotal: formData.grandTotal || 0,
+          fscAmount: formData.fscAmount || 0,
+          dispatcherCommissionBase:
+            formData.dispatcherCommissionBase || dispatcher?.commissionBase || 'gross',
+        } as Load,
+        dispatcher,
+        { ignoreStored: true }
+      );
+      setFormData(prev => ({ ...prev, dispatcherCommissionAmount: resolved.amount }));
     } else {
       setFormData(prev => ({ ...prev, dispatcherCommissionAmount: 0 }));
     }
-  }, [formData.dispatcherCommissionType, formData.dispatcherCommissionRate, formData.rate, formData.miles]);
+  }, [
+    formData.dispatcherCommissionType,
+    formData.dispatcherCommissionRate,
+    formData.dispatcherCommissionBase,
+    formData.dispatcherId,
+    formData.rate,
+    formData.miles,
+    formData.grandTotal,
+    formData.fscAmount,
+    employees,
+  ]);
 
   // Auto-calculate Driver 2 earnings (if team load)
   useEffect(() => {

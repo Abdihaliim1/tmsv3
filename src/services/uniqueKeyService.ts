@@ -6,7 +6,7 @@
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
-export type UniqueKeyKind = 'loadNumber' | 'invoiceNumber';
+export type UniqueKeyKind = 'loadNumber' | 'invoiceNumber' | 'settlementNumber';
 
 export function normalizeUniqueValue(value: string): string {
   return value.trim().toLowerCase();
@@ -54,7 +54,9 @@ export async function claimUniqueKey(params: {
         throw new Error(
           kind === 'loadNumber'
             ? `Load number "${value}" already exists. Use a unique load number.`
-            : `Invoice number "${value}" already exists. Use a unique invoice number.`
+            : kind === 'settlementNumber'
+              ? `Settlement number "${value}" already exists. Use a unique settlement number.`
+              : `Invoice number "${value}" already exists. Use a unique invoice number.`
         );
       }
     }

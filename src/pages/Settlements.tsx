@@ -317,7 +317,10 @@ const Settlements: React.FC = () => {
     if (settlementType === 'dispatcher') {
       const dispatcher = employees.find(e => e.id === selectedDispatcherId);
       selectedLoadsData.forEach(load => {
-        const commission = resolveDispatcherCommission(load, dispatcher).amount;
+        // Prefer recomputed gross-base commission so locked snapshot matches P&L
+        const commission = resolveDispatcherCommission(load, dispatcher, {
+          ignoreStored: true,
+        }).amount;
         loadPays.push({ basePay: commission });
         settlementLoads.push({
           loadId: load.id,
@@ -328,8 +331,9 @@ const Settlements: React.FC = () => {
           layover: 0,
           dispatchFee: commission,
         });
+        totalMiles += getLoadMiles(load);
       });
-      return { loadPays, totalMiles: 0, settlementLoads };
+      return { loadPays, totalMiles, settlementLoads };
     }
 
     const driver = drivers.find(d => d.id === selectedDriverId);
@@ -781,10 +785,17 @@ const Settlements: React.FC = () => {
       }
     } else {
       const dispatcher = employees.find(e => e.id === selectedDispatcherId);
-      const rate = (dispatcher as any)?.commissionRate ?? (dispatcher as any)?.payment?.percentage;
-      if (rate != null && Number.isFinite(Number(rate))) {
-        payType = 'percentage';
-        payRateSnapshot = Number(rate);
+      const rate =
+        dispatcher?.dispatcherCommissionRate ||
+        dispatcher?.defaultCommissionRate ||
+        0;
+      const type =
+        dispatcher?.dispatcherCommissionType ||
+        dispatcher?.defaultCommissionType ||
+        'percentage';
+      if (rate > 0) {
+        payType = type === 'per_mile' ? 'per_mile' : type === 'flat_fee' ? 'flat_rate' : 'percentage';
+        payRateSnapshot = rate;
       }
     }
 
