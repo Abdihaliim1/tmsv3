@@ -56,8 +56,10 @@ service cloud.firestore {
     // Email → uid index for employee appRole sync
     match /emailIndex/{emailKey} {
       allow read: if request.auth != null && isAdmin(request.auth.uid);
-      allow create, update: if request.auth != null &&
-        request.resource.data.uid == request.auth.uid;
+      allow create, update: if request.auth != null && (
+        request.resource.data.uid == request.auth.uid ||
+        isAdmin(request.auth.uid)
+      );
       allow delete: if request.auth != null && isAdmin(request.auth.uid);
     }
     
