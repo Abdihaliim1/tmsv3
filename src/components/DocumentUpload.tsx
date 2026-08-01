@@ -136,21 +136,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       return;
     }
 
-    // Declare progressInterval outside try block so it can be cleared in catch
-    let progressInterval: NodeJS.Timeout | null = null;
-    
     try {
-      // Simulate progress (Firebase doesn't provide progress callbacks in v9)
-      progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            if (progressInterval) clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
-
       const document = await uploadEntityDocument({
         tenantId: tenantId || 'default',
         entityType,
@@ -160,9 +146,9 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         actorUid: user?.uid || 'anonymous',
         expiresAt: showExpirationDate && expirationDate ? expirationDate : undefined,
         tags: [],
+        onProgress: (pct) => setUploadProgress(pct),
       });
 
-      if (progressInterval) clearInterval(progressInterval);
       setUploadProgress(100);
 
       // Reset form
@@ -179,10 +165,6 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         setUploadProgress(0);
       }, 500);
     } catch (err: any) {
-      // Clear progress interval if it still exists
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
       setUploadProgress(0);
       setIsUploading(false);
       

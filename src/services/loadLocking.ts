@@ -23,6 +23,23 @@ const NO_REASON_REQUIRED_FIELDS = [
   'settlementNumber',
   'dispatcherSettlementId', // Linking dispatcher settlement (independent of driver)
   'dispatcherSettlementNumber',
+  // Factoring funding controls (Mark Funded / Hold) — operational, not financial edits
+  'isFactored',
+  'factoringStatus',
+  'factoredAmount',
+  'factoringFee',
+  'factoringFeePercent',
+  'expectedNet',
+  'actualReceived',
+  'paymentReceived',
+  'paymentAmount',
+  'paymentReceivedDate',
+  'fundedAt',
+  'factoringPaymentReference',
+  'factoringCompanyId',
+  'factoringCompanyName',
+  'factoringInvoiceId',
+  'factoredDate',
 ] as const;
 
 /**

@@ -9,10 +9,30 @@ function roundMoney(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Gross amount submitted to factoring (fee base).
+ * Writers historically stored *net* in factoredAmount — detect that and use revenue instead
+ * so fees are never applied twice ($1800 → $1755 → $1711).
+ */
 export function getLoadFactoredAmount(load: Load): number {
+  const revenue = roundMoney(getLoadRevenue(load));
+  if (!(revenue > 0)) {
+    const stored = Number(load.factoredAmount) || 0;
+    return stored > 0 ? roundMoney(stored) : 0;
+  }
+
   const stored = Number(load.factoredAmount) || 0;
-  if (stored > 0) return roundMoney(stored);
-  return roundMoney(getLoadRevenue(load));
+  if (!(stored > 0)) return revenue;
+
+  const pct =
+    Number(load.factoringFeePercent) ||
+    2.5;
+  const impliedNet = roundMoney(revenue * (1 - pct / 100));
+  // Legacy: factoredAmount was saved as net (revenue − fee)
+  if (Math.abs(stored - impliedNet) < 0.02 || stored < revenue - 0.005) {
+    return revenue;
+  }
+  return roundMoney(stored);
 }
 
 export function getLoadFeePercent(

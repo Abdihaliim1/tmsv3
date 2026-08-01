@@ -1,10 +1,13 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   ClipboardList, Plus, Search, Edit, Copy, Trash2,
   MapPin, FileText, DollarSign, ChevronRight, X, Check, Paperclip
 } from 'lucide-react';
 import { PlannedLoad, PlannedLoadStatus, NewPlannedLoadInput, FeeType } from '../types/plannedLoad';
 import { useTMS } from '../context/TMSContext';
+import { useTenant } from '../context/TenantContext';
+import { useAuth } from '../context/AuthContext';
+import { uploadEntityDocument } from '../services/documentService';
 
 // Quantity unit type for form
 type QuantityUnit = 'pallets' | 'boxes' | 'cases' | 'pieces' | 'lbs' | 'kg';
@@ -1334,14 +1337,23 @@ interface ViewPlannedLoadProps {
   onAddTrip: () => void;
   onBrokerTrip: () => void;
   onDispatch: (driverId: string, dispatcherId?: string) => void;
+  onCopy: () => void;
+  onDelete: () => void;
 }
 
-const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack, onAddTrip, onBrokerTrip, onDispatch }) => {
-  const { drivers, trucks, employees } = useTMS();
+const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
+  load, onEdit, onBack, onAddTrip, onBrokerTrip, onDispatch, onCopy, onDelete,
+}) => {
+  const { drivers, trucks, employees, updatePlannedLoad } = useTMS();
+  const { activeTenantId } = useTenant();
+  const { user } = useAuth();
   const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
   const [selectedDriverId, setSelectedDriverId] = useState('');
   const [selectedTruckId, setSelectedTruckId] = useState('');
   const [selectedDispatcherId, setSelectedDispatcherId] = useState(load.dispatcherId || '');
+  const [attachBusy, setAttachBusy] = useState<'RATE_CON' | 'BOL' | null>(null);
+  const rateConInputRef = useRef<HTMLInputElement>(null);
+  const bolInputRef = useRef<HTMLInputElement>(null);
 
   const handleDispatchClick = () => {
     if (!selectedDriverId) {
@@ -1350,6 +1362,56 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack,
     }
     onDispatch(selectedDriverId, selectedDispatcherId || undefined);
   };
+
+  const handleAttachFile = async (docType: 'RATE_CON' | 'BOL', file: File | undefined) => {
+    if (!file) return;
+    setAttachBusy(docType);
+    try {
+      const uploaded = await uploadEntityDocument({
+        tenantId: activeTenantId || 'default',
+        entityType: 'plannedLoad',
+        entityId: load.id,
+        type: docType,
+        file,
+        actorUid: user?.uid || 'anonymous',
+      });
+      const plannedDoc = {
+        id: uploaded.id,
+        name: uploaded.fileName,
+        url: uploaded.url,
+        type: (docType === 'RATE_CON' ? 'rate_con' : 'bol') as 'rate_con' | 'bol',
+        uploadedAt: uploaded.uploadedAt,
+      };
+      const patch: Partial<PlannedLoad> = {
+        documents: [...(load.documents || []), plannedDoc],
+      };
+      if (docType === 'RATE_CON') {
+        patch.rateConUrl = uploaded.url;
+        if (load.customer) {
+          patch.customer = {
+            ...load.customer,
+            rateConAttached: true,
+          } as PlannedLoad['customer'];
+        }
+      } else {
+        patch.bolUrl = uploaded.url;
+      }
+      updatePlannedLoad(load.id, patch);
+      alert(`${docType === 'RATE_CON' ? 'Rate Confirmation' : 'BOL'} attached successfully.`);
+    } catch (error) {
+      console.error('Attach failed:', error);
+      alert(error instanceof Error ? error.message : 'Failed to attach document.');
+    } finally {
+      setAttachBusy(null);
+    }
+  };
+
+  const hasRateCon = Boolean(
+    load.rateConUrl
+    || (load as { rateConfirmationUrl?: string }).rateConfirmationUrl
+    || (load.customer as { rateConAttached?: boolean } | undefined)?.rateConAttached
+    || (load.documents || []).some(d => String(d.type).toLowerCase().includes('rate'))
+  );
 
   return (
     <div className="space-y-6">
@@ -1372,19 +1434,55 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({ load, onEdit, onBack,
             <Plus size={16} />
             Broker Trip
           </button>
-          <button className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-2">
+          <button type="button" onClick={onCopy} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-2">
             <Copy size={16} />
             Copy
           </button>
-          <button className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-2">
+          <input
+            ref={rateConInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              void handleAttachFile('RATE_CON', file);
+            }}
+          />
+          <button
+            type="button"
+            disabled={attachBusy !== null}
+            onClick={() => rateConInputRef.current?.click()}
+            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+              hasRateCon
+                ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            } disabled:opacity-50`}
+          >
             <Paperclip size={16} />
-            Attach Rate Con
+            {attachBusy === 'RATE_CON' ? 'Uploading…' : hasRateCon ? 'Rate Con Attached' : 'Attach Rate Con'}
           </button>
-          <button className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-2">
+          <input
+            ref={bolInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              void handleAttachFile('BOL', file);
+            }}
+          />
+          <button
+            type="button"
+            disabled={attachBusy !== null}
+            onClick={() => bolInputRef.current?.click()}
+            className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 flex items-center gap-2 disabled:opacity-50"
+          >
             <FileText size={16} />
-            Attach BOL
+            {attachBusy === 'BOL' ? 'Uploading…' : 'Attach BOL'}
           </button>
-          <button className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 flex items-center gap-2">
+          <button type="button" onClick={onDelete} className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 flex items-center gap-2">
             <Trash2 size={16} />
             Delete
           </button>
@@ -1813,14 +1911,23 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
   }
 
   if (viewMode === 'view' && selectedLoad) {
+    const liveLoad = plannedLoads.find(l => l.id === selectedLoad.id) || selectedLoad;
     return (
       <ViewPlannedLoad
-        load={selectedLoad}
+        load={liveLoad}
         onEdit={() => setViewMode('edit')}
         onBack={() => { setViewMode('list'); setSelectedLoad(null); }}
-        onAddTrip={() => navigateToTripsWithLoad([selectedLoad.id])}
+        onAddTrip={() => navigateToTripsWithLoad([liveLoad.id])}
         onBrokerTrip={() => alert('Broker Trip functionality coming soon')}
         onDispatch={handleDispatchFromView}
+        onCopy={() => handleCopyLoad(liveLoad)}
+        onDelete={() => {
+          if (confirm(`Delete planned load ${liveLoad.customLoadNumber || liveLoad.systemLoadNumber}?`)) {
+            handleDeleteLoad(liveLoad.id);
+            setViewMode('list');
+            setSelectedLoad(null);
+          }
+        }}
       />
     );
   }

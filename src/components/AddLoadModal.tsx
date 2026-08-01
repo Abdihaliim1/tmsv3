@@ -282,7 +282,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
       if (selectedCompany) {
         const feePercentage = selectedCompany.feePercentage || 0;
         const fee = formData.grandTotal > 0 ? formData.grandTotal * (feePercentage / 100) : 0;
-        const factoredAmount = formData.grandTotal - fee;
+        // factoredAmount = GROSS submitted to factor (fee base). Net = gross − fee.
+        const factoredAmount = formData.grandTotal > 0 ? formData.grandTotal : 0;
 
         // Auto-set factored date to day after delivery if not set
         let factoredDate = formData.factoredDate;
@@ -298,7 +299,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
           factoringCompanyName: selectedCompany.name,
           factoringFeePercent: feePercentage,
           factoringFee: fee,
-          factoredAmount: factoredAmount,
+          factoredAmount,
+          expectedNet: factoredAmount > 0 ? factoredAmount - fee : 0,
           factoredDate: factoredDate || prev.factoredDate,
         }));
       } else if (formData.grandTotal > 0) {
@@ -573,10 +575,31 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: name === 'rate' || name === 'miles' ? parseFloat(value) : value
-    }));
+    const numericFields = new Set([
+      'rate', 'miles', 'detentionAmount', 'layoverDays', 'layoverRate', 'layoverAmount',
+      'lumperFee', 'lumperAmount', 'fscAmount', 'tonuFee', 'otherAccessorials',
+      'driverPay', 'dispatcherCommissionAmount', 'factoringFeePercent',
+    ]);
+    setFormData(prev => {
+      if (!numericFields.has(name)) {
+        return { ...prev, [name]: value };
+      }
+      const parsed = value === '' ? 0 : parseFloat(value);
+      const num = Number.isFinite(parsed) ? parsed : 0;
+      const next = { ...prev, [name]: num };
+      // Keep lumper aliases in sync (UI uses lumperFee; totals use lumperAmount)
+      if (name === 'lumperFee' || name === 'lumperAmount') {
+        next.lumperFee = num;
+        next.lumperAmount = num;
+      }
+      // Auto layover amount = days × rate
+      if (name === 'layoverDays' || name === 'layoverRate') {
+        const days = name === 'layoverDays' ? num : (prev.layoverDays || 0);
+        const ratePerDay = name === 'layoverRate' ? num : (prev.layoverRate || 0);
+        next.layoverAmount = Math.round(days * ratePerDay * 100) / 100;
+      }
+      return next;
+    });
   };
 
   const handleDriverChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -1049,18 +1072,6 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                       placeholder="0.00"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-slate-600">Other Accessorials ($)</label>
-                    <input
-                      name="otherAccessorials"
-                      type="number"
-                      step="0.01"
-                      value={formData.otherAccessorials || ''}
-                      onChange={handleChange}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                      placeholder="0.00"
-                    />
-                  </div>
                   <div className="space-y-2 sm:col-span-2">
                     <label className="text-xs font-medium text-slate-600">Grand Total ($)</label>
                     <input
@@ -1225,10 +1236,22 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-slate-600">Status</label>
                   <select name="status" value={formData.status} onChange={handleChange} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                    {Object.values(LoadStatus).map(status => (
+                    {(editingLoad
+                      ? Object.values(LoadStatus)
+                      : [
+                          LoadStatus.Available,
+                          LoadStatus.Dispatched,
+                          LoadStatus.InTransit,
+                        ]
+                    ).map(status => (
                       <option key={status} value={status}>{status.replace('_', ' ').toUpperCase()}</option>
                     ))}
                   </select>
+                  {!editingLoad && (
+                    <p className="text-xs text-slate-500">
+                      New loads start Available / Dispatched / In Transit only. Delivered requires Rate Con and the full lifecycle.
+                    </p>
+                  )}
                 </div>
 
                 {/* Driver 2 Section (Team Load) */}

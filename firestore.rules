@@ -212,7 +212,7 @@ service cloud.firestore {
         (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
       allow delete: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        isAdmin(request.auth.uid);
+        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
     }
     
     // Audit Logs (read-only, no updates/deletes)

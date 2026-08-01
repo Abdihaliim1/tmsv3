@@ -13,6 +13,7 @@ const DriversPage = lazy(() => import('./Drivers'));
 const FleetPage = lazy(() => import('./Fleet'));
 const ImportPage = lazy(() => import('./Import'));
 const TasksPage = lazy(() => import('./Tasks'));
+const AddressesPage = lazy(() => import('./Addresses'));
 
 // Loading component
 const PageLoader = () => (
@@ -254,11 +255,9 @@ const SettingsMore: React.FC = () => {
         );
       case 'addresses':
         return (
-          <PlaceholderPage
-            title="Addresses"
-            description="Saved address book is planned. Pickup/delivery addresses are currently stored on each load and trip."
-            icon={<MapPin className="w-8 h-8 text-blue-600" />}
-          />
+          <Suspense fallback={<PageLoader />}>
+            <AddressesPage />
+          </Suspense>
         );
       case 'userGuide':
         return (

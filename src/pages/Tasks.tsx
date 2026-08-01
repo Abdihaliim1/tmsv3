@@ -456,14 +456,12 @@ const Tasks: React.FC = () => {
                         Complete
                       </button>
                     )}
-                    {task.status !== 'completed' && task.status !== 'cancelled' && (
-                      <button
-                        onClick={() => handleDelete(task.id)}
-                        className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
-                      >
-                        Delete
-                      </button>
-                    )}
+                    <button
+                      onClick={() => handleDelete(task.id)}
+                      className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               </div>

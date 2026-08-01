@@ -88,6 +88,9 @@ export interface Load {
   
   // Documents
   documents?: TmsDocument[];
+  /** Convenience URL when Rate Con is attached (also mirrored in documents) */
+  rateConUrl?: string;
+  rateConfirmationUrl?: string;
   
   // Equipment
   truckId?: string;

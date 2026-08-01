@@ -311,10 +311,46 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const factoringFee = isFactored ? totalAmount * (factoringFeePercent / 100) : 0;
   const netAmount = totalAmount - factoringFee;
 
+  const allowNoLoadInvoice = !initialCustomerName && preSelectedLoadIds.length === 0;
+
   const handleCreateInvoice = async () => {
     if (isSubmitting) return;
-    if (selectedLoadIds.length === 0) {
+    if (selectedLoadIds.length === 0 && !allowNoLoadInvoice) {
       alert('Please select at least one load to invoice');
+      return;
+    }
+    if (selectedLoadIds.length === 0 && allowNoLoadInvoice) {
+      const customer = window.prompt('Customer / broker name for this no-load invoice:');
+      if (!customer?.trim()) {
+        alert('Customer name is required for a no-load invoice.');
+        return;
+      }
+      const amountRaw = window.prompt('Invoice amount (USD):');
+      const amount = Number(amountRaw);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        alert('Enter a valid invoice amount greater than 0.');
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        const finalInvoiceNumber = (customInvoiceNumber || invoiceNumber).trim();
+        await addInvoice({
+          invoiceNumber: finalInvoiceNumber,
+          customerName: customer.trim(),
+          amount,
+          status: 'pending',
+          date: invoiceDate,
+          dueDate,
+          loadIds: [],
+          notes: note || undefined,
+          isFactored: false,
+        } as any);
+        onSave();
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Failed to create invoice.');
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -704,10 +740,10 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       <div className="flex items-center gap-4">
         <button
           onClick={handleCreateInvoice}
-          disabled={selectedLoadIds.length === 0 || isSubmitting}
+          disabled={(!allowNoLoadInvoice && selectedLoadIds.length === 0) || isSubmitting}
           className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed font-medium"
         >
-          {isSubmitting ? 'Creating…' : 'Create Invoice'}
+          {isSubmitting ? 'Creating…' : allowNoLoadInvoice && selectedLoadIds.length === 0 ? 'Create No-Load Invoice' : 'Create Invoice'}
         </button>
         <button
           onClick={onCancel}
@@ -886,7 +922,7 @@ interface InvoiceListProps {
 }
 
 const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
-  const { invoices, loads, factoringCompanies, factoringTransactions, deleteInvoice, updateInvoice, updateFactoringTransaction, addFactoringTransaction, recordInvoicePayment } = useTMS();
+  const { invoices, loads, factoringCompanies, factoringTransactions, deleteInvoice, updateInvoice, updateLoad, updateFactoringTransaction, addFactoringTransaction, recordInvoicePayment } = useTMS();
   const { companyProfile } = useCompany();
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
@@ -1247,7 +1283,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                                 {(['submitted', 'approved', 'funded', 'customer_paid', 'rejected', 'repurchased'] as FactoringFundingStatus[]).map(status => (
                                   <button
                                     key={status}
-                                    onClick={() => {
+                                    onClick={async () => {
                                       const today = new Date().toISOString().split('T')[0];
                                       const patch: Partial<Invoice> = { fundingStatus: status };
                                       if (status === 'funded') patch.factorFundedDate = today;
@@ -1263,6 +1299,29 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                                           submittedDate: status === 'submitted' ? today : tx.submittedDate,
                                           recourseStatus: status === 'repurchased' ? 'repurchased' : tx.recourseStatus,
                                         });
+                                      }
+                                      // Keep per-load factoring status in sync with invoice funding
+                                      if (status === 'funded') {
+                                        const linkedIds = Array.from(new Set([
+                                          ...(invoice.loadId ? [invoice.loadId] : []),
+                                          ...(invoice.loadIds || []),
+                                        ]));
+                                        for (const loadId of linkedIds) {
+                                          const load = loads.find(l => l.id === loadId);
+                                          if (!load || isLoadFunded(load) || isLoadHeld(load)) continue;
+                                          const company = factoringCompanies.find(c => c.id === (load.factoringCompanyId || invoice.factoringCompanyId));
+                                          const loadPatch = buildMarkLoadFundedPatch(
+                                            load,
+                                            invoice,
+                                            company?.feePercentage,
+                                            `Invoice-Funded-${invoice.invoiceNumber}`,
+                                          );
+                                          try {
+                                            await updateLoad(loadId, loadPatch, 'Factoring: invoice marked funded');
+                                          } catch (err) {
+                                            console.error('Failed to sync load funding from invoice:', err);
+                                          }
+                                        }
                                       }
                                       setOpenMenuId(null);
                                     }}
@@ -1495,16 +1554,21 @@ const FactoredLoadsTab: React.FC = () => {
   const handleMarkLoadFunded = async (loadId: string) => {
     const item = factoredData.find(d => d.load.id === loadId);
     if (!item) return;
-    const patch = buildMarkLoadFundedPatch(
-      item.load,
-      item.invoice,
-      item.factoringCompany?.feePercentage,
-      `Factored-${item.load.loadNumber}`
-    );
-    await updateLoad(loadId, patch);
-    const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
-    if (item.invoice) {
-      syncInvoiceFromLoads(item.invoice.id, nextLoads);
+    try {
+      const patch = buildMarkLoadFundedPatch(
+        item.load,
+        item.invoice,
+        item.factoringCompany?.feePercentage,
+        `Factored-${item.load.loadNumber}`
+      );
+      await updateLoad(loadId, patch, 'Factoring: Mark Load Funded');
+      const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
+      if (item.invoice) {
+        syncInvoiceFromLoads(item.invoice.id, nextLoads);
+      }
+    } catch (error) {
+      console.error('Mark Load Funded failed:', error);
+      alert(error instanceof Error ? error.message : 'Failed to mark load funded.');
     }
   };
 
@@ -1514,11 +1578,16 @@ const FactoredLoadsTab: React.FC = () => {
     if (!window.confirm(`Hold load ${item.load.loadNumber} for missing paperwork? Sibling loads will not be affected.`)) {
       return;
     }
-    const patch = buildMarkLoadHeldPatch('Missing paperwork');
-    await updateLoad(loadId, patch);
-    const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
-    if (item.invoice) {
-      syncInvoiceFromLoads(item.invoice.id, nextLoads);
+    try {
+      const patch = buildMarkLoadHeldPatch('Missing paperwork');
+      await updateLoad(loadId, patch, 'Factoring: Hold load');
+      const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
+      if (item.invoice) {
+        syncInvoiceFromLoads(item.invoice.id, nextLoads);
+      }
+    } catch (error) {
+      console.error('Hold load failed:', error);
+      alert(error instanceof Error ? error.message : 'Failed to hold load.');
     }
   };
 
@@ -1553,18 +1622,23 @@ const FactoredLoadsTab: React.FC = () => {
       return;
     }
 
-    let nextLoads = [...loads];
-    for (const item of pending) {
-      const patch = buildMarkLoadFundedPatch(
-        item.load,
-        item.invoice,
-        item.factoringCompany?.feePercentage,
-        `Factored-All-${invoice.invoiceNumber}`
-      );
-      await updateLoad(item.load.id, patch);
-      nextLoads = nextLoads.map(l => (l.id === item.load.id ? { ...l, ...patch } : l));
+    try {
+      let nextLoads = [...loads];
+      for (const item of pending) {
+        const patch = buildMarkLoadFundedPatch(
+          item.load,
+          item.invoice,
+          item.factoringCompany?.feePercentage,
+          `Factored-All-${invoice.invoiceNumber}`
+        );
+        await updateLoad(item.load.id, patch, 'Factoring: Mark All Funded');
+        nextLoads = nextLoads.map(l => (l.id === item.load.id ? { ...l, ...patch } : l));
+      }
+      syncInvoiceFromLoads(invoiceId, nextLoads);
+    } catch (error) {
+      console.error('Mark All Funded failed:', error);
+      alert(error instanceof Error ? error.message : 'Failed to mark all funded.');
     }
-    syncInvoiceFromLoads(invoiceId, nextLoads);
   };
 
   return (

@@ -8,6 +8,7 @@ import { autoSeedCustomers } from '../services/customerSeed';
 import { autoSeedFactoringCompanies } from '../services/factoringCompanySeed';
 import { generateSearchKey, generatePrefixes } from '../services/brokerUtils';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
+import { generateUniqueLoadNumber } from '../services/counterService';
 import { generateShortId, generateStopId } from '../utils/idGenerator';
 import { triggerLoadCreated, triggerLoadStatusChanged, triggerLoadDelivered, triggerInvoiceCreated } from '../services/workflow/workflowEngine';
 import {
@@ -126,7 +127,7 @@ interface TMSContextType {
   deleteSettlement: (id: string, force?: boolean) => void;
   addExpense: (expense: NewExpenseInput) => void;
   updateExpense: (id: string, expense: Partial<Expense>) => void;
-  deleteExpense: (id: string) => void;
+  deleteExpense: (id: string) => Promise<void>;
   addFactoringCompany: (company: NewFactoringCompanyInput) => void;
   updateFactoringCompany: (id: string, company: Partial<FactoringCompany>) => void;
   deleteFactoringCompany: (id: string) => void;
@@ -225,7 +226,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         deleteSettlement: () => { },
         addExpense: () => { },
         updateExpense: () => { },
-        deleteExpense: () => { },
+        deleteExpense: async () => { },
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },
@@ -547,8 +548,35 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       : null;
     const withCommission = withDispatcherCommission(sanitizedInput, dispatcher);
 
+    // Lifecycle: create may only start in early operational statuses.
+    // Delivered/Invoiced/Paid/Completed require docs + transitions after create.
+    const allowedCreateStatuses = new Set<LoadStatus>([
+      LoadStatus.Available,
+      LoadStatus.Dispatched,
+      LoadStatus.InTransit,
+    ]);
+    const requestedStatus = (sanitizedInput.status || LoadStatus.Available) as LoadStatus;
+    if (!allowedCreateStatuses.has(requestedStatus)) {
+      throw new Error(
+        `Cannot create a load as "${requestedStatus}". Start as Available, Dispatched, or In Transit, then advance through the lifecycle with Rate Con / POD.`
+      );
+    }
+    if (
+      (requestedStatus === LoadStatus.Dispatched || requestedStatus === LoadStatus.InTransit)
+    ) {
+      const dispatchCheck = canDispatchLoad({
+        ...sanitizedInput,
+        status: LoadStatus.Available,
+      } as Load);
+      if (!dispatchCheck.canDispatch) {
+        throw new Error(dispatchCheck.reason || 'Cannot create load in Dispatched/In Transit without required documents/assignment.');
+      }
+    }
+
+    const tid = tenantId || 'default';
     const loadNumber =
-      sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`;
+      (sanitizedInput.loadNumber && sanitizedInput.loadNumber.trim())
+      || await generateUniqueLoadNumber(tid);
     const loadKey = loadNumber.trim().toLowerCase();
     if (isDuplicateLoadNumber(loadNumber) || inFlightLoadNumbers.has(loadKey)) {
       throw new Error(`Load number "${loadNumber}" already exists. Use a unique load number.`);
@@ -556,7 +584,6 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     inFlightLoadNumbers.add(loadKey);
 
     const newLoadId = generateShortId();
-    const tid = tenantId || 'default';
     try {
       await claimUniqueKey({
         tenantId: tid,
@@ -573,7 +600,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       ...sanitizedInput,
       ...withCommission,
       id: newLoadId,
-      // Preserve loadNumber if provided, otherwise generate one
+      status: requestedStatus,
       loadNumber,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
@@ -640,48 +667,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       throw error; // Re-throw so caller knows it failed
     }
 
-    // --- AUTOMATION LOGIC ---
-    // Delivered loads: auto-create invoice only. Settlements are created intentionally
-    // via Settlements → Generate (never auto-create empty/$NaN settlement shells).
-    if (newLoad.status === LoadStatus.Delivered || newLoad.status === LoadStatus.Completed) {
-      const today = new Date();
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + 30); // Net 30
-
-      const isFactored = newLoad.isFactored || false;
-      const factoringCompany = factoringCompanies.find(fc => fc.id === newLoad.factoringCompanyId);
-
-      const newInvoice: Invoice = {
-        id: `inv-${newLoadId}`,
-        invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
-        loadIds: [newLoad.id],
-        customerName: newLoad.customerName,
-        amount: newLoad.grandTotal || newLoad.rate,
-        status: isFactored ? 'paid' : 'pending',
-        date: today.toISOString().split('T')[0],
-        dueDate: dueDate.toISOString().split('T')[0],
-        isFactored: isFactored,
-        factoringCompanyId: newLoad.factoringCompanyId,
-        factoringCompanyName: factoringCompany?.name || newLoad.factoringCompanyName,
-        factoredDate: newLoad.factoredDate,
-        factoredAmount: newLoad.factoredAmount,
-        factoringFee: newLoad.factoringFee,
-        paidAt: isFactored ? (newLoad.factoredDate || today.toISOString().split('T')[0]) : undefined,
-      };
-      setInvoices(prev => [newInvoice, ...prev]);
-      saveInvoice(tenantId || 'default', newInvoice).catch(e =>
-        console.error('Failed to save auto-invoice:', e)
-      );
-      const linkedLoad = {
-        ...newLoad,
-        invoiceId: newInvoice.id,
-        invoiceNumber: newInvoice.invoiceNumber,
-      };
-      setLoads(prev => prev.map(l => (l.id === newLoadId ? linkedLoad : l)));
-      saveLoad(tenantId || 'default', linkedLoad).catch(e =>
-        console.error('Failed to link invoice on load:', e)
-      );
-    }
+    // Do NOT auto-create invoices on load create. Invoices are created intentionally
+    // from Invoices / AR after delivery + paperwork. Auto Paid/factored invoices
+    // bypassed the lifecycle and corrupted factoring status.
   };
 
   const updateLoad = async (id: string, updates: Partial<Load>, reason?: string): Promise<void> => {
@@ -2219,9 +2207,18 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
   };
 
-  const deleteExpense = (id: string) => {
+  const deleteExpense = async (id: string) => {
+    const previous = expenses;
     setExpenses(prev => prev.filter(expense => expense.id !== id));
-    firestoreDeleteExpense(tenantId || 'default', id).catch(e => console.error('Failed to delete expense:', e));
+    try {
+      await firestoreDeleteExpense(tenantId || 'default', id);
+    } catch (e) {
+      setExpenses(previous);
+      console.error('Failed to delete expense:', e);
+      throw e instanceof Error
+        ? e
+        : new Error('Failed to delete expense. Admin permission may be required.');
+    }
   };
 
   const addFactoringCompany = (input: NewFactoringCompanyInput) => {
@@ -2883,6 +2880,54 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         ? drivers.find(d => d.id === tripData.driverId) || employees.find(e => e.id === tripData.driverId)
         : undefined;
 
+      const plannedDocs = (plannedLoad.documents || [])
+        .filter(d => !!d.url)
+        .map((d) => {
+          const rawType = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
+          const type =
+            rawType === 'RATE_CON' || rawType === 'RATECON'
+              ? 'RATE_CON'
+              : rawType === 'BOL'
+                ? 'BOL'
+                : rawType === 'POD'
+                  ? 'POD'
+                  : 'OTHER';
+          return {
+            id: d.id || generateShortId(),
+            type,
+            fileName: d.name || `${type}.pdf`,
+            url: d.url,
+            uploadedAt: d.uploadedAt || now,
+            uploadedBy: authUser?.uid || 'system',
+          };
+        });
+      if (
+        plannedLoad.rateConUrl
+        && !plannedDocs.some(d => d.type === 'RATE_CON')
+      ) {
+        plannedDocs.push({
+          id: generateShortId(),
+          type: 'RATE_CON',
+          fileName: 'rate-con.pdf',
+          url: plannedLoad.rateConUrl,
+          uploadedAt: now,
+          uploadedBy: authUser?.uid || 'system',
+        });
+      }
+      if (
+        plannedLoad.bolUrl
+        && !plannedDocs.some(d => d.type === 'BOL')
+      ) {
+        plannedDocs.push({
+          id: generateShortId(),
+          type: 'BOL',
+          fileName: 'bol.pdf',
+          url: plannedLoad.bolUrl,
+          uploadedAt: now,
+          uploadedBy: authUser?.uid || 'system',
+        });
+      }
+
       const draftLoad: Load = {
         id: generateShortId(),
         loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
@@ -2954,6 +2999,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
         // Document numbers
         bolNumber: firstPickup?.bolNumber,
+
+        documents: plannedDocs as Load['documents'],
+        rateConUrl:
+          plannedLoad.rateConUrl
+          || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
+        rateConfirmationUrl:
+          plannedLoad.rateConUrl
+          || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
 
         // Trip Linking
         tripId,
@@ -3316,7 +3369,7 @@ export const useTMS = () => {
         deleteSettlement: () => { },
         addExpense: () => { },
         updateExpense: () => { },
-        deleteExpense: () => { },
+        deleteExpense: async () => { },
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },

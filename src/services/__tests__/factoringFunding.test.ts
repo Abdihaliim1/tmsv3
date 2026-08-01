@@ -4,6 +4,7 @@ import {
   deriveInvoiceFundingFromLoads,
   getLoadAllocatedFee,
   getLoadExpectedNet,
+  getLoadFactoredAmount,
   isLoadFunded,
   summarizeFactoredLoads,
 } from '../factoringFunding';
@@ -89,6 +90,34 @@ describe('factoring fee allocation (Test A)', () => {
     // Per-load fee is share of invoice fee (~$53.63), never $3,217.50
     expect(getLoadAllocatedFee(loads[0], invoice)).toBeCloseTo(53.63, 1);
     expect(getLoadAllocatedFee(loads[0], invoice)).toBeLessThan(100);
+  });
+});
+
+describe('legacy double-fee prevention (audit $1800 @ 2.5%)', () => {
+  it('treats factoredAmount stored as net as gross revenue so expected net is $1,755', () => {
+    // Bug: writers stored net ($1,755) in factoredAmount; UI then applied fee again → $1,711.12
+    const load = makeLoad({
+      id: 'LEGACY',
+      rate: 1800,
+      grandTotal: 1800,
+      factoredAmount: 1755, // legacy net
+      factoringFeePercent: 2.5,
+    });
+    expect(getLoadFactoredAmount(load)).toBe(1800);
+    expect(getLoadAllocatedFee(load)).toBe(45);
+    expect(getLoadExpectedNet(load)).toBe(1755);
+  });
+
+  it('keeps explicitly higher custom factoredAmount when not legacy net', () => {
+    const load = makeLoad({
+      id: 'CUSTOM',
+      rate: 1800,
+      grandTotal: 1800,
+      factoredAmount: 1900,
+      factoringFeePercent: 2.5,
+    });
+    expect(getLoadFactoredAmount(load)).toBe(1900);
+    expect(getLoadExpectedNet(load)).toBe(1852.5);
   });
 });
 

@@ -29,7 +29,7 @@ export interface TmsDocument {
   fileSize?: number;
   url: string;
   storagePath?: string;
-  entityType?: 'load' | 'invoice' | 'settlement' | 'truck';
+  entityType?: 'load' | 'invoice' | 'settlement' | 'truck' | 'plannedLoad';
   entityId?: string;
   uploadedAt: string;
   uploadedBy?: string;

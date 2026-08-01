@@ -316,11 +316,18 @@ const Expenses: React.FC = () => {
                               <span>Edit</span>
                             </button>
                             <button
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
-                                if (confirm('Are you sure you want to delete this expense?')) {
-                                  deleteExpense(expense.id);
+                                if (!confirm('Are you sure you want to delete this expense?')) return;
+                                try {
+                                  await deleteExpense(expense.id);
                                   setOpenMenuId(null);
+                                } catch (err) {
+                                  alert(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Failed to delete expense. Admin permission may be required.'
+                                  );
                                 }
                               }}
                               className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"

@@ -11,7 +11,7 @@
  * - Missing documents checklist
  */
 
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { storage, db } from "../lib/firebase";
 import { TmsDocument, DocumentType, Load, LoadStatus } from "../types";
@@ -74,15 +74,18 @@ async function syncLoadToFirestore(tenantId: string, load: Load): Promise<void> 
  */
 export async function uploadEntityDocument(params: {
   tenantId: string;
-  entityType: "load" | "invoice" | "settlement" | "truck";
+  entityType: "load" | "invoice" | "settlement" | "truck" | "plannedLoad";
   entityId: string;
   type: DocumentType;
   file: File;
   actorUid: string;
   expiresAt?: string; // Optional expiration date for insurance/permits
   tags?: string[];
+  onProgress?: (pct: number) => void;
 }): Promise<TmsDocument> {
-  const entityRef = doc(db, `tenants/${params.tenantId}/${params.entityType}s/${params.entityId}`);
+  const collectionName =
+    params.entityType === 'plannedLoad' ? 'plannedLoads' : `${params.entityType}s`;
+  const entityRef = doc(db, `tenants/${params.tenantId}/${collectionName}/${params.entityId}`);
   let snap = await getDoc(entityRef);
   
   // If not in Firestore, check localStorage (for loads only)
@@ -112,14 +115,43 @@ export async function uploadEntityDocument(params: {
   // Upload to Firebase Storage
   // Sanitize filename to remove special characters that might cause issues
   const sanitizedFileName = params.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const storagePath = `tenants/${params.tenantId}/${params.entityType}s/${params.entityId}/${params.type}/v${nextVersion}_${Date.now()}_${sanitizedFileName}`;
+  const storagePath = `tenants/${params.tenantId}/${collectionName}/${params.entityId}/${params.type}/v${nextVersion}_${Date.now()}_${sanitizedFileName}`;
   const storageRef = ref(storage, storagePath);
 
+  const UPLOAD_TIMEOUT_MS = 45_000;
+
   try {
-    // Upload file to Firebase Storage
-    await uploadBytes(storageRef, params.file);
-    // Get download URL
-    const url = await getDownloadURL(storageRef);
+    // Resumable upload with progress + hard timeout (prevents UI stuck at 90%)
+    const url = await new Promise<string>((resolve, reject) => {
+      const task = uploadBytesResumable(storageRef, params.file);
+      const timer = setTimeout(() => {
+        try { task.cancel(); } catch { /* ignore */ }
+        reject(new Error(
+          'Upload timed out after 45s. Check Firebase Storage bucket/rules (CORS) and try again.'
+        ));
+      }, UPLOAD_TIMEOUT_MS);
+
+      task.on(
+        'state_changed',
+        (snapShot) => {
+          if (snapShot.totalBytes > 0 && params.onProgress) {
+            params.onProgress(Math.min(95, Math.round((snapShot.bytesTransferred / snapShot.totalBytes) * 100)));
+          }
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+        async () => {
+          clearTimeout(timer);
+          try {
+            resolve(await getDownloadURL(task.snapshot.ref));
+          } catch (e) {
+            reject(e);
+          }
+        },
+      );
+    });
 
     // Create document metadata
     const docMeta: TmsDocument = {
@@ -141,10 +173,25 @@ export async function uploadEntityDocument(params: {
     };
 
     // Update entity with new document in Firestore
+    const extraFields: Record<string, unknown> = {};
+    if (params.entityType === 'plannedLoad') {
+      if (params.type === 'RATE_CON') {
+        extraFields.rateConUrl = url;
+        extraFields.rateConfirmationUrl = url;
+        extraFields.customer = {
+          ...(snap.data().customer || {}),
+          rateConAttached: true,
+        };
+      }
+      if (params.type === 'BOL') {
+        extraFields.bolUrl = url;
+      }
+    }
     await updateDoc(entityRef, {
       documents: arrayUnion(docMeta),
       updatedAt: serverTimestamp(),
       updatedBy: params.actorUid,
+      ...extraFields,
     });
 
     // Also update localStorage if this is a load (to keep them in sync)
@@ -554,7 +601,9 @@ export function canDispatchLoad(load: Load): { canDispatch: boolean; reason?: st
   }
 
   const documents = load.documents || [];
-  const hasRateCon = documents.some(d => String(d.type || '').toUpperCase() === 'RATE_CON');
+  const hasRateCon =
+    documents.some(d => String(d.type || '').toUpperCase() === 'RATE_CON')
+    || Boolean(load.rateConUrl || load.rateConfirmationUrl);
   if (!hasRateCon) {
     return { canDispatch: false, reason: 'Rate Confirmation document required before dispatch' };
   }

@@ -240,7 +240,8 @@ export function createInvoice(
     factoringCompanyId: input.factoringCompany?.id,
     factoringCompanyName: input.factoringCompany?.name,
     factoringFee: calculation.factoringFee,
-    factoredAmount: input.isFactored ? calculation.netAmount : undefined,
+    // Gross submitted to factor (fee base). Net = amount − factoringFee.
+    factoredAmount: input.isFactored ? calculation.grandTotal : undefined,
     notes: input.notes
   };
 }
