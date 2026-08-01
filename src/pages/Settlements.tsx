@@ -80,6 +80,54 @@ function resolveSettlementLoads(
   return resolved;
 }
 
+const MAX_SETTLEMENT_TABLE_LOAD_BADGES = 3;
+const SETTLEMENT_BULK_CONFIRM_THRESHOLD = 25;
+
+/** Delivery/pickup date used for settlement period eligibility (date-only). */
+function getLoadSettlementDate(load: {
+  deliveryDate?: string;
+  pickupDate?: string;
+  createdAt?: string;
+}): Date | null {
+  const raw = load.deliveryDate || load.pickupDate || '';
+  if (!raw) return null;
+  const d = parseDateOnlyLocal(String(raw).split('T')[0]);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatSettlementLoadBadges(
+  settlementLoads: Array<{ id: string; loadNumber?: string; isStub?: boolean }>
+): { visible: typeof settlementLoads; remaining: number } {
+  const visible = settlementLoads.slice(0, MAX_SETTLEMENT_TABLE_LOAD_BADGES);
+  return { visible, remaining: Math.max(0, settlementLoads.length - visible.length) };
+}
+
+/** Loads whose settlement date falls outside the settlement's stored period. */
+function findLoadsOutsideSettlementPeriod(
+  settlement: Settlement,
+  settlementLoads: Array<Load | { id: string; deliveryDate?: string; pickupDate?: string; loadNumber?: string; isStub?: true }>
+): Array<{ id: string; loadNumber?: string }> {
+  const startRaw = settlement.periodStart || (typeof settlement.period === 'object' ? settlement.period?.start : undefined);
+  const endRaw = settlement.periodEnd || (typeof settlement.period === 'object' ? settlement.period?.end : undefined);
+  if (!startRaw || !endRaw) return [];
+  const start = parseDateOnlyLocal(String(startRaw).split('T')[0]);
+  const end = parseDateOnlyLocal(String(endRaw).split('T')[0]);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+
+  return settlementLoads.filter(load => {
+    if ('isStub' in load && load.isStub) {
+      // Prefer embedded snapshot dates when live load is gone
+      const embedded = (settlement.loads || []).find(sl => sl.loadId === load.id);
+      const d = getLoadSettlementDate(embedded || load);
+      if (!d) return true;
+      return d < start || d > end;
+    }
+    const d = getLoadSettlementDate(load);
+    if (!d) return true;
+    return d < start || d > end;
+  }).map(l => ({ id: l.id, loadNumber: l.loadNumber }));
+}
+
 /** True when this load is already paid on a settlement of the same type (driver vs dispatcher stay independent). */
 function isLoadSettledForType(
   load: Load,
@@ -147,7 +195,10 @@ const Settlements: React.FC = () => {
   const [driverFilter, setDriverFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [weekFilter, setWeekFilter] = useState<string>('');
-  const [showAllDeliveredLoads, setShowAllDeliveredLoads] = useState<boolean>(false);
+  /** Weekly = ISO week picker; custom = explicit date range (replaces unrestricted "Show all"). */
+  const [periodMode, setPeriodMode] = useState<'week' | 'custom'>('week');
+  const [customPeriodStart, setCustomPeriodStart] = useState<string>('');
+  const [customPeriodEnd, setCustomPeriodEnd] = useState<string>('');
   const [previewSettlement, setPreviewSettlement] = useState<Settlement | null>(null);
 
   // Helper functions (defined before useMemo and useEffect)
@@ -176,34 +227,72 @@ const Settlements: React.FC = () => {
   const changeSelectedWeek = (week: string) => {
     setSelectedWeek(week);
     setSelectedLoads([]);
+    // Keep custom range aligned with the week picker when switching weeks in weekly mode
+    if (week && periodMode === 'week') {
+      try {
+        const [year, wk] = week.split('-W');
+        const weekStart = getDateOfISOWeek(parseInt(wk, 10), parseInt(year, 10));
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        setCustomPeriodStart(formatLocalDate(weekStart));
+        setCustomPeriodEnd(formatLocalDate(weekEnd));
+      } catch {
+        // ignore invalid week keys
+      }
+    }
   };
 
-  // Get available loads for selected driver/dispatcher and week
-  const availableLoads = useMemo(() => {
-    const currentPayeeId = settlementType === 'driver' ? selectedDriverId : selectedDispatcherId;
-    if (!currentPayeeId || !selectedWeek) return [];
+  const setPeriodModeSafe = (mode: 'week' | 'custom') => {
+    if (mode === 'custom' && selectedWeek && (!customPeriodStart || !customPeriodEnd)) {
+      try {
+        const [year, wk] = selectedWeek.split('-W');
+        const weekStart = getDateOfISOWeek(parseInt(wk, 10), parseInt(year, 10));
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        setCustomPeriodStart(formatLocalDate(weekStart));
+        setCustomPeriodEnd(formatLocalDate(weekEnd));
+      } catch {
+        // ignore
+      }
+    }
+    setPeriodMode(mode);
+    setSelectedLoads([]);
+  };
 
+  /** Active filter bounds for load eligibility (date-only). */
+  const activePeriodBounds = useMemo(() => {
+    if (periodMode === 'custom') {
+      if (!customPeriodStart || !customPeriodEnd) return null;
+      const start = parseDateOnlyLocal(customPeriodStart);
+      const end = parseDateOnlyLocal(customPeriodEnd);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null;
+      return { start, end };
+    }
+    if (!selectedWeek) return null;
     try {
       const [year, week] = selectedWeek.split('-W');
-      if (!year || !week) return [];
-      
-      const weekStart = getDateOfISOWeek(parseInt(week), parseInt(year));
+      if (!year || !week) return null;
+      const weekStart = getDateOfISOWeek(parseInt(week, 10), parseInt(year, 10));
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekStart.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
+      return {
+        start: new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate()),
+        end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate()),
+      };
+    } catch {
+      return null;
+    }
+  }, [periodMode, selectedWeek, customPeriodStart, customPeriodEnd]);
 
-      // Debug: Log filter criteria
-      console.log('Settlement Filter Debug:', {
-        currentPayeeId,
-        selectedWeek,
-        weekStart: weekStart.toISOString(),
-        weekEnd: weekEnd.toISOString(),
-        totalLoads: loads.length,
-        settlementType
-      });
+  // Get available loads for selected driver/dispatcher and active period
+  const availableLoads = useMemo(() => {
+    const currentPayeeId = settlementType === 'driver' ? selectedDriverId : selectedDispatcherId;
+    if (!currentPayeeId || !activePeriodBounds) return [];
 
-      // Unpaid delivered loads for this payee. "Show all" only ignores the week filter —
-      // already-settled loads for this settlement type are never selectable (blocks double-pay).
+    try {
+      const { start: periodStart, end: periodEnd } = activePeriodBounds;
+
+      // Unpaid delivered loads for this payee within the active period only.
       const dispatcher = settlementType === 'dispatcher'
         ? employees.find(e => e.id === currentPayeeId)
         : null;
@@ -230,18 +319,10 @@ const Settlements: React.FC = () => {
 
           if (isLoadSettledForType(load, settlementType, settlements)) return false;
 
-          if (showAllDeliveredLoads) return true;
+          const deliveryDateOnly = getLoadSettlementDate(load);
+          if (!deliveryDateOnly) return false;
 
-          const deliveryDateStr = load.deliveryDate || load.pickupDate || load.createdAt || '';
-          if (!deliveryDateStr) return false;
-
-          const deliveryDateOnly = parseDateOnlyLocal(String(deliveryDateStr).split('T')[0]);
-          if (isNaN(deliveryDateOnly.getTime())) return false;
-
-          const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
-          const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
-
-          return deliveryDateOnly >= weekStartOnly && deliveryDateOnly <= weekEndOnly;
+          return deliveryDateOnly >= periodStart && deliveryDateOnly <= periodEnd;
         } catch (error) {
           console.warn('Error processing load:', load.id, error);
           return false;
@@ -251,7 +332,7 @@ const Settlements: React.FC = () => {
       console.error('Error calculating available loads:', error);
       return [];
     }
-  }, [selectedDriverId, selectedDispatcherId, selectedWeek, loads, settlementType, showAllDeliveredLoads, settlements, employees]);
+  }, [selectedDriverId, selectedDispatcherId, activePeriodBounds, loads, settlementType, settlements, employees]);
 
   // Drop selections that are no longer in the visible (filtered) load list
   useEffect(() => {
@@ -398,8 +479,26 @@ const Settlements: React.FC = () => {
     employees,
   ]);
 
-  // Update period display
+  // Update period display (custom mode prefers selected-load date span when available)
   const periodDisplay = useMemo(() => {
+    if (periodMode === 'custom') {
+      const selectedObjs = availableLoads.filter(l => selectedLoads.includes(l.id));
+      const dates = selectedObjs
+        .map(getLoadSettlementDate)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime());
+      if (dates.length > 0) {
+        return `${formatDateRange(dates[0], dates[dates.length - 1])} (from selected loads)`;
+      }
+      if (customPeriodStart && customPeriodEnd) {
+        const start = parseDateOnlyLocal(customPeriodStart);
+        const end = parseDateOnlyLocal(customPeriodEnd);
+        if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+          return formatDateRange(start, end);
+        }
+      }
+      return 'Set a custom date range';
+    }
     if (!selectedWeek) return 'Select a week to see the period';
     try {
       const [year, week] = selectedWeek.split('-W');
@@ -412,7 +511,7 @@ const Settlements: React.FC = () => {
       console.error('Error calculating period display:', error);
       return 'Select a week to see the period';
     }
-  }, [selectedWeek]);
+  }, [periodMode, selectedWeek, customPeriodStart, customPeriodEnd, availableLoads, selectedLoads]);
 
   /** Settlement period bounds (prefer periodStart/End over createdAt). */
   const getSettlementPeriodBounds = (s: Settlement): { start: Date; end: Date } | null => {
@@ -752,14 +851,74 @@ const Settlements: React.FC = () => {
       return;
     }
 
+    if (!activePeriodBounds) {
+      alert(
+        periodMode === 'custom'
+          ? 'Set a valid custom date range (start ≤ end) before generating a settlement.'
+          : 'Select a settlement week before generating.'
+      );
+      return;
+    }
+
+    // Hard reject: every selected load must fall inside the active period filter
+    const outsidePeriod = selectedLoadObjs.filter(load => {
+      const d = getLoadSettlementDate(load);
+      if (!d) return true;
+      return d < activePeriodBounds.start || d > activePeriodBounds.end;
+    });
+    if (outsidePeriod.length > 0) {
+      alert(
+        `Cannot create settlement — ${outsidePeriod.length} selected load(s) fall outside the settlement period ` +
+          `(${formatLocalDate(activePeriodBounds.start)} – ${formatLocalDate(activePeriodBounds.end)}):\n\n` +
+          outsidePeriod
+            .slice(0, 12)
+            .map(l => `• ${l.loadNumber} (${l.deliveryDate || l.pickupDate || 'no date'})`)
+            .join('\n') +
+          (outsidePeriod.length > 12 ? `\n…and ${outsidePeriod.length - 12} more` : '')
+      );
+      setSelectedLoads(prev => prev.filter(id => !outsidePeriod.some(l => l.id === id)));
+      return;
+    }
+
+    if (loadsToSettle.length > SETTLEMENT_BULK_CONFIRM_THRESHOLD) {
+      const ok = window.confirm(
+        `You are about to settle ${loadsToSettle.length} loads in one settlement.\n\n` +
+          `Period: ${periodDisplay}\n` +
+          `Gross: ${formatCurrency(payResult.grossPay)}\n\n` +
+          `Settlements with many loads can distort weekly reports if dates span months. Continue?`
+      );
+      if (!ok) return;
+    }
+
     const payee = employees.find(e => e.id === currentPayeeId);
     if (!payee) return;
 
     const settlementNumber = nextSettlementNumber(settlementType === 'driver' ? 'ST' : 'DSP');
-    const [year, week] = selectedWeek.split('-W');
-    const weekStart = getDateOfISOWeekLocal(parseInt(week, 10), parseInt(year, 10));
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
+
+    // Weekly mode: period = ISO week. Custom mode: derive from selected load dates.
+    let periodStartDate: Date;
+    let periodEndDate: Date;
+    let periodDisplaySaved = periodDisplay;
+    if (periodMode === 'custom') {
+      const loadDates = selectedLoadObjs
+        .map(getLoadSettlementDate)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime());
+      if (loadDates.length === 0) {
+        alert('Selected loads have no delivery/pickup dates — cannot derive a custom settlement period.');
+        return;
+      }
+      periodStartDate = loadDates[0];
+      periodEndDate = loadDates[loadDates.length - 1];
+      periodDisplaySaved = formatDateRange(periodStartDate, periodEndDate);
+    } else {
+      const [year, week] = selectedWeek.split('-W');
+      periodStartDate = getDateOfISOWeekLocal(parseInt(week, 10), parseInt(year, 10));
+      periodEndDate = new Date(periodStartDate);
+      periodEndDate.setDate(periodStartDate.getDate() + 6);
+    }
+    const weekStart = periodStartDate;
+    const weekEnd = periodEndDate;
 
     const deductions: Settlement['deductions'] = {
       insurance: settlementType === 'driver' ? payResult.deductions.insurance : 0,
@@ -830,9 +989,9 @@ const Settlements: React.FC = () => {
       periodEnd: formatLocalDate(weekEnd),
       createdAt: new Date().toISOString(),
       period: {
-        start: weekStart.toISOString(),
-        end: weekEnd.toISOString(),
-        display: periodDisplay,
+        start: formatLocalDate(weekStart),
+        end: formatLocalDate(weekEnd),
+        display: periodDisplaySaved,
       }
     };
 
@@ -849,6 +1008,7 @@ const Settlements: React.FC = () => {
     }
 
     setIsModalOpen(false);
+    setPeriodMode('week');
     setSelectedDriverId('');
     setSelectedDispatcherId('');
     setSelectedLoads([]);
@@ -869,11 +1029,26 @@ const Settlements: React.FC = () => {
     );
   };
 
-  // Toggle all loads - allow selecting all loads (users can delete and recreate settlements)
+  // Toggle all loads — confirm when selecting a large batch
   const toggleAllLoads = (checked: boolean) => {
     if (checked) {
-      // Select all available loads
       const allLoadIds = availableLoads.map(l => l.id);
+      if (allLoadIds.length > SETTLEMENT_BULK_CONFIRM_THRESHOLD) {
+        const dates = availableLoads
+          .map(getLoadSettlementDate)
+          .filter((d): d is Date => !!d)
+          .sort((a, b) => a.getTime() - b.getTime());
+        const span =
+          dates.length > 0
+            ? `${formatLocalDate(dates[0])} – ${formatLocalDate(dates[dates.length - 1])}`
+            : 'unknown date span';
+        const ok = window.confirm(
+          `Select all ${allLoadIds.length} loads in this period?\n\n` +
+            `Date span: ${span}\n\n` +
+            `Large settlements can mis-attribute pay across weeks/months. Continue?`
+        );
+        if (!ok) return;
+      }
       setSelectedLoads(allLoadIds);
     } else {
       setSelectedLoads([]);
@@ -882,6 +1057,17 @@ const Settlements: React.FC = () => {
 
   const handleAdvanceStatus = (settlement: Settlement) => {
     const status = settlement.status || 'pending';
+    const settlementLoads = resolveSettlementLoads(settlement, loads);
+    const outside = findLoadsOutsideSettlementPeriod(settlement, settlementLoads);
+    if (outside.length > 0 && (status === 'pending' || status === 'processed')) {
+      alert(
+        `Cannot ${status === 'pending' ? 'process' : 'pay'} ${settlement.settlementNumber || 'this settlement'}:\n\n` +
+          `${outside.length} of ${settlementLoads.length} load(s) fall outside the stored period ` +
+          `(${settlement.periodStart || '?'} – ${settlement.periodEnd || '?'}).\n\n` +
+          `Delete or recreate this settlement with a correct period. Do not process/pay until loads match the period.`
+      );
+      return;
+    }
     if (status === 'pending') {
       updateSettlement(settlement.id, { status: 'processed' });
     } else if (status === 'processed') {
@@ -976,7 +1162,11 @@ const Settlements: React.FC = () => {
           )}
           {canCreateSettlement && (
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                setPeriodMode('week');
+                setSelectedLoads([]);
+                setIsModalOpen(true);
+              }}
               className="btn-primary px-6 py-3 rounded-lg flex items-center gap-2"
             >
               <Plus size={18} />
@@ -1233,24 +1423,57 @@ const Settlements: React.FC = () => {
                         {settlement.settlementNumber || settlement.id.substring(0, 8)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{settlement.driverName}</td>
-                      <td className="px-6 py-4 text-sm text-slate-600">
+                      <td className="px-6 py-4 text-sm text-slate-600 max-w-[220px]">
                         {settlementLoads.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {settlementLoads.map((load) => (
-                              <span
-                                key={load.id}
-                                className={`px-2 py-1 rounded text-xs font-medium ${
-                                  'isStub' in load && load.isStub
-                                    ? 'bg-amber-50 text-amber-700'
-                                    : 'bg-blue-50 text-blue-700'
-                                }`}
-                              >
-                                {load.loadNumber}
-                              </span>
-                            ))}
-                            {liveLoads.length === 0 && (
-                              <span className="text-amber-600 text-xs italic ml-1">(unlinked)</span>
-                            )}
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {(() => {
+                              const { visible, remaining } = formatSettlementLoadBadges(
+                                settlementLoads.map(l => ({
+                                  id: l.id,
+                                  loadNumber: l.loadNumber,
+                                  isStub: 'isStub' in l && !!l.isStub,
+                                }))
+                              );
+                              const outsideCount = findLoadsOutsideSettlementPeriod(
+                                settlement,
+                                settlementLoads
+                              ).length;
+                              return (
+                                <>
+                                  <span className="text-xs text-slate-500 mr-1 whitespace-nowrap">
+                                    {settlementLoads.length} load{settlementLoads.length === 1 ? '' : 's'}
+                                  </span>
+                                  {visible.map((load) => (
+                                    <span
+                                      key={load.id}
+                                      className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${
+                                        load.isStub
+                                          ? 'bg-amber-50 text-amber-700'
+                                          : 'bg-blue-50 text-blue-700'
+                                      }`}
+                                    >
+                                      {load.loadNumber}
+                                    </span>
+                                  ))}
+                                  {remaining > 0 && (
+                                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 whitespace-nowrap">
+                                      +{remaining} more
+                                    </span>
+                                  )}
+                                  {outsideCount > 0 && (
+                                    <span
+                                      className="px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 whitespace-nowrap"
+                                      title={`${outsideCount} load(s) outside stored period — do not process/pay`}
+                                    >
+                                      Period mismatch
+                                    </span>
+                                  )}
+                                  {liveLoads.length === 0 && (
+                                    <span className="text-amber-600 text-xs italic ml-1">(unlinked)</span>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         ) : (
                           <span className="text-slate-400 italic">No loads</span>
@@ -1356,47 +1579,107 @@ const Settlements: React.FC = () => {
               {/* Settlement Period */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h4 className="text-sm font-semibold text-blue-900 mb-3">Settlement Period</h4>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setPeriodModeSafe('week')}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                      periodMode === 'week'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-blue-800 border-blue-300 hover:bg-blue-50'
+                    }`}
+                  >
+                    Weekly
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPeriodModeSafe('custom')}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                      periodMode === 'custom'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-blue-800 border-blue-300 hover:bg-blue-50'
+                    }`}
+                  >
+                    Custom date range
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-blue-800 mb-1">Select Week</label>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (selectedWeek) {
-                            changeSelectedWeek(shiftISOWeekKey(selectedWeek, -1));
-                          }
-                        }}
-                        className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
-                        title="Previous Week"
-                      >
-                        ←
-                      </button>
-                      <input
-                        type="week"
-                        value={selectedWeek}
-                        onChange={(e) => changeSelectedWeek(e.target.value)}
-                        className="flex-1 border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (selectedWeek) {
-                            changeSelectedWeek(shiftISOWeekKey(selectedWeek, 1));
-                          }
-                        }}
-                        className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
-                        title="Next Week"
-                      >
-                        →
-                      </button>
+                  {periodMode === 'week' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-blue-800 mb-1">Select Week</label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedWeek) {
+                              changeSelectedWeek(shiftISOWeekKey(selectedWeek, -1));
+                            }
+                          }}
+                          className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
+                          title="Previous Week"
+                        >
+                          ←
+                        </button>
+                        <input
+                          type="week"
+                          value={selectedWeek}
+                          onChange={(e) => changeSelectedWeek(e.target.value)}
+                          className="flex-1 border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedWeek) {
+                              changeSelectedWeek(shiftISOWeekKey(selectedWeek, 1));
+                            }
+                          }}
+                          className="px-2 py-1 bg-white border border-blue-300 rounded hover:bg-blue-50 text-blue-700"
+                          title="Next Week"
+                        >
+                          →
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3 md:col-span-1">
+                      <div>
+                        <label className="block text-sm font-medium text-blue-800 mb-1">From</label>
+                        <input
+                          type="date"
+                          value={customPeriodStart}
+                          onChange={(e) => {
+                            setCustomPeriodStart(e.target.value);
+                            setSelectedLoads([]);
+                          }}
+                          className="w-full border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-blue-800 mb-1">To</label>
+                        <input
+                          type="date"
+                          value={customPeriodEnd}
+                          onChange={(e) => {
+                            setCustomPeriodEnd(e.target.value);
+                            setSelectedLoads([]);
+                          }}
+                          className="w-full border border-blue-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div>
-                    <label className="block text-sm font-medium text-blue-800 mb-1">Period</label>
+                    <label className="block text-sm font-medium text-blue-800 mb-1">
+                      {periodMode === 'custom' ? 'Saved period (from selected loads)' : 'Period'}
+                    </label>
                     <div className="text-sm text-blue-700 py-2 px-3 bg-white rounded border border-blue-200">
                       {periodDisplay}
                     </div>
+                    {periodMode === 'custom' && (
+                      <p className="text-xs text-blue-700 mt-1">
+                        Only loads delivered in this range are selectable. The settlement period is saved from the earliest/latest selected load dates.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1798,41 +2081,32 @@ const Settlements: React.FC = () => {
                     <p className="text-sm mb-2">To see loads here, they must:</p>
                     <ul className="text-sm text-left list-disc list-inside space-y-1">
                       <li>Be assigned to this {settlementType === 'driver' ? 'driver' : 'dispatcher'}</li>
-                      <li>Have status "Delivered" or "Completed"</li>
-                      <li>Have a delivery date or pickup date within the selected week</li>
+                      <li>Have status Delivered, Delivered with BOL, Invoiced, Paid, or Completed</li>
+                      <li>Have a delivery (or pickup) date within the selected week or custom date range</li>
+                      <li>Not already be on another {settlementType} settlement</li>
                     </ul>
-                    <div className="mt-4">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAllDeliveredLoads(!showAllDeliveredLoads);
-                          setSelectedLoads([]);
-                        }}
-                        className="btn-primary px-4 py-2 rounded-lg text-sm font-medium"
-                      >
-                        {showAllDeliveredLoads ? 'Filter by Week' : 'Show All Delivered Loads'}
-                      </button>
-                    </div>
-                    <p className="text-xs mt-3 text-yellow-700">Check the browser console (F12) for detailed filtering information.</p>
+                    {periodMode === 'week' && (
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setPeriodModeSafe('custom')}
+                          className="btn-primary px-4 py-2 rounded-lg text-sm font-medium"
+                        >
+                          Use custom date range
+                        </button>
+                        <p className="text-xs mt-2 text-yellow-700">
+                          Custom range still requires dates — there is no unrestricted “show all” bypass.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
-              
-              {/* Toggle to show all delivered loads */}
-              {((settlementType === 'driver' && selectedDriverId) || (settlementType === 'dispatcher' && selectedDispatcherId)) && availableLoads.length > 0 && (
-                <div className="mb-4">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={showAllDeliveredLoads}
-                      onChange={(e) => {
-                        setShowAllDeliveredLoads(e.target.checked);
-                        setSelectedLoads([]);
-                      }}
-                      className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
-                    />
-                    Show all delivered loads (ignore week filter)
-                  </label>
+
+              {selectedLoads.length > SETTLEMENT_BULK_CONFIRM_THRESHOLD && (
+                <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
+                  <strong>{selectedLoads.length} loads selected.</strong> Confirm carefully before generating —
+                  large multi-month settlements distort weekly reports.
                 </div>
               )}
 
