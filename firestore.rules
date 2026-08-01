@@ -224,10 +224,13 @@ service cloud.firestore {
         canAccessTenant(tenantId, request.auth.uid);
       allow update: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
-      allow delete: if request.auth != null && 
-        canAccessTenant(tenantId, request.auth.uid) &&
         (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+      // Platform admins can delete even without tenant membership; tenant admins/accountants need membership.
+      allow delete: if request.auth != null && (
+        isPlatformAdmin(request.auth.uid) ||
+        (canAccessTenant(tenantId, request.auth.uid) &&
+          (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant'))
+      );
     }
     
     // Audit Logs (read-only, no updates/deletes)

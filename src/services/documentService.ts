@@ -119,45 +119,50 @@ export async function uploadEntityDocument(params: {
   const storageRef = ref(storage, storagePath);
 
   const UPLOAD_TIMEOUT_MS = 45_000;
-  const STALL_AT_ZERO_MS = 8_000;
+  const STALL_MS = 10_000;
 
   try {
-    // Resumable upload; if stuck at 0% (rules/CORS), fall back to uploadBytes
+    // Resumable upload; if stalled (wrong bucket/rules/CORS), fall back to uploadBytes
     let url: string;
     try {
       url = await new Promise<string>((resolve, reject) => {
         const task = uploadBytesResumable(storageRef, params.file);
-        let gotProgress = false;
+        let lastBytes = 0;
+        let lastProgressAt = Date.now();
         const timer = setTimeout(() => {
           try { task.cancel(); } catch { /* ignore */ }
           reject(new Error(
             'Upload timed out after 45s. Check Firebase Storage bucket/rules (CORS) and try again.'
           ));
         }, UPLOAD_TIMEOUT_MS);
-        const stallTimer = setTimeout(() => {
-          if (!gotProgress) {
+        const stallTimer = setInterval(() => {
+          if (Date.now() - lastProgressAt >= STALL_MS) {
             try { task.cancel(); } catch { /* ignore */ }
             clearTimeout(timer);
-            reject(new Error('UPLOAD_STALLED_AT_ZERO'));
+            clearInterval(stallTimer);
+            reject(new Error('UPLOAD_STALLED'));
           }
-        }, STALL_AT_ZERO_MS);
+        }, 1_000);
 
         task.on(
           'state_changed',
           (snapShot) => {
-            if (snapShot.bytesTransferred > 0) gotProgress = true;
+            if (snapShot.bytesTransferred > lastBytes) {
+              lastBytes = snapShot.bytesTransferred;
+              lastProgressAt = Date.now();
+            }
             if (snapShot.totalBytes > 0 && params.onProgress) {
               params.onProgress(Math.min(95, Math.round((snapShot.bytesTransferred / snapShot.totalBytes) * 100)));
             }
           },
           (err) => {
             clearTimeout(timer);
-            clearTimeout(stallTimer);
+            clearInterval(stallTimer);
             reject(err);
           },
           async () => {
             clearTimeout(timer);
-            clearTimeout(stallTimer);
+            clearInterval(stallTimer);
             try {
               resolve(await getDownloadURL(task.snapshot.ref));
             } catch (e) {
@@ -168,7 +173,12 @@ export async function uploadEntityDocument(params: {
       });
     } catch (resumableErr) {
       const msg = resumableErr instanceof Error ? resumableErr.message : '';
-      if (msg !== 'UPLOAD_STALLED_AT_ZERO' && !String(msg).includes('storage/unauthorized')) {
+      const canFallback =
+        msg === 'UPLOAD_STALLED'
+        || msg === 'UPLOAD_STALLED_AT_ZERO'
+        || String(msg).includes('storage/unauthorized')
+        || String(msg).includes('storage/retry-limit-exceeded');
+      if (!canFallback) {
         throw resumableErr;
       }
       // Fallback: simple uploadBytes (still needs Storage rules allow)

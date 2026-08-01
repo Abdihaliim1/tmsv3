@@ -62,6 +62,8 @@ export interface Invoice {
   factorCustomerPaidDate?: string;
   factoringTransactionId?: string;
   notes?: string;
+  /** Remit-to payee line (factoring company or customer address book entry) */
+  remitTo?: string;
   createdAt?: string;
   updatedAt?: string;
 }
