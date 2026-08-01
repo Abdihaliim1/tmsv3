@@ -23,14 +23,12 @@ import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
 import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { getFactoredLoads, getLoadRevenue } from '../services/businessLogic';
+import { getFactoredLoads } from '../services/businessLogic';
 import { canInvoiceLoad } from '../services/documentService';
 import {
-  addPaymentToInvoice,
   calculateTotalPaid,
   calculateOutstandingBalance,
   validatePayment,
-  allocatePaymentAcrossLoads,
 } from '../services/paymentService';
 import {
   buildMarkLoadFundedPatch,
@@ -250,7 +248,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   onCancel,
   onSave,
 }) => {
-  const { loads, invoices, factoringCompanies, addInvoice, updateLoad } = useTMS();
+  const { loads, invoices, factoringCompanies, addInvoice } = useTMS();
   const { activeTenantId } = useTenant();
   useCompany();
   const tenantId = activeTenantId || 'default';
@@ -382,31 +380,9 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
 
     setIsSubmitting(true);
     try {
+      // addInvoice atomically creates the invoice and links real invoiceId on loads.
+      // Do NOT overwrite invoiceId with "pending" afterward — that corrupts the link.
       await addInvoice(newInvoice);
-
-      // Mark loads as invoiced, locked, and factored if applicable
-      const invoicedAt = new Date().toISOString();
-      for (const loadId of selectedLoadIds) {
-        const updateData: Partial<Load> = {
-          invoiceId: 'pending',
-          invoiceNumber: finalInvoiceNumber,
-          invoicedAt: invoicedAt,
-          isLocked: true,
-          lockedAt: invoicedAt
-        };
-        if (isFactored) {
-          updateData.isFactored = true;
-          updateData.factoringFeePercent = factoringFeePercent;
-          updateData.factoringFee = (selectedLoads.find(l => l.id === loadId)?.grandTotal || 0) * (factoringFeePercent / 100);
-          updateData.factoredDate = new Date().toISOString().split('T')[0];
-          if (selectedFactoringCompany) {
-            updateData.factoringCompanyId = selectedFactoringCompany.id;
-            updateData.factoringCompanyName = selectedFactoringCompany.name;
-          }
-        }
-        await updateLoad(loadId, updateData);
-      }
-
       onSave();
     } catch (error: any) {
       alert(error?.message || 'Failed to create invoice');
@@ -910,7 +886,7 @@ interface InvoiceListProps {
 }
 
 const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
-  const { invoices, loads, factoringCompanies, factoringTransactions, deleteInvoice, updateInvoice, updateLoad, updateFactoringTransaction, addFactoringTransaction } = useTMS();
+  const { invoices, loads, factoringCompanies, factoringTransactions, deleteInvoice, updateInvoice, updateFactoringTransaction, addFactoringTransaction, recordInvoicePayment } = useTMS();
   const { companyProfile } = useCompany();
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
@@ -1055,49 +1031,12 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
 
     const invoice = paymentModalInvoice;
     try {
-      const { invoice: updated } = addPaymentToInvoice(invoice, {
+      await recordInvoicePayment(invoice.id, {
         amount: paymentData.amount,
         date: paymentData.date,
         method: paymentData.method as 'ACH' | 'Check' | 'Wire' | 'Credit' | 'Factoring' | 'Other',
         reference: paymentData.reference || undefined,
       });
-
-      updateInvoice(invoice.id, {
-        status: updated.status,
-        paidAt: updated.paidAt,
-        paidAmount: updated.paidAmount,
-        paymentMethod: paymentData.method,
-        paymentReference: paymentData.reference || undefined,
-        payments: updated.payments,
-      });
-
-      const loadIds = [
-        ...(invoice.loadId ? [invoice.loadId] : []),
-        ...(invoice.loadIds || []),
-      ];
-      const uniqueLoadIds = Array.from(new Set(loadIds));
-      const allocations = allocatePaymentAcrossLoads(
-        invoice.amount || 0,
-        updated.paidAmount || 0,
-        uniqueLoadIds.map(loadId => {
-          const load = loads.find(l => l.id === loadId);
-          return { loadId, revenue: load ? getLoadRevenue(load) : 0 };
-        })
-      );
-
-      const paidAt = updated.paidAt || new Date(paymentData.date).toISOString();
-      const isPaidInFull = updated.status === 'paid';
-      for (const alloc of allocations) {
-        try {
-          await updateLoad(alloc.loadId, {
-            paymentReceived: isPaidInFull,
-            paymentReceivedDate: isPaidInFull ? paidAt : undefined,
-            paymentAmount: alloc.paymentAmount,
-          });
-        } catch (error) {
-          console.error('Error updating load payment status:', error);
-        }
-      }
     } catch (error: any) {
       alert(error?.message || 'Failed to record payment');
       return;

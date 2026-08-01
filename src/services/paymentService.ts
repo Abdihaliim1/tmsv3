@@ -109,8 +109,10 @@ export function calculateInvoiceStatus(invoice: Invoice): InvoiceStatus {
   const totalPaid = calculateTotalPaid(invoice);
   const total = invoice.amount;
 
-  // Check if fully paid (99% threshold to account for rounding)
-  if (totalPaid >= total * 0.99) {
+  // Cent-level paid: within $0.01 of invoice total (never treat 99% as paid)
+  const paidCents = Math.round(totalPaid * 100);
+  const totalCents = Math.round(total * 100);
+  if (totalCents > 0 && paidCents >= totalCents) {
     return 'paid';
   }
 
@@ -165,8 +167,24 @@ export function addPaymentToInvoice(
     createdAt: new Date().toISOString()
   };
 
-  // Add to payments array
-  const payments = [...(invoice.payments || []), paymentRecord];
+  // Seed ledger from legacy paidAmount so the first payments[] write does not drop history
+  const existingPayments = [...(invoice.payments || [])];
+  if (
+    existingPayments.length === 0 &&
+    Number(invoice.paidAmount) > 0
+  ) {
+    existingPayments.push({
+      id: `legacy-${invoice.id}`,
+      invoiceId: invoice.id,
+      amount: Math.round((Number(invoice.paidAmount) + Number.EPSILON) * 100) / 100,
+      date: (invoice.paidAt || invoice.date || payment.date || '').toString().slice(0, 10),
+      method: 'Other',
+      reference: 'Migrated from legacy paidAmount',
+      createdAt: invoice.paidAt || invoice.createdAt || new Date().toISOString(),
+    });
+  }
+
+  const payments = [...existingPayments, paymentRecord];
 
   // Calculate new totals
   const totalPaid = calculateTotalPaid({ ...invoice, payments });

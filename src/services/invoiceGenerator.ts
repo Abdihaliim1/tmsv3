@@ -302,8 +302,10 @@ export function calculateInvoiceStatus(invoice: Invoice): InvoiceStatus {
   const totalPaid = calculateTotalPaid(invoice);
   const total = invoice.amount;
 
-  // Fully paid (99% threshold for rounding)
-  if (totalPaid >= total * 0.99) {
+  // Cent-level paid: within $0.01 of invoice total (never treat 99% as paid)
+  const paidCents = Math.round(totalPaid * 100);
+  const totalCents = Math.round(total * 100);
+  if (totalCents > 0 && paidCents >= totalCents) {
     return 'paid';
   }
 

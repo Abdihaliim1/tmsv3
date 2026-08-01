@@ -488,7 +488,7 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
     return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
   }
 
-  // Check for required documents (POD is typically required for invoicing)
+  // Hard gate: POD and BOL required before invoicing
   const documents = load.documents || [];
   const hasPOD =
     !!load.podNumber ||
@@ -496,14 +496,18 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
       const t = String(d.type || '').toLowerCase();
       return t === 'pod' || t.includes('proof');
     });
+  const hasBOL =
+    !!load.bolNumber ||
+    documents.some(d => {
+      const t = String(d.type || '').toLowerCase();
+      return t === 'bol' || t.includes('bill of lading');
+    });
 
-  // Soft gate: allow invoicing without POD so legacy/test loads aren't blocked,
-  // but surface a warning so ops can confirm paperwork before factoring/send.
   if (!hasPOD) {
-    return {
-      canInvoice: true,
-      reason: 'POD document missing — confirm paperwork before sending to customer/factor',
-    };
+    return { canInvoice: false, reason: 'POD document required before invoicing' };
+  }
+  if (!hasBOL) {
+    return { canInvoice: false, reason: 'BOL document required before invoicing' };
   }
 
   return { canInvoice: true };

@@ -1967,7 +1967,7 @@ const Trips: React.FC = () => {
   const [showAddTrip, setShowAddTrip] = useState(false);
   const [showAddBrokerTrip, setShowAddBrokerTrip] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'future' | 'today' | 'past'>('today');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'future' | 'today' | 'past' | 'in_progress' | 'completed' | 'cancelled'>('all');
   const [viewMode, setViewMode] = useState<'list' | 'detailed'>('list');
   const [currentPage, setCurrentPage] = useState(1);
   const [preSelectedLoadIds, setPreSelectedLoadIds] = useState<string[]>([]);
@@ -1993,12 +1993,18 @@ const Trips: React.FC = () => {
     status: 'today',
   });
 
-  // Filter trips
+  // Filter trips — map legacy schedule buckets onto operational statuses
   const filteredTrips = useMemo(() => {
+    const matchesBucket = (status: string, filter: typeof statusFilter) => {
+      if (filter === 'all') return true;
+      if (filter === status) return true;
+      if (filter === 'today') return status === 'today' || status === 'in_progress';
+      if (filter === 'past') return status === 'past' || status === 'completed' || status === 'cancelled';
+      if (filter === 'future') return status === 'future';
+      return false;
+    };
     return trips.filter((trip) => {
-      if (statusFilter !== 'all' && trip.status !== statusFilter) {
-        return false;
-      }
+      if (!matchesBucket(trip.status, statusFilter)) return false;
       if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
         return (
@@ -2193,8 +2199,14 @@ const Trips: React.FC = () => {
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap items-center gap-4">
-        <div className="flex rounded-lg border border-slate-200 overflow-hidden">
-          {(['future', 'today', 'past'] as const).map((filter) => (
+        <div className="flex rounded-lg border border-slate-200 overflow-hidden flex-wrap">
+          {([
+            ['all', 'All'],
+            ['today', "Today / In Progress"],
+            ['future', 'Future'],
+            ['past', 'Past / Completed'],
+            ['cancelled', 'Cancelled'],
+          ] as const).map(([filter, label]) => (
             <button
               key={filter}
               onClick={() => {
@@ -2207,9 +2219,7 @@ const Trips: React.FC = () => {
                   : 'bg-white text-slate-600 hover:bg-slate-50'
               }`}
             >
-              {filter === 'future' && 'Future Trip'}
-              {filter === 'today' && "Today's Trip"}
-              {filter === 'past' && 'Past Trip'}
+              {label}
             </button>
           ))}
         </div>

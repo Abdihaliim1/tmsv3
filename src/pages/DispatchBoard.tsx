@@ -38,6 +38,7 @@ import DriverAssignmentModal from '../components/DriverAssignmentModal';
 
 interface LoadCardProps {
   load: Load;
+  alreadyInvoiced: boolean;
   onEdit: (load: Load) => void;
   onStatusChange: (loadId: string, newStatus: LoadStatus) => void;
   onUploadPOD: (loadId: string) => void;
@@ -47,6 +48,7 @@ interface LoadCardProps {
 
 const LoadCard: React.FC<LoadCardProps> = ({
   load,
+  alreadyInvoiced,
   onEdit,
   onStatusChange,
   onUploadPOD,
@@ -105,7 +107,7 @@ const LoadCard: React.FC<LoadCardProps> = ({
     {
       id: 'invoiced',
       label: 'Invoiced',
-      completed: !!load.invoiceId,
+      completed: alreadyInvoiced || (!!load.invoiceId && load.invoiceId !== 'pending'),
       required: load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed,
     },
   ];
@@ -334,7 +336,8 @@ const LoadCard: React.FC<LoadCardProps> = ({
             Upload Rate Con
           </button>
         )}
-        {!load.invoiceId && (load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed) && (
+        {!alreadyInvoiced &&
+          (load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed) && (
           <button
             onClick={() => onCreateInvoice(load.id)}
             className="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 flex items-center gap-1"
@@ -349,9 +352,13 @@ const LoadCard: React.FC<LoadCardProps> = ({
 };
 
 const DispatchBoard: React.FC = () => {
-  const { loads, drivers, updateLoad, addInvoice } = useTMS();
+  const { loads, invoices, updateLoad, addInvoice } = useTMS();
   const { activeTenantId } = useTenant();
   const toast = useToast();
+
+  const isLoadAlreadyInvoiced = (load: Load) =>
+    (!!load.invoiceId && load.invoiceId !== 'pending') ||
+    invoices.some(inv => inv.loadId === load.id || inv.loadIds?.includes(load.id));
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -433,7 +440,7 @@ const DispatchBoard: React.FC = () => {
       return;
     }
 
-    if (load.invoiceId) {
+    if (isLoadAlreadyInvoiced(load)) {
       toast.warning('Already Invoiced', 'This load already has an invoice');
       return;
     }
@@ -522,6 +529,7 @@ const DispatchBoard: React.FC = () => {
                 <LoadCard
                   key={load.id}
                   load={load}
+                  alreadyInvoiced={isLoadAlreadyInvoiced(load)}
                   onEdit={(load) => {
                     setEditingLoad(load);
                     setIsModalOpen(true);

@@ -712,6 +712,8 @@ export function calculateSettlementGrossPay(
   settlementLoads: Array<{ loadId: string; basePay?: number; detention?: number; layover?: number; tonu?: number }>
 ): number {
   let grossPay = 0;
+  const payProfile = resolveDriverPayment(driver);
+  const percentageIncludesAccessorials = payProfile.type === 'percentage';
 
   settlementLoads.forEach(settlementLoad => {
     const load = loads.find(l => l.id === settlementLoad.loadId);
@@ -724,10 +726,13 @@ export function calculateSettlementGrossPay(
       grossPay += calculateDriverBasePay(load, driver);
     }
 
-    // Add accessorials (100% pass-through)
+    // Percentage of gross already includes accessorials — do not add again
+    if (percentageIncludesAccessorials) return;
+
+    // Add accessorials (100% pass-through for per-mile / flat)
     grossPay += settlementLoad.detention || load.driverDetentionPay || 0;
     grossPay += settlementLoad.layover || load.driverLayoverPay || 0;
-    grossPay += settlementLoad.tonu || (load as any).tonuFee || 0;
+    grossPay += settlementLoad.tonu || load.tonuFee || 0;
   });
 
   return grossPay;

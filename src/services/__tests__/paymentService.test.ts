@@ -50,6 +50,20 @@ describe('addPaymentToInvoice', () => {
     expect(calculateTotalPaid(second.invoice)).toBe(1000);
     expect(second.invoice.status).toBe('paid');
   });
+
+  it('does not mark 99% as paid (cent-level only)', () => {
+    const inv = baseInvoice({ amount: 1000 });
+    const result = addPaymentToInvoice(inv, { amount: 990, date: '2026-01-02', method: 'ACH' });
+    expect(result.invoice.status).toBe('partial');
+    expect(result.invoice.paidAmount).toBe(990);
+  });
+
+  it('preserves legacy paidAmount when first ledger payment is added', () => {
+    const inv = baseInvoice({ paidAmount: 400, amount: 1000 });
+    const result = addPaymentToInvoice(inv, { amount: 600, date: '2026-01-03', method: 'ACH' });
+    expect(calculateTotalPaid(result.invoice)).toBe(1000);
+    expect(result.invoice.status).toBe('paid');
+  });
 });
 
 describe('allocatePaymentAcrossLoads', () => {

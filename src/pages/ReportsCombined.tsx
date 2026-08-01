@@ -801,7 +801,7 @@ const CarrierPayReport: React.FC<{ onBack: () => void }> = ({ onBack }) => (
 );
 
 const DispatcherManagementReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { loads, employees } = useTMS();
+  const { loads, employees, settlements } = useTMS();
   return (
     <MonthScopedReportShell
       title="Dispatcher Management Report"
@@ -814,6 +814,7 @@ const DispatcherManagementReport: React.FC<{ onBack: () => void }> = ({ onBack }
           const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
           return d >= periodStart && d <= periodEnd;
         });
+        const accrued = calculateAccruedDispatcherCommission(periodLoads, settlements, employees);
         const byDisp: Record<string, { loads: number; revenue: number; commission: number }> = {};
         periodLoads.forEach(l => {
           const emp = employees.find(e => e.id === l.dispatcherId);
@@ -825,7 +826,7 @@ const DispatcherManagementReport: React.FC<{ onBack: () => void }> = ({ onBack }
           if (!byDisp[key]) byDisp[key] = { loads: 0, revenue: 0, commission: 0 };
           byDisp[key].loads += 1;
           byDisp[key].revenue += getLoadRevenue(l);
-          byDisp[key].commission += Number(l.dispatcherCommissionAmount) || 0;
+          byDisp[key].commission += accrued.byLoadId[l.id] || 0;
         });
         const sorted = Object.entries(byDisp).sort((a, b) => b[1].revenue - a[1].revenue);
         return (

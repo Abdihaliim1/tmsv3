@@ -21,7 +21,7 @@ import {
   type SettlementLoadPay,
   type SettlementMoneyInputs,
 } from '../services/settlementMath';
-import { formatDateOnly, formatLocalDate } from '../utils/dateOnly';
+import { formatDateOnly, formatLocalDate, parseDateOnlyLocal } from '../utils/dateOnly';
 import {
   getISOWeekParts,
   getDateOfISOWeek,
@@ -30,6 +30,7 @@ import {
 } from '../utils/isoWeek';
 import { canPerformAction } from '../services/rbac';
 import { useAuth } from '../context/AuthContext';
+import { useTenant } from '../context/TenantContext';
 
 type SettlementType = 'driver' | 'dispatcher';
 
@@ -124,9 +125,11 @@ function isLoadSettledForType(
 const Settlements: React.FC = () => {
   const { settlements, drivers, loads, addSettlement, deleteSettlement, updateSettlement, employees } = useTMS();
   const { companyProfile } = useCompany();
-  const { role } = useAuth();
-  const canCreateSettlement = canPerformAction(role || 'viewer', 'settlements', 'create');
-  const canDeleteSettlement = canPerformAction(role || 'viewer', 'settlements', 'delete');
+  const { user } = useAuth();
+  const { isPlatformAdmin } = useTenant();
+  const effectiveRole = isPlatformAdmin ? 'admin' : (user?.role || 'viewer');
+  const canCreateSettlement = canPerformAction(effectiveRole, 'settlements', 'create');
+  const canDeleteSettlement = canPerformAction(effectiveRole, 'settlements', 'delete');
   const [settlementType, setSettlementType] = useState<SettlementType>('driver');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
@@ -232,14 +235,9 @@ const Settlements: React.FC = () => {
           const deliveryDateStr = load.deliveryDate || load.pickupDate || load.createdAt || '';
           if (!deliveryDateStr) return false;
 
-          let deliveryDate = new Date(deliveryDateStr);
-          if (isNaN(deliveryDate.getTime())) {
-            const dateOnly = deliveryDateStr.split('T')[0];
-            deliveryDate = new Date(dateOnly);
-            if (isNaN(deliveryDate.getTime())) return false;
-          }
+          const deliveryDateOnly = parseDateOnlyLocal(String(deliveryDateStr).split('T')[0]);
+          if (isNaN(deliveryDateOnly.getTime())) return false;
 
-          const deliveryDateOnly = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate());
           const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
           const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
 
@@ -351,10 +349,14 @@ const Settlements: React.FC = () => {
         layoverPay = load.driverLayoverPay || 0;
         tonuPay = load.tonuFee || 0;
       } else if (driver) {
+        const payProfile = resolveDriverPayment(driver);
         basePay = calculateDriverPay(load, driver);
-        detentionPay = load.detentionAmount || 0;
-        layoverPay = load.layoverAmount || 0;
-        tonuPay = load.tonuFee || 0;
+        // Percentage of gross already includes accessorials — do not add again
+        if (payProfile.type !== 'percentage') {
+          detentionPay = load.detentionAmount || 0;
+          layoverPay = load.layoverAmount || 0;
+          tonuPay = load.tonuFee || 0;
+        }
       }
 
       loadPays.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
@@ -695,10 +697,14 @@ const Settlements: React.FC = () => {
             layoverPay = load.driverLayoverPay || 0;
             tonuPay = load.tonuFee || 0;
           } else if (driver) {
+            const payProfile = resolveDriverPayment(driver);
             basePay = calculateDriverPay(load, driver);
-            detentionPay = load.detentionAmount || 0;
-            layoverPay = load.layoverAmount || 0;
-            tonuPay = load.tonuFee || 0;
+            // Percentage of gross already includes accessorials — do not add again
+            if (payProfile.type !== 'percentage') {
+              detentionPay = load.detentionAmount || 0;
+              layoverPay = load.layoverAmount || 0;
+              tonuPay = load.tonuFee || 0;
+            }
           }
           loadPaysLocal.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
           settlementLoadsLocal.push({
@@ -1436,7 +1442,7 @@ const Settlements: React.FC = () => {
                   if (pay.type === 'percentage' && pay.percentageDisplay > 0) {
                     return (
                       <p className="text-xs text-blue-600 mt-1">
-                        <strong>Note:</strong> Paid {pay.percentageDisplay.toFixed(pay.percentageDisplay % 1 === 0 ? 0 : 2)}% of load revenue. Accessorials are 100% pass-through.
+                        <strong>Note:</strong> Paid {pay.percentageDisplay.toFixed(pay.percentageDisplay % 1 === 0 ? 0 : 2)}% of load gross revenue (includes accessorials; they are not added again).
                       </p>
                     );
                   }

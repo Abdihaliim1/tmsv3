@@ -54,7 +54,8 @@ interface AdminConsoleProps {
 }
 
 const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant }) => {
-  const { user, role } = useAuth();
+  const { user } = useAuth();
+  const role = user?.role || 'viewer';
 
   const [tenants, setTenants] = useState<TenantIndexEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -79,7 +80,7 @@ const AdminConsole: React.FC<AdminConsoleProps> = ({ onNavigate, selectTenant })
     setIsLoading(true);
     try {
       // Try tenantsIndex first, fall back to tenants collection
-      let tenantsData: TenantIndexEntry[] = [];
+      const tenantsData: TenantIndexEntry[] = [];
       
       // Try tenantsIndex
       const indexSnapshot = await getDocs(collection(db, 'tenantsIndex'));

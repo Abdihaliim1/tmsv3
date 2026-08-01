@@ -3,7 +3,14 @@ import { Plus, Truck, CheckCircle, Wrench, Search, Edit, Trash2, X, Calculator, 
 import { useTMS } from '../context/TMSContext';
 import { Truck as TruckType, TruckStatus, TruckOwnership, NewTruckInput, Trailer, TrailerStatus, TrailerType, NewTrailerInput } from '../types';
 import { useDebounce } from '../utils/debounce';
-import { getLoadMiles, getLoadRevenue, isRevenueLoadStatus } from '../services/businessLogic';
+import {
+  getLoadMiles,
+  getLoadRevenue,
+  isRevenueLoadStatus,
+  calculateAccruedDriverPay,
+  calculateAccruedDispatcherCommission,
+  resolveLoadFactoringFee,
+} from '../services/businessLogic';
 import { parseDateOnlyLocal } from '../utils/dateOnly';
 
 type ViewType = 'trucks' | 'trailers';
@@ -14,6 +21,10 @@ type TruckProfitRow = {
   loads: number;
   miles: number;
   revenue: number;
+  driverPay: number;
+  dispatcherCommission: number;
+  factoringFees: number;
+  operatingExpenses: number;
   expenses: number;
   profit: number;
 };
@@ -22,7 +33,10 @@ const fmtMoney = (n: number) =>
   `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const Fleet: React.FC = () => {
-  const { trucks, trailers, drivers, loads, addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses } = useTMS();
+  const {
+    trucks, trailers, drivers, loads, employees, settlements, invoices, factoringCompanies,
+    addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses,
+  } = useTMS();
   const [activeView, setActiveView] = useState<ViewType>('trucks');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTruck, setEditingTruck] = useState<TruckType | null>(null);
@@ -257,10 +271,24 @@ const Fleet: React.FC = () => {
         return d >= startDate && d <= endDate;
       });
       const revenue = truckLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
-      const expenseTotal = truckExpenses.reduce((sum, e) => {
+      const operatingExpenses = truckExpenses.reduce((sum, e) => {
         const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
         return sum + (Number.isFinite(amount) ? amount : 0);
       }, 0);
+      const driverPay = calculateAccruedDriverPay(truckLoads, settlements, drivers).total;
+      const dispatcherCommission = calculateAccruedDispatcherCommission(
+        truckLoads,
+        settlements,
+        employees
+      ).total;
+      const factoringFees = truckLoads.reduce((sum, l) => {
+        const inv = invoices.find(
+          i => i.id === l.invoiceId || i.loadIds?.includes(l.id) || i.loadId === l.id
+        );
+        return sum + resolveLoadFactoringFee(l, inv, factoringCompanies);
+      }, 0);
+      const expenseTotal =
+        operatingExpenses + driverPay + dispatcherCommission + factoringFees;
       const miles = truckLoads.reduce((sum, l) => sum + getLoadMiles(l), 0);
       return {
         truckId: truck.id,
@@ -268,6 +296,10 @@ const Fleet: React.FC = () => {
         loads: truckLoads.length,
         miles,
         revenue,
+        driverPay,
+        dispatcherCommission,
+        factoringFees,
+        operatingExpenses,
         expenses: expenseTotal,
         profit: revenue - expenseTotal,
       };
@@ -501,9 +533,11 @@ const Fleet: React.FC = () => {
                     <tr>
                       <th className="px-4 py-2 text-left font-medium text-slate-500">Truck</th>
                       <th className="px-4 py-2 text-right font-medium text-slate-500">Loads</th>
-                      <th className="px-4 py-2 text-right font-medium text-slate-500">Miles</th>
                       <th className="px-4 py-2 text-right font-medium text-slate-500">Revenue</th>
-                      <th className="px-4 py-2 text-right font-medium text-slate-500">Expenses</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Driver</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Dispatch</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Factoring</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">OpEx</th>
                       <th className="px-4 py-2 text-right font-medium text-slate-500">Profit</th>
                     </tr>
                   </thead>
@@ -512,9 +546,11 @@ const Fleet: React.FC = () => {
                       <tr key={row.truckId}>
                         <td className="px-4 py-2 font-medium text-slate-900">{row.truckNumber}</td>
                         <td className="px-4 py-2 text-right">{row.loads}</td>
-                        <td className="px-4 py-2 text-right">{row.miles.toLocaleString()}</td>
                         <td className="px-4 py-2 text-right">{fmtMoney(row.revenue)}</td>
-                        <td className="px-4 py-2 text-right">{fmtMoney(row.expenses)}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.driverPay)}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.dispatcherCommission)}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.factoringFees)}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.operatingExpenses)}</td>
                         <td className={`px-4 py-2 text-right font-semibold ${row.profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                           {fmtMoney(row.profit)}
                         </td>
@@ -528,13 +564,19 @@ const Fleet: React.FC = () => {
                         {truckProfitRows.reduce((s, r) => s + r.loads, 0)}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        {truckProfitRows.reduce((s, r) => s + r.miles, 0).toLocaleString()}
-                      </td>
-                      <td className="px-4 py-2 text-right">
                         {fmtMoney(truckProfitRows.reduce((s, r) => s + r.revenue, 0))}
                       </td>
                       <td className="px-4 py-2 text-right">
-                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.expenses, 0))}
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.driverPay, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.dispatcherCommission, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.factoringFees, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.operatingExpenses, 0))}
                       </td>
                       <td className="px-4 py-2 text-right">
                         {fmtMoney(truckProfitRows.reduce((s, r) => s + r.profit, 0))}

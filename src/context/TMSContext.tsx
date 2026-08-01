@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect, useCallback } from 'react';
-import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, FactoringTransaction, NewFactoringTransactionInput, Dispatcher, NewDispatcherInput, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus, Task } from '../types';
+import { Load, LoadStatus, NewLoadInput, KPIMetrics, Employee, NewEmployeeInput, Driver, NewDriverInput, Invoice, Payment, Settlement, Truck, NewTruckInput, Expense, NewExpenseInput, FactoringCompany, NewFactoringCompanyInput, FactoringTransaction, NewFactoringTransactionInput, Dispatcher, NewDispatcherInput, Trailer, NewTrailerInput, Broker, NewBrokerInput, CustomerEntity, NewCustomerInput, StatusChangeInfo, PlannedLoad, NewPlannedLoadInput, Trip, NewTripInput, PlannedLoadStatus, TripStatus, Task } from '../types';
 import { generateMockKPIs } from '../services/mockData';
 import { calculateCompanyRevenue } from '../services/utils';
 // Tenant ID comes from TenantContext
@@ -21,6 +21,11 @@ import { useAuth } from './AuthContext';
 import { auditCreate, auditUpdate, auditStatusChange, auditAdjustment } from '../data/audit';
 import { validatePostDeliveryUpdates, isLoadLocked } from '../services/loadLocking';
 import { canDispatchLoad, canInvoiceLoad } from '../services/documentService';
+import { canTransitionLoadStatus } from '../services/loadLifecycle';
+import {
+  addPaymentToInvoice,
+  allocatePaymentAcrossLoads,
+} from '../services/paymentService';
 // Logging and error handling
 import { logger } from '../services/logger';
 import { errorHandler, ErrorSeverity } from '../services/errorHandler';
@@ -49,6 +54,7 @@ import {
   withDispatcherCommission,
   calculateDriverPay,
   getDispatcherAssignmentFields,
+  getLoadRevenue,
 } from '../services/businessLogic';
 import { appendEmployeeHistory } from '../services/employeeHistory';
 import { claimUniqueKey, releaseUniqueKey } from '../services/uniqueKeyService';
@@ -108,6 +114,10 @@ interface TMSContextType {
   addInvoice: (invoice: Omit<Invoice, 'id'>) => void;
   updateInvoice: (id: string, invoice: Partial<Invoice>) => void;
   deleteInvoice: (id: string, force?: boolean) => void;
+  recordInvoicePayment: (
+    invoiceId: string,
+    payment: Omit<Payment, 'id' | 'invoiceId' | 'createdAt'>
+  ) => Promise<Invoice>;
   addSettlement: (
     settlement: Omit<Settlement, 'id'>,
     options?: { linkLoadIds?: string[]; linkAs?: 'driver' | 'dispatcher' }
@@ -207,6 +217,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addInvoice: () => { },
         updateInvoice: () => { },
         deleteInvoice: () => { },
+        recordInvoicePayment: async () => {
+          throw new Error('TMS not ready');
+        },
         addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },
@@ -726,8 +739,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       );
     }
 
-    // Document / assignment guards for status transitions
+    // Document / assignment / legal lifecycle guards for status transitions
     if (sanitizedUpdates.status && sanitizedUpdates.status !== oldLoad.status) {
+      const transition = canTransitionLoadStatus(oldLoad.status, sanitizedUpdates.status);
+      if (!transition.ok) {
+        return Promise.reject(new Error(transition.reason || 'Illegal status transition'));
+      }
       const merged = { ...oldLoad, ...sanitizedUpdates } as Load;
       if (sanitizedUpdates.status === LoadStatus.Dispatched) {
         const check = canDispatchLoad({ ...merged, status: LoadStatus.Available });
@@ -740,6 +757,13 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         if (!check.canInvoice && !oldLoad.invoiceId) {
           return Promise.reject(new Error(check.reason || 'Cannot invoice load'));
         }
+      }
+      if (
+        sanitizedUpdates.status === LoadStatus.Paid &&
+        !oldLoad.invoiceId &&
+        oldLoad.status !== LoadStatus.Invoiced
+      ) {
+        return Promise.reject(new Error('Load must be invoiced before it can be marked Paid'));
       }
     }
 
@@ -1074,6 +1098,10 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       return Promise.reject(new Error('Role (admin/dispatcher/driver/viewer) is required'));
     }
 
+    const transition = canTransitionLoadStatus(load.status, newStatus);
+    if (!transition.ok) {
+      return Promise.reject(new Error(transition.reason || 'Illegal status transition'));
+    }
     if (newStatus === LoadStatus.Dispatched) {
       const check = canDispatchLoad({ ...load, status: LoadStatus.Available });
       if (!check.canDispatch) {
@@ -1085,6 +1113,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       if (!check.canInvoice) {
         return Promise.reject(new Error(check.reason || 'Cannot invoice load'));
       }
+    }
+    if (newStatus === LoadStatus.Paid && load.status !== LoadStatus.Invoiced && !load.invoiceId) {
+      return Promise.reject(new Error('Load must be invoiced before it can be marked Paid'));
     }
 
     const now = new Date().toISOString();
@@ -1846,6 +1877,61 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
   };
 
+  /**
+   * Atomically record an invoice payment and update linked load payment fields.
+   */
+  const recordInvoicePayment = async (
+    invoiceId: string,
+    payment: Omit<Payment, 'id' | 'invoiceId' | 'createdAt'>
+  ): Promise<Invoice> => {
+    const invoice = invoices.find(inv => inv.id === invoiceId);
+    if (!invoice) throw new Error('Invoice not found');
+
+    const { invoice: updated } = addPaymentToInvoice(invoice, payment);
+    const loadIds = Array.from(
+      new Set([
+        ...(invoice.loadId ? [invoice.loadId] : []),
+        ...(invoice.loadIds || []),
+      ])
+    );
+    const allocations = allocatePaymentAcrossLoads(
+      invoice.amount || 0,
+      updated.paidAmount || 0,
+      loadIds.map(loadId => {
+        const load = loads.find(l => l.id === loadId);
+        return { loadId, revenue: load ? getLoadRevenue(load) : 0 };
+      })
+    );
+    const isPaidInFull = updated.status === 'paid';
+    const paidAt = updated.paidAt || payment.date || new Date().toISOString();
+
+    const linkedLoadDocs: Load[] = [];
+    const nextLoads = loads.map(load => {
+      if (!loadIds.includes(load.id)) return load;
+      const alloc = allocations.find(a => a.loadId === load.id);
+      const linked: Load = {
+        ...load,
+        paymentAmount: alloc?.paymentAmount ?? load.paymentAmount,
+        paymentReceived: isPaidInFull,
+        paymentReceivedDate: isPaidInFull ? paidAt : load.paymentReceivedDate,
+        status: isPaidInFull ? LoadStatus.Paid : load.status,
+      };
+      linkedLoadDocs.push(linked);
+      return linked;
+    });
+
+    await commitParentWithLinkedLoads({
+      tenantId: tenantId || 'default',
+      parentCollection: 'invoices',
+      parent: updated as unknown as { id: string } & Record<string, unknown>,
+      linkedLoads: linkedLoadDocs as unknown as Array<{ id: string } & Record<string, unknown>>,
+    });
+
+    setInvoices(prev => prev.map(inv => (inv.id === invoiceId ? updated : inv)));
+    if (linkedLoadDocs.length > 0) setLoads(nextLoads);
+    return updated;
+  };
+
   const deleteInvoice = (id: string, force: boolean = false) => {
     const invoice = invoices.find(inv => inv.id === id);
     if (!invoice) return;
@@ -1942,8 +2028,43 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       entityId: settlementId,
     });
 
-    const linkLoadIds = options?.linkLoadIds || input.loadIds || [];
+    const requestedLinkIds = options?.linkLoadIds || input.loadIds || [];
     const linkAs = options?.linkAs || (input.type === 'dispatcher' ? 'dispatcher' : 'driver');
+
+    // Re-read eligibility from current state (blocks concurrent double-settle races in-tab)
+    const eligibleLinkIds = requestedLinkIds.filter(loadId => {
+      const load = loads.find(l => l.id === loadId);
+      if (!load) return false;
+      if (linkAs === 'dispatcher') {
+        if (load.dispatcherSettlementId) return false;
+        // Do not permanently lock $0 commission loads as settled
+        const line = (input.loads || []).find(l => l.loadId === loadId);
+        const pay = Number(line?.basePay ?? line?.dispatchFee ?? 0);
+        if (!(pay > 0)) return false;
+        return true;
+      }
+      return !load.settlementId;
+    });
+
+    if (requestedLinkIds.length > 0 && eligibleLinkIds.length === 0) {
+      await releaseUniqueKey({
+        tenantId: tenantId || 'default',
+        kind: 'settlementNumber',
+        value: settlementNumber,
+        entityId: settlementId,
+      }).catch(() => {});
+      throw new Error('Selected loads are no longer eligible for settlement (already settled or $0 commission).');
+    }
+
+    const linkLoadIds = eligibleLinkIds;
+    const settlementToSave: Settlement = {
+      ...newSettlement,
+      loadIds: linkLoadIds.length > 0 ? linkLoadIds : newSettlement.loadIds,
+      loads: (newSettlement.loads || []).filter(
+        l => !linkLoadIds.length || linkLoadIds.includes(l.loadId)
+      ),
+    };
+
     const linkedLoadDocs: Load[] = [];
 
     const nextLoads =
@@ -1970,7 +2091,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       await commitParentWithLinkedLoads({
         tenantId: tenantId || 'default',
         parentCollection: 'settlements',
-        parent: newSettlement as unknown as { id: string } & Record<string, unknown>,
+        parent: settlementToSave as unknown as { id: string } & Record<string, unknown>,
         linkedLoads: linkedLoadDocs as unknown as Array<{ id: string } & Record<string, unknown>>,
       });
     } catch (e) {
@@ -1983,9 +2104,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       throw e;
     }
 
-    setSettlements(prev => [newSettlement, ...prev]);
+    setSettlements(prev => [settlementToSave, ...prev]);
     if (linkLoadIds.length > 0) setLoads(nextLoads);
-    return newSettlement.id;
+    return settlementToSave.id;
   };
 
   const updateSettlement = (id: string, updates: Partial<Settlement>) => {
@@ -2542,18 +2663,25 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       // Only update loads if there are relevant changes
       if (Object.keys(loadUpdates).length > 0) {
         loadUpdates.updatedAt = now;
+        const lockedStatuses = new Set([
+          LoadStatus.Delivered,
+          LoadStatus.DeliveredWithBOL,
+          LoadStatus.Invoiced,
+          LoadStatus.Paid,
+          LoadStatus.Completed,
+        ]);
 
-        // Update all loads associated with this trip
+        // Update associated loads — never overwrite delivered/financial loads from trip edits
         setLoads(prev => prev.map(load => {
-          if (load.tripId === id) {
-            const updatedLoad = { ...load, ...loadUpdates };
-            // Persist the updated load
-            saveLoad(tenantId || 'default', updatedLoad).catch(e =>
-              console.error('Failed to sync load with trip update:', e)
-            );
-            return updatedLoad;
+          if (load.tripId !== id) return load;
+          if (lockedStatuses.has(load.status as LoadStatus) || load.isLocked) {
+            return load;
           }
-          return load;
+          const updatedLoad = { ...load, ...loadUpdates };
+          saveLoad(tenantId || 'default', updatedLoad).catch(e =>
+            console.error('Failed to sync load with trip update:', e)
+          );
+          return updatedLoad;
         }));
 
         logger.info('[TMSContext] Synced trip changes to associated loads', {
@@ -2575,7 +2703,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         return;
       }
 
-      // Unlink loads from trip
+      // Unlink planned loads from trip
       trip.plannedLoadIds.forEach(loadId => {
         updatePlannedLoad(loadId, {
           tripId: undefined,
@@ -2585,6 +2713,18 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         });
       });
     }
+
+    // Clear trip references on live loads so they are not orphaned
+    setLoads(prev =>
+      prev.map(load => {
+        if (load.tripId !== id) return load;
+        const cleared = { ...load, tripId: undefined, tripNumber: undefined };
+        saveLoad(tenantId || 'default', cleared).catch(e =>
+          console.error('Failed to clear trip link on load:', e)
+        );
+        return cleared;
+      })
+    );
 
     setTrips(prev => prev.filter(t => t.id !== id));
     firestoreDeleteTrip(tenantId || 'default', id).catch(e => console.error('Failed to delete trip:', e));
@@ -2606,6 +2746,17 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     tripData: NewTripInput,
     existingTripId?: string
   ): Promise<string> => {
+    // Hard requirements before creating live loads
+    if (!tripData.driverId) throw new Error('Driver is required before dispatch');
+    if (!tripData.truckId) throw new Error('Truck is required before dispatch');
+    if (!tripData.dispatcherId) throw new Error('Dispatcher is required before dispatch');
+    if (!tripData.trailerId && !tripData.trailerNumber) {
+      throw new Error('Trailer is required before dispatch');
+    }
+    if (!(tripData.totalMiles > 0)) {
+      throw new Error('Total miles must be greater than 0 before dispatch');
+    }
+
     // Validate all loads exist and are in "planned" status
     const loadsToDispatch = plannedLoadIds.map(id => plannedLoads.find(pl => pl.id === id)).filter(Boolean) as PlannedLoad[];
 
@@ -2616,6 +2767,24 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const nonPlannedLoads = loadsToDispatch.filter(pl => pl.status !== 'planned');
     if (nonPlannedLoads.length > 0) {
       throw new Error(`Cannot dispatch loads that are not in "planned" status: ${nonPlannedLoads.map(pl => pl.systemLoadNumber).join(', ')}`);
+    }
+
+    for (const pl of loadsToDispatch) {
+      const plRec = pl as PlannedLoad & {
+        documents?: Array<{ type?: string }>;
+        rateConfirmationUrl?: string;
+        rateConNumber?: string;
+        customer?: { rateConAttached?: boolean };
+      };
+      const docs = plRec.documents || [];
+      const hasRateCon = docs.some(d => String(d.type || '').toUpperCase() === 'RATE_CON');
+      if (!hasRateCon && !plRec.rateConfirmationUrl && !plRec.rateConNumber) {
+        if (!plRec.customer?.rateConAttached) {
+          throw new Error(
+            `Rate Confirmation required before dispatching ${pl.systemLoadNumber}`
+          );
+        }
+      }
     }
 
     // Claim planned loads before creating live loads (blocks double-dispatch races)
@@ -3022,6 +3191,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       deleteTrailer,
       addInvoice,
       updateInvoice,
+      recordInvoicePayment,
       deleteInvoice,
       addSettlement,
       updateSettlement,
@@ -3120,6 +3290,9 @@ export const useTMS = () => {
         addInvoice: () => { },
         updateInvoice: () => { },
         deleteInvoice: () => { },
+        recordInvoicePayment: async () => {
+          throw new Error('TMS not ready');
+        },
         addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },

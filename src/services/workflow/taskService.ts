@@ -101,16 +101,22 @@ export async function hydrateTasksFromBackend(tenantId: string | null): Promise<
     console.warn('Failed to load tasks from Firestore; using local cache', error);
   }
 
+  // Prefer Firestore as source of truth; only keep recent local-only tasks
   const byId = new Map<string, Task>();
-  [...local, ...remote].forEach(task => {
+  remote.forEach(task => byId.set(task.id, task));
+  local.forEach(task => {
     const existing = byId.get(task.id);
     if (!existing) {
-      byId.set(task.id, task);
+      const ts = Date.parse(task.updatedAt || task.createdAt || '');
+      const ageMs = Number.isFinite(ts) ? Date.now() - ts : Number.POSITIVE_INFINITY;
+      if (ageMs < 7 * 24 * 60 * 60 * 1000) {
+        byId.set(task.id, task);
+      }
       return;
     }
     const existingTs = existing.updatedAt || existing.createdAt || '';
     const nextTs = task.updatedAt || task.createdAt || '';
-    byId.set(task.id, nextTs >= existingTs ? task : existing);
+    if (nextTs > existingTs) byId.set(task.id, task);
   });
 
   const merged = Array.from(byId.values());
@@ -119,11 +125,14 @@ export async function hydrateTasksFromBackend(tenantId: string | null): Promise<
   } catch {
     /* ignore quota */
   }
-  // Push any local-only tasks up so other users can see them
-  const remoteIds = new Set(remote.map(t => t.id));
+  const remoteById = new Map(remote.map(t => [t.id, t]));
   void Promise.all(
     merged
-      .filter(t => !remoteIds.has(t.id))
+      .filter(t => {
+        const r = remoteById.get(t.id);
+        if (!r) return true;
+        return (t.updatedAt || '') > (r.updatedAt || '');
+      })
       .map(task =>
         saveTaskDoc(tid, { ...task, tenantId: tid }).catch(() => undefined)
       )
@@ -144,12 +153,16 @@ export function loadHasPod(load: Load): boolean {
   });
 }
 
-export function isLoadInvoiced(load: Load): boolean {
-  return !!(
-    load.invoiceId ||
-    load.status === LoadStatus.Invoiced ||
-    load.status === LoadStatus.Paid
-  );
+export function isLoadInvoiced(
+  load: Load,
+  invoices?: Invoice[]
+): boolean {
+  if (load.invoiceId && load.invoiceId !== 'pending') return true;
+  if (load.status === LoadStatus.Invoiced || load.status === LoadStatus.Paid) return true;
+  if (invoices?.some(inv => inv.loadId === load.id || inv.loadIds?.includes(load.id))) {
+    return true;
+  }
+  return false;
 }
 
 const OPEN_STATUSES = new Set<Task['status']>(['pending', 'in_progress', 'blocked']);
@@ -373,7 +386,10 @@ export function reconcileTasks(
       if (task.entityType !== 'load') return task;
 
       const load = loadById.get(task.entityId) || loadByNumber.get(task.entityId);
-      if (!load) return task;
+      if (!load) {
+        // Entity deleted/missing — cancel stale open tasks
+        return cancelOpenTask(task, now);
+      }
 
       if (load.status === LoadStatus.Cancelled) {
         return cancelOpenTask(task, now);
@@ -381,7 +397,7 @@ export function reconcileTasks(
 
       const template = task.templateKey || '';
       const hasPod = loadHasPod(load);
-      const invoiced = isLoadInvoiced(load);
+      const invoiced = isLoadInvoiced(load, context.invoices);
       const pastDispatch =
         load.status === LoadStatus.Dispatched ||
         load.status === LoadStatus.InTransit ||
@@ -405,7 +421,8 @@ export function reconcileTasks(
       }
 
       if (template === 'LOAD_COLLECT_POD') {
-        if (hasPod || invoiced) return completeOpenTask(task, now);
+        // Only complete when POD actually exists — never because an invoice exists
+        if (hasPod) return completeOpenTask(task, now);
         return {
           ...task,
           status: 'blocked',
@@ -435,7 +452,7 @@ export function reconcileTasks(
       return task;
     });
 
-  // Reconcile is local-cache only; create/update/delete paths sync to Firestore
-  saveTasksLocal(tid, tasks);
+  // Persist reconciled state locally and push to Firestore
+  saveTasks(tid, tasks);
   return tasks;
 }

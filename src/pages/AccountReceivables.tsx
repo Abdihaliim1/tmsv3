@@ -1,14 +1,13 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  FileText, DollarSign, Clock, AlertTriangle, Download, Printer, CheckCircle, Trash2, 
-  MoreHorizontal, X, Plus, Building2, Edit, Search, MapPin, Truck, TrendingUp
+  FileText, DollarSign, Clock, AlertTriangle, Download, CheckCircle, Trash2, 
+  MoreHorizontal, X, Plus, Edit, Search
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
-import { Invoice, InvoiceStatus, LoadStatus, FactoringCompany, NewFactoringCompanyInput, Load, Payment } from '../types';
+import { Invoice, InvoiceStatus, FactoringCompany, NewFactoringCompanyInput, Load } from '../types';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { addPaymentToInvoice, validatePayment, calculateAging, calculateARAgingSummary, calculateInvoiceStatus, calculateTotalPaid, calculateOutstandingBalance, getDaysOutstanding, allocatePaymentAcrossLoads } from '../services/paymentService';
-import { getLoadRevenue } from '../services/businessLogic';
+import { validatePayment, calculateOutstandingBalance } from '../services/paymentService';
 import {
   buildMarkLoadFundedPatch,
   deriveInvoiceFundingFromLoads,
@@ -20,9 +19,6 @@ import {
   isLoadFunded,
   summarizeFactoredLoads,
 } from '../services/factoringFunding';
-import { canInvoiceLoad } from '../services/documentService';
-import { useTenant } from '../context/TenantContext';
-import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
 import {
@@ -33,13 +29,10 @@ type TabType = 'invoices' | 'factored' | 'companies';
 
 const AccountReceivables: React.FC = () => {
   const { 
-    invoices, loads, factoringCompanies, addInvoice, updateInvoice, deleteInvoice, 
-    addFactoringCompany, updateFactoringCompany, deleteFactoringCompany, updateLoad, updateInvoice: updateInvoiceFunc
+    invoices, loads, factoringCompanies, updateInvoice, deleteInvoice, 
+    addFactoringCompany, updateFactoringCompany, deleteFactoringCompany, updateLoad, updateInvoice: updateInvoiceFunc,
+    recordInvoicePayment,
   } = useTMS();
-  
-  // Get tenant ID at top level (hooks must be called at top level)
-  const { activeTenantId } = useTenant();
-  const tenantId = activeTenantId || 'default';
   
   // Get company profile for PDF generation
   const { companyProfile } = useCompany();
@@ -66,14 +59,12 @@ const AccountReceivables: React.FC = () => {
   const debouncedCompanySearchTerm = useDebounce(companySearchTerm, 300);
   const [selectedCompanyName, setSelectedCompanyName] = useState('');
 
-  // Check for overdue invoices
+  // Check for overdue invoices only — never auto-create invoices on page open.
   useEffect(() => {
     checkOverdueInvoices();
-    createInvoicesForDeliveredLoads();
-    
+
     const interval = setInterval(() => {
       checkOverdueInvoices();
-      createInvoicesForDeliveredLoads();
     }, 60 * 60 * 1000);
 
     return () => clearInterval(interval);
@@ -103,55 +94,6 @@ const AccountReceivables: React.FC = () => {
 
       if (dueDate < today) {
         updateInvoice(invoice.id, { status: 'overdue' });
-      }
-    });
-  };
-
-  const createInvoicesForDeliveredLoads = () => {
-    const deliveredLoads = loads.filter(load => {
-      const status = load.status;
-      const isDelivered = status === LoadStatus.Delivered || status === LoadStatus.Completed;
-      
-      // DUPLICATE CHECK 1: Load already has invoiceId
-      if (load.invoiceId) return false;
-      
-      // DUPLICATE CHECK 2: Any invoice references this load
-      const hasExistingInvoice = invoices.some(inv => 
-        inv.loadId === load.id || inv.loadIds?.includes(load.id)
-      );
-      if (hasExistingInvoice) return false;
-      
-      // Must have a broker name to invoice
-      return isDelivered && (load.brokerName || load.customerName);
-    });
-
-    // Create invoices only for loads that passed all duplicate checks
-    deliveredLoads.forEach(load => {
-      const brokerName = load.brokerName || load.customerName;
-      
-      // Final safety check - redundant but safe
-      const alreadyHasInvoice = invoices.some(inv => 
-        inv.loadId === load.id || inv.loadIds?.includes(load.id)
-      );
-      
-      if (!alreadyHasInvoice && load.rate > 0) {
-        const today = new Date();
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + 30);
-
-        const newInvoice: Omit<Invoice, 'id'> = {
-          invoiceNumber: generateUniqueInvoiceNumber(tenantId, invoices),
-          brokerId: load.brokerId,
-          brokerName: brokerName,
-          customerName: brokerName, // Keep for backward compatibility
-          loadIds: [load.id],
-          amount: load.grandTotal || load.rate,
-          status: 'pending',
-          date: today.toISOString().split('T')[0],
-          dueDate: dueDate.toISOString().split('T')[0],
-        };
-
-        addInvoice(newInvoice);
       }
     });
   };
@@ -241,46 +183,18 @@ const AccountReceivables: React.FC = () => {
     const paidAt = new Date().toISOString().split('T')[0];
 
     try {
-      const { invoice: updated } = addPaymentToInvoice(invoice, {
+      await recordInvoicePayment(invoice.id, {
         amount: paidAmount,
         date: paidAt,
         method: paymentMethod as any,
         reference: paymentReference || undefined,
       });
 
-      updateInvoice(invoice.id, {
-        status: updated.status,
-        paidAt: updated.paidAt,
-        paidAmount: updated.paidAmount,
-        paymentMethod,
-        paymentReference: paymentReference || undefined,
-        payments: updated.payments,
-      });
-
-      const loadIds = Array.from(new Set([
-        ...(invoice.loadId ? [invoice.loadId] : []),
-        ...(invoice.loadIds || []),
-      ]));
-      const allocations = allocatePaymentAcrossLoads(
-        invoice.amount || 0,
-        updated.paidAmount || 0,
-        loadIds.map(loadId => {
-          const load = loads.find(l => l.id === loadId);
-          return { loadId, revenue: load ? getLoadRevenue(load) : 0 };
-        })
-      );
-
-      const isPaidInFull = updated.status === 'paid';
-      for (const alloc of allocations) {
-        try {
-          await updateLoad(alloc.loadId, {
-            paymentReceived: isPaidInFull,
-            paymentReceivedDate: isPaidInFull ? updated.paidAt : undefined,
-            paymentAmount: alloc.paymentAmount,
-          });
-        } catch (error: any) {
-          console.error('Error updating load payment status:', error);
-        }
+      if (paymentMethod || paymentReference) {
+        updateInvoice(invoice.id, {
+          paymentMethod,
+          paymentReference: paymentReference || undefined,
+        });
       }
     } catch (error: any) {
       alert(error?.message || 'Failed to record payment');
