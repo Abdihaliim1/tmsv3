@@ -21,7 +21,7 @@ import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactorin
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
-import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
+import { formatDateOnly, tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
 import { getFactoredLoads } from '../services/businessLogic';
 import { canInvoiceLoad } from '../services/documentService';
@@ -69,7 +69,8 @@ const formatDate = (dateString: string | undefined) => {
 const isRecentDeliveredLoad = (load: Load): boolean => {
   const deliveredDate = load.deliveryDate || load.updatedAt;
   if (!deliveredDate) return false;
-  const date = parseDateOnlyLocal(deliveredDate);
+  const date = tryParseDateOnlyLocal(deliveredDate);
+  if (!date) return false;
   const now = new Date();
 
   const fortyFiveDaysAgo = new Date(now);
@@ -165,7 +166,7 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
         <div>
           <h2 className="text-xl font-bold text-slate-900">Loads Not Invoiced</h2>
           <p className="text-slate-600 mt-1">
-            {totalLoads} delivered load{totalLoads !== 1 ? 's' : ''} from {customerCount} customer{customerCount !== 1 ? 's' : ''} ready to invoice
+            {totalLoads} delivered, uninvoiced load{totalLoads !== 1 ? 's' : ''} from {customerCount} customer{customerCount !== 1 ? 's' : ''}. Totals include all uninvoiced loads.
           </p>
         </div>
         <div className="flex gap-3">
@@ -200,6 +201,9 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
 
       {/* Customer Groups Table */}
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+        <p className="px-4 py-3 text-xs text-slate-600 bg-blue-50 border-b border-blue-100">
+          Create Invoice preselects delivered loads from the last 45 days or the current/previous calendar month. Older loads remain available unchecked on the invoice form.
+        </p>
         <table className="w-full">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
@@ -1175,20 +1179,29 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
       backfillFactoringInFlight.add(inv.id);
       const feePct = inv.factoringFeePercent || 2.5;
       const fee = inv.factoringFee ?? (inv.amount * (feePct / 100));
-      addFactoringTransaction({
-        invoiceId: inv.id,
-        invoiceNumber: inv.invoiceNumber,
-        factoringCompanyId: inv.factoringCompanyId,
-        factoringCompanyName: inv.factoringCompanyName,
-        loadIds: inv.loadIds || (inv.loadId ? [inv.loadId] : []),
-        grossAmount: inv.amount,
-        feePercentage: feePct,
-        feeAmount: fee,
-        netFundedAmount: inv.netFundedAmount ?? (inv.amount - fee),
-        submittedDate: inv.factoredDate || inv.date,
-        fundingStatus: (inv.fundingStatus as FactoringFundingStatus) || 'submitted',
-        recourseStatus: 'none',
-      });
+      void (async () => {
+        try {
+          // addFactoringTransaction derives the deterministic ftx_<invoiceId> document ID.
+          await addFactoringTransaction({
+            invoiceId: inv.id,
+            invoiceNumber: inv.invoiceNumber,
+            factoringCompanyId: inv.factoringCompanyId,
+            factoringCompanyName: inv.factoringCompanyName,
+            loadIds: inv.loadIds || (inv.loadId ? [inv.loadId] : []),
+            grossAmount: inv.amount,
+            feePercentage: feePct,
+            feeAmount: fee,
+            netFundedAmount: inv.netFundedAmount ?? (inv.amount - fee),
+            submittedDate: inv.factoredDate || inv.date,
+            fundingStatus: (inv.fundingStatus as FactoringFundingStatus) || 'submitted',
+            recourseStatus: 'none',
+          });
+        } catch (error) {
+          console.error(`Failed to backfill factoring transaction for invoice ${inv.id}:`, error);
+        } finally {
+          backfillFactoringInFlight.delete(inv.id);
+        }
+      })();
     });
   }, [invoices, factoringTransactions, addFactoringTransaction]);
 
@@ -1218,23 +1231,29 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
       if (fundingStatusFilter && (invoice.fundingStatus || 'not_submitted') !== fundingStatusFilter) return false;
       if (customerFilter && (invoice.customerName || '') !== customerFilter) return false;
 
-      const invDate = parseDateOnlyLocal(invoice.date || invoice.createdAt || '');
+      const invDate = tryParseDateOnlyLocal(invoice.date || invoice.createdAt || '');
+      if (!invDate) return false;
       if (monthFilter) {
         const [y, m] = monthFilter.split('-').map(Number);
         if (invDate.getFullYear() !== y || invDate.getMonth() !== m - 1) return false;
       }
-      if (dateFrom && invDate < parseDateOnlyLocal(dateFrom)) return false;
+      const from = dateFrom ? tryParseDateOnlyLocal(dateFrom) : null;
+      if (dateFrom && (!from || invDate < from)) return false;
       if (dateTo) {
-        const to = parseDateOnlyLocal(dateTo);
+        const to = tryParseDateOnlyLocal(dateTo);
+        if (!to) return false;
         to.setHours(23, 59, 59, 999);
         if (invDate > to) return false;
       }
       if (dueFrom || dueTo) {
         if (!invoice.dueDate) return false;
-        const due = parseDateOnlyLocal(invoice.dueDate);
-        if (dueFrom && due < parseDateOnlyLocal(dueFrom)) return false;
+        const due = tryParseDateOnlyLocal(invoice.dueDate);
+        if (!due) return false;
+        const dueStart = dueFrom ? tryParseDateOnlyLocal(dueFrom) : null;
+        if (dueFrom && (!dueStart || due < dueStart)) return false;
         if (dueTo) {
-          const to = parseDateOnlyLocal(dueTo);
+          const to = tryParseDateOnlyLocal(dueTo);
+          if (!to) return false;
           to.setHours(23, 59, 59, 999);
           if (due > to) return false;
         }
@@ -1704,8 +1723,8 @@ const FactoredLoadsTab: React.FC = () => {
       : withTx;
 
     return filtered.sort((a, b) => {
-      const dateA = parseDateOnlyLocal(a.load.factoredDate || a.load.deliveryDate || '').getTime();
-      const dateB = parseDateOnlyLocal(b.load.factoredDate || b.load.deliveryDate || '').getTime();
+      const dateA = tryParseDateOnlyLocal(a.load.factoredDate || a.load.deliveryDate || '')?.getTime() ?? Number.NEGATIVE_INFINITY;
+      const dateB = tryParseDateOnlyLocal(b.load.factoredDate || b.load.deliveryDate || '')?.getTime() ?? Number.NEGATIVE_INFINITY;
       return dateB - dateA;
     });
   }, [loads, invoices, factoringCompanies, factoringTransactions, selectedCompanyId]);
@@ -1751,7 +1770,8 @@ const FactoredLoadsTab: React.FC = () => {
     factoredData.forEach(item => {
       const factoredDate = item.load.factoredDate || item.load.deliveryDate;
       if (!factoredDate) return;
-      const date = parseDateOnlyLocal(factoredDate);
+      const date = tryParseDateOnlyLocal(factoredDate);
+      if (!date) return;
       const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
       if (months[monthKey]) {
         months[monthKey].factored += getLoadFactoredAmount(item.load);

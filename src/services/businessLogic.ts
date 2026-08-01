@@ -11,7 +11,7 @@
  */
 
 import { Load, Driver, Settlement, Invoice, Expense, LoadStatus, PaymentType, Employee } from '../types';
-import { parseDateOnlyLocal } from '../utils/dateOnly';
+import { tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { calculateCompanyRevenue } from './utils';
 
 function coerceMoney(raw: unknown): number {
@@ -222,8 +222,7 @@ export function getLoadRevenue(load: Partial<Load>): number {
 export function getLoadBusinessDate(load: Partial<Load>): Date | null {
   const raw = load.deliveryDate || load.pickupDate;
   if (!raw) return null;
-  const d = parseDateOnlyLocal(String(raw));
-  return Number.isNaN(d.getTime()) ? null : d;
+  return tryParseDateOnlyLocal(String(raw));
 }
 
 /** Inclusive local calendar-month bounds. */
@@ -271,15 +270,23 @@ export function isCompanyRecognizedExpense(
 
   if (exp.driverId) {
     const driver = drivers.find(d => d.id === exp.driverId);
-    if (driver && driver.type === 'OwnerOperator') {
+    const isOwnerOperator =
+      driver?.employeeType === 'owner_operator' ||
+      String(driver?.type || '').replace(/[^a-z]/gi, '').toLowerCase() === 'owneroperator';
+    if (isOwnerOperator) {
       const expenseType = (exp.type || '').toLowerCase();
+      const category = (exp.category || '').toLowerCase();
       const description = (exp.description || '').toLowerCase();
       const isPassThrough =
         expenseType === 'fuel' ||
         expenseType === 'insurance' ||
         expenseType === 'toll' ||
         expenseType === 'maintenance' ||
-        description.includes('eld');
+        expenseType === 'repair' ||
+        category === 'repair' ||
+        category === 'maintenance' ||
+        description.includes('eld') ||
+        description.includes('repair');
       if (isPassThrough) return false;
     }
   }
@@ -335,8 +342,8 @@ export function calculatePeriodFinancials(input: {
     expenses
       .filter(exp => {
         if (!isCompanyRecognizedExpense(exp, drivers)) return false;
-        const expDate = parseDateOnlyLocal(String(exp.date || exp.createdAt || ''));
-        if (Number.isNaN(expDate.getTime())) return false;
+        const expDate = tryParseDateOnlyLocal(String(exp.date || exp.createdAt || ''));
+        if (!expDate) return false;
         return expDate >= periodStart && expDate <= periodEnd;
       })
       .reduce((sum, exp) => sum + coerceMoney(exp.amount), 0)

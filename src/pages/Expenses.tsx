@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2, X } from 'lucide-react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { useTMS } from '../context/TMSContext';
 import { useTenant } from '../context/TenantContext';
 import { Expense, Truck } from '../types';
@@ -123,6 +123,26 @@ const Expenses: React.FC = () => {
       driverName: selectedDriverId ? driverName : null,
       ...truckFields,
     };
+  };
+
+  const deleteFirebaseReceiptBestEffort = async (receipt?: string) => {
+    if (!receipt?.startsWith('http')) return;
+    try {
+      const url = new URL(receipt);
+      if (
+        !url.hostname.endsWith('firebasestorage.googleapis.com')
+        && !url.hostname.endsWith('firebasestorage.app')
+      ) {
+        return;
+      }
+      // Download URLs encode the object path after /o/
+      const encodedPath = url.pathname.split('/o/')[1];
+      if (!encodedPath) return;
+      const objectPath = decodeURIComponent(encodedPath);
+      await deleteObject(ref(storage, objectPath));
+    } catch (error) {
+      console.warn('Could not delete previous receipt from Firebase Storage:', error);
+    }
   };
 
   const resetForm = () => {
@@ -375,6 +395,7 @@ const Expenses: React.FC = () => {
                                 if (!confirm('Are you sure you want to delete this expense?')) return;
                                 try {
                                   await deleteExpense(expense.id);
+                                  await deleteFirebaseReceiptBestEffort(expense.receipt);
                                   setOpenMenuId(null);
                                 } catch (err) {
                                   alert(
@@ -439,10 +460,14 @@ const Expenses: React.FC = () => {
               const assignment = buildAssignmentFields();
               try {
                 if (isEditModalOpen && editingExpenseId) {
+                  const previousReceipt = expenses.find(expense => expense.id === editingExpenseId)?.receipt;
                   await updateExpense(editingExpenseId, {
                     ...normalized,
                     ...assignment,
                   });
+                  if (previousReceipt && previousReceipt !== normalized.receipt) {
+                    await deleteFirebaseReceiptBestEffort(previousReceipt);
+                  }
                   setIsEditModalOpen(false);
                   setEditingExpenseId(null);
                 } else {

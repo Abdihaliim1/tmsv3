@@ -11,7 +11,7 @@ import {
   calculateAccruedDispatcherCommission,
   resolveLoadFactoringFee,
 } from '../services/businessLogic';
-import { parseDateOnlyLocal } from '../utils/dateOnly';
+import { tryParseDateOnlyLocal } from '../utils/dateOnly';
 
 type ViewType = 'trucks' | 'trailers';
 
@@ -228,8 +228,12 @@ const Fleet: React.FC = () => {
       return;
     }
 
-    const startDate = parseDateOnlyLocal(profitDateFrom);
-    const endDate = parseDateOnlyLocal(profitDateTo);
+    const startDate = tryParseDateOnlyLocal(profitDateFrom);
+    const endDate = tryParseDateOnlyLocal(profitDateTo);
+    if (!startDate || !endDate) {
+      alert('Please enter valid start and end dates');
+      return;
+    }
     endDate.setHours(23, 59, 59, 999);
 
     if (startDate > endDate) {
@@ -255,8 +259,8 @@ const Fleet: React.FC = () => {
           l.truckId === truck.id ||
           (!!truckNumber && (l.truckNumber === truckNumber || l.truckNumber === truck.number));
         if (!matchesTruck) return false;
-        const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
-        if (Number.isNaN(d.getTime())) return false;
+        const d = tryParseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+        if (!d) return false;
         return d >= startDate && d <= endDate;
       });
       const truckExpenses = expenses.filter(e => {
@@ -266,8 +270,8 @@ const Fleet: React.FC = () => {
         }
         const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
         if (!Number.isFinite(amount) || amount <= 0) return false;
-        const d = parseDateOnlyLocal(String(e.date || e.createdAt || ''));
-        if (Number.isNaN(d.getTime())) return false;
+        const d = tryParseDateOnlyLocal(String(e.date || e.createdAt || ''));
+        if (!d) return false;
         return d >= startDate && d <= endDate;
       });
       const revenue = truckLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
@@ -774,7 +778,7 @@ const Fleet: React.FC = () => {
             setIsModalOpen(false);
             setEditingTruck(null);
           }}
-          onSave={(truckData) => {
+          onSave={async (truckData) => {
             if (editingTruck) {
               updateTruck(editingTruck.id, truckData);
               // Auto-create/update insurance expense if company pays
@@ -783,7 +787,7 @@ const Fleet: React.FC = () => {
               }
             } else {
               // For new trucks, addTruck now returns the truck ID
-              const newTruckId = addTruck(truckData);
+              const newTruckId = await addTruck(truckData);
               
               // Auto-create insurance expense if company pays
               if (truckData.insurancePaidBy === 'company' && truckData.monthlyInsuranceCost && truckData.monthlyInsuranceCost > 0) {

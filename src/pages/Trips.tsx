@@ -310,7 +310,7 @@ const CreateTruckModal: React.FC<CreateTruckModalProps> = ({ isOpen, onClose, on
     ownerType: 'owned' as TruckOwnership,
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.truckNumber) {
       alert('Unit Number is required');
@@ -318,7 +318,7 @@ const CreateTruckModal: React.FC<CreateTruckModalProps> = ({ isOpen, onClose, on
     }
 
     // Add the truck using TMSContext - returns the ID
-    const newTruckId = addTruck({
+    const newTruckId = await addTruck({
       truckNumber: formData.truckNumber,
       vin: formData.vin,
       make: formData.make,

@@ -438,6 +438,10 @@ export async function deleteLoadWithUnlink(params: {
       const filtered = sett.loadIds.filter(lid => lid !== loadId);
       updates.loadIds = filtered.length > 0 ? filtered : deleteField();
     }
+    if (sett.loads?.some(snapshot => snapshot.loadId === loadId)) {
+      const filtered = sett.loads.filter(snapshot => snapshot.loadId !== loadId);
+      updates.loads = filtered.length > 0 ? filtered : deleteField();
+    }
     batch.update(getDocRef(tenantId, 'settlements', sett.id), updates);
   }
   batch.delete(getDocRef(tenantId, 'loads', loadId));

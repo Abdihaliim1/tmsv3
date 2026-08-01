@@ -21,7 +21,7 @@ import {
   type SettlementLoadPay,
   type SettlementMoneyInputs,
 } from '../services/settlementMath';
-import { formatDateOnly, formatLocalDate, parseDateOnlyLocal } from '../utils/dateOnly';
+import { formatDateOnly, formatLocalDate, tryParseDateOnlyLocal } from '../utils/dateOnly';
 import {
   getISOWeekParts,
   getDateOfISOWeek,
@@ -97,8 +97,7 @@ function getLoadSettlementDate(load: {
 }): Date | null {
   const raw = load.deliveryDate || load.pickupDate || '';
   if (!raw) return null;
-  const d = parseDateOnlyLocal(String(raw).split('T')[0]);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return tryParseDateOnlyLocal(String(raw).split('T')[0]);
 }
 
 function formatSettlementLoadBadges(
@@ -116,9 +115,9 @@ function findLoadsOutsideSettlementPeriod(
   const startRaw = settlement.periodStart || (typeof settlement.period === 'object' ? settlement.period?.start : undefined);
   const endRaw = settlement.periodEnd || (typeof settlement.period === 'object' ? settlement.period?.end : undefined);
   if (!startRaw || !endRaw) return [];
-  const start = parseDateOnlyLocal(String(startRaw).split('T')[0]);
-  const end = parseDateOnlyLocal(String(endRaw).split('T')[0]);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+  const start = tryParseDateOnlyLocal(String(startRaw).split('T')[0]);
+  const end = tryParseDateOnlyLocal(String(endRaw).split('T')[0]);
+  if (!start || !end) return [];
 
   return settlementLoads.filter(load => {
     if ('isStub' in load && load.isStub) {
@@ -177,7 +176,7 @@ function isLoadSettledForType(
 }
 
 const Settlements: React.FC = () => {
-  const { settlements, drivers, loads, addSettlement, deleteSettlement, updateSettlement, employees } = useTMS();
+  const { settlements, drivers, loads, expenses, addSettlement, deleteSettlement, updateSettlement, employees } = useTMS();
   const { companyProfile } = useCompany();
   const { user } = useAuth();
   const { isPlatformAdmin } = useTenant();
@@ -269,9 +268,9 @@ const Settlements: React.FC = () => {
   const activePeriodBounds = useMemo(() => {
     if (periodMode === 'custom') {
       if (!customPeriodStart || !customPeriodEnd) return null;
-      const start = parseDateOnlyLocal(customPeriodStart);
-      const end = parseDateOnlyLocal(customPeriodEnd);
-      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null;
+      const start = tryParseDateOnlyLocal(customPeriodStart);
+      const end = tryParseDateOnlyLocal(customPeriodEnd);
+      if (!start || !end || start > end) return null;
       return { start, end };
     }
     if (!selectedWeek) return null;
@@ -497,9 +496,9 @@ const Settlements: React.FC = () => {
         return `${formatDateRange(dates[0], dates[dates.length - 1])} (from selected loads)`;
       }
       if (customPeriodStart && customPeriodEnd) {
-        const start = parseDateOnlyLocal(customPeriodStart);
-        const end = parseDateOnlyLocal(customPeriodEnd);
-        if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+        const start = tryParseDateOnlyLocal(customPeriodStart);
+        const end = tryParseDateOnlyLocal(customPeriodEnd);
+        if (start && end) {
           return formatDateRange(start, end);
         }
       }
@@ -524,17 +523,17 @@ const Settlements: React.FC = () => {
     const startRaw = s.periodStart || (typeof s.period === 'object' ? s.period?.start : undefined);
     const endRaw = s.periodEnd || (typeof s.period === 'object' ? s.period?.end : undefined);
     if (startRaw && endRaw) {
-      const start = new Date(startRaw);
-      const end = new Date(endRaw);
-      if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      const start = tryParseDateOnlyLocal(String(startRaw).split('T')[0]);
+      const end = tryParseDateOnlyLocal(String(endRaw).split('T')[0]);
+      if (start && end) {
         end.setHours(23, 59, 59, 999);
         return { start, end };
       }
     }
     const fallback = s.createdAt || s.date;
     if (!fallback) return null;
-    const d = new Date(fallback);
-    if (Number.isNaN(d.getTime())) return null;
+    const d = tryParseDateOnlyLocal(String(fallback).split('T')[0]);
+    if (!d) return null;
     return { start: d, end: d };
   };
 
@@ -932,6 +931,21 @@ const Settlements: React.FC = () => {
       other: payResult.deductions.other,
     };
 
+    // Link company-paid driver expenses in this settlement period so they are
+    // available to downstream reconciliation without silently changing the
+    // deductions the user entered above.
+    const expenseIds = settlementType === 'driver'
+      ? expenses
+          .filter(expense => {
+            if (expense.driverId !== selectedDriverId) return false;
+            if (expense.status !== 'pending' && expense.status !== 'approved') return false;
+            if (expense.paidBy !== 'company') return false;
+            const expenseDate = tryParseDateOnlyLocal(expense.date || expense.createdAt || '');
+            return !!expenseDate && expenseDate >= weekStart && expenseDate <= weekEnd;
+          })
+          .map(expense => expense.id)
+      : [];
+
     const otherEarnings: Settlement['otherEarnings'] = [];
     if (payResult.manualTonu > 0) {
       otherEarnings.push({ type: 'tonu', description: 'TONU (manual)', amount: payResult.manualTonu });
@@ -980,7 +994,7 @@ const Settlements: React.FC = () => {
       payRateSnapshot,
       loadIds: loadsToSettle,
       loads: settlementLoads,
-      expenseIds: [],
+      expenseIds,
       grossPay: payResult.grossPay,
       deductions,
       otherEarnings: otherEarnings.length > 0 ? otherEarnings : undefined,

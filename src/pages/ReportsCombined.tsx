@@ -20,7 +20,7 @@ import {
   calculatePeriodFinancials,
   resolveLoadFactoringFee,
 } from '../services/businessLogic';
-import { parseDateOnlyLocal, tryParseDateOnlyLocal } from '../utils/dateOnly';
+import { tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { sumStateMiles } from '../services/stateMiles';
 import { formatExpenseCategoryLabel, normalizeExpenseCategory } from '../services/expenseCategory';
 import { allocateSettlementToPeriod } from '../services/settlementPeriod';
@@ -1504,15 +1504,15 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
   const reportData = useMemo(() => {
     if (!reportGenerated) return null;
 
-    const periodStart = parseDateOnlyLocal(beginDate);
-    const periodEnd = parseDateOnlyLocal(endDate);
-    if (periodStart > periodEnd) return null;
+    const periodStart = tryParseDateOnlyLocal(beginDate);
+    const periodEnd = tryParseDateOnlyLocal(endDate);
+    if (!periodStart || !periodEnd || periodStart > periodEnd) return null;
     periodEnd.setHours(23, 59, 59, 999);
 
     // Filter loads by period (delivered through paid)
     const filteredLoads = loads.filter(load => {
-      const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
-      return isRevenueLoadStatus(load.status) && date >= periodStart && date <= periodEnd;
+      const date = tryParseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
+      return !!date && isRevenueLoadStatus(load.status) && date >= periodStart && date <= periodEnd;
     });
 
     // Calculate Income
@@ -1599,9 +1599,9 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
   };
 
   const handleGenerateReport = () => {
-    const start = parseDateOnlyLocal(beginDate);
-    const end = parseDateOnlyLocal(endDate);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    const start = tryParseDateOnlyLocal(beginDate);
+    const end = tryParseDateOnlyLocal(endDate);
+    if (!start || !end) {
       setDateError('Enter valid begin and end dates.');
       return;
     }

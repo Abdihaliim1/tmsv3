@@ -13,7 +13,7 @@ import {
   calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
 } from '../services/businessLogic';
-import { parseDateOnlyLocal, tryParseDateOnlyLocal } from '../utils/dateOnly';
+import { tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { allocateSettlementToPeriod } from '../services/settlementPeriod';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -66,9 +66,9 @@ const Reports: React.FC = () => {
         break;
       }
       case 'custom_range': {
-        if (customStart) start = parseDateOnlyLocal(customStart);
+        if (customStart) start = tryParseDateOnlyLocal(customStart) || new Date(NaN);
         if (customEnd) {
-          end = parseDateOnlyLocal(customEnd);
+          end = tryParseDateOnlyLocal(customEnd) || new Date(NaN);
           end.setHours(23, 59, 59, 999);
         }
         break;
@@ -401,20 +401,19 @@ const Reports: React.FC = () => {
     };
 
     // Customer analysis
-    const customerRevenue: Record<string, { revenue: number; loads: number }> = {};
+    const customerRevenue: Record<string, { name: string; revenue: number; loads: number }> = {};
     revenueLoads.forEach(load => {
-      const customerName = load.customerName;
-      if (customerName) {
-        if (!customerRevenue[customerName]) {
-          customerRevenue[customerName] = { revenue: 0, loads: 0 };
+      const customerName = load.customerName || load.brokerName || 'Unknown Customer';
+      const customerKey = load.customerId || customerName;
+      if (!customerRevenue[customerKey]) {
+          customerRevenue[customerKey] = { name: customerName, revenue: 0, loads: 0 };
         }
-        customerRevenue[customerName].revenue += load.grandTotal || load.rate || 0;
-        customerRevenue[customerName].loads += 1;
-      }
+      customerRevenue[customerKey].revenue += load.grandTotal || load.rate || 0;
+      customerRevenue[customerKey].loads += 1;
     });
 
     const topCustomers = Object.entries(customerRevenue)
-      .map(([name, data]) => ({ name, ...data }))
+      .map(([id, data]) => ({ id, ...data }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 

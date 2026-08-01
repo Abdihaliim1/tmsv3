@@ -21,6 +21,8 @@
  * @returns Date object at local midnight
  */
 export function parseDateOnlyLocal(dateStr: string): Date {
+  // Legacy display-oriented parser: callers needing a filter/validation result
+  // must use tryParseDateOnlyLocal so malformed data never becomes "today".
   if (!dateStr || typeof dateStr !== 'string') {
     return new Date(); // Fallback to now
   }
@@ -43,9 +45,13 @@ export function parseDateOnlyLocal(dateStr: string): Date {
 export function tryParseDateOnlyLocal(dateStr: string | null | undefined): Date | null {
   if (!dateStr || typeof dateStr !== 'string') return null;
   const cleanDate = dateStr.split('T')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) return null;
   const [y, m, d] = cleanDate.split('-').map(Number);
   if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
-  return new Date(y, m - 1, d, 0, 0, 0, 0);
+  const parsed = new Date(y, m - 1, d, 0, 0, 0, 0);
+  return parsed.getFullYear() === y && parsed.getMonth() === m - 1 && parsed.getDate() === d
+    ? parsed
+    : null;
 }
 
 /**

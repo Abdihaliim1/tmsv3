@@ -102,13 +102,13 @@ interface TMSContextType {
   updateLoad: (id: string, load: Partial<Load>, reason?: string) => Promise<void>;
   updateLoadStatus: (id: string, newStatus: LoadStatus, statusChangeInfo: StatusChangeInfo) => Promise<void>;
   deleteLoad: (id: string, force?: boolean) => Promise<void>;
-  addEmployee: (employee: NewEmployeeInput) => Promise<void> | void;
+  addEmployee: (employee: NewEmployeeInput) => Promise<void>;
   updateEmployee: (id: string, employee: Partial<Employee>) => void;
   deleteEmployee: (id: string) => void;
   addDriver: (driver: NewDriverInput) => void; // Legacy: creates employee with type=driver
   updateDriver: (id: string, driver: Partial<Driver>) => void; // Legacy
   deleteDriver: (id: string) => void; // Legacy
-  addTruck: (truck: NewTruckInput) => string; // Returns truck ID
+  addTruck: (truck: NewTruckInput) => Promise<string>; // Returns truck ID
   updateTruck: (id: string, truck: Partial<Truck>) => void;
   deleteTruck: (id: string) => void;
   addTrailer: (trailer: NewTrailerInput) => string; // Returns trailer ID
@@ -142,10 +142,10 @@ interface TMSContextType {
   addFactoringCompany: (company: NewFactoringCompanyInput) => void;
   updateFactoringCompany: (id: string, company: Partial<FactoringCompany>) => void;
   deleteFactoringCompany: (id: string) => void;
-  addFactoringTransaction: (tx: NewFactoringTransactionInput) => string;
-  updateFactoringTransaction: (id: string, tx: Partial<FactoringTransaction>) => void;
+  addFactoringTransaction: (tx: NewFactoringTransactionInput) => Promise<string>;
+  updateFactoringTransaction: (id: string, tx: Partial<FactoringTransaction>) => Promise<void>;
   deleteFactoringTransaction: (id: string) => void;
-  addBroker: (broker: NewBrokerInput) => void;
+  addBroker: (broker: NewBrokerInput) => Promise<void>;
   updateBroker: (id: string, broker: Partial<Broker>) => void;
   deleteBroker: (id: string) => void;
   addCustomer: (customer: NewCustomerInput) => void;
@@ -220,7 +220,7 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addDriver: () => { },
         updateDriver: () => { },
         deleteDriver: () => { },
-        addTruck: () => '',
+        addTruck: async () => '',
         updateTruck: () => { },
         deleteTruck: () => { },
         addTrailer: () => '',
@@ -244,10 +244,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },
-        addFactoringTransaction: () => '',
-        updateFactoringTransaction: () => { },
+        addFactoringTransaction: async () => '',
+        updateFactoringTransaction: async () => { },
         deleteFactoringTransaction: () => { },
-        addBroker: () => { },
+        addBroker: async () => { },
         updateBroker: () => { },
         deleteBroker: () => { },
         addCustomer: () => { },
@@ -1281,7 +1281,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       inv.loadId === id || inv.loadIds?.includes(id)
     );
     const linkedSettlements = settlements.filter(sett =>
-      sett.loadId === id || sett.loadIds?.includes(id)
+      sett.loadId === id ||
+      sett.loadIds?.includes(id) ||
+      sett.loads?.some(snapshot => snapshot.loadId === id)
     );
 
     // If linked entities exist, ask for confirmation
@@ -1319,13 +1321,18 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     // Optimistic update - unlink from settlements
     setSettlements(prev => prev.map(sett => {
-      if (sett.loadId === id) {
-        const updated = { ...sett };
+      if (
+        sett.loadId === id ||
+        sett.loadIds?.includes(id) ||
+        sett.loads?.some(snapshot => snapshot.loadId === id)
+      ) {
+        const updated = {
+          ...sett,
+          loadIds: sett.loadIds?.filter(lid => lid !== id),
+          loads: sett.loads?.filter(snapshot => snapshot.loadId !== id),
+        };
         delete updated.loadId;
         return updated;
-      }
-      if (sett.loadIds?.includes(id)) {
-        return { ...sett, loadIds: sett.loadIds.filter(lid => lid !== id) };
       }
       return sett;
     }));
@@ -1377,7 +1384,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   // Employee functions
-  const addEmployee = (input: NewEmployeeInput) => {
+  const addEmployee = async (input: NewEmployeeInput): Promise<void> => {
     const newEmployee: Employee = {
       ...input,
       id: generateShortId(),
@@ -1388,8 +1395,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       driverNumber: input.driverNumber || input.employeeNumber, // Legacy compatibility
       createdAt: new Date().toISOString(),
     };
+    const previous = employees;
     setEmployees(prev => [...prev, newEmployee]);
-    saveEmployee(tenantId || 'default', newEmployee).catch(e => console.error('Failed to save employee:', e));
+    try {
+      await saveEmployee(tenantId || 'default', newEmployee);
+    } catch (e) {
+      setEmployees(previous);
+      console.error('Failed to save employee:', e);
+      throw e instanceof Error ? e : new Error('Failed to save employee');
+    }
     // Sync appRole → Auth user when email matches
     if (newEmployee.email && newEmployee.appRole) {
       syncEmployeeAppRoleToUser({
@@ -1507,7 +1521,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     deleteEmployee(id);
   };
 
-  const addTruck = (input: NewTruckInput): string => {
+  const addTruck = async (input: NewTruckInput): Promise<string> => {
     const number = (input.number || input.truckNumber || '').trim();
     const newTruck: Truck = {
       ...input,
@@ -1516,8 +1530,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       id: generateShortId(),
       createdAt: new Date().toISOString(),
     };
-    setTrucks([...trucks, newTruck]);
-    saveTruck(tenantId || 'default', newTruck).catch(e => console.error('Failed to save truck:', e));
+    const previous = trucks;
+    setTrucks(prev => [...prev, newTruck]);
+    try {
+      await saveTruck(tenantId || 'default', newTruck);
+    } catch (e) {
+      setTrucks(previous);
+      console.error('Failed to save truck:', e);
+      throw e instanceof Error ? e : new Error('Failed to save truck');
+    }
     return newTruck.id; // Return the ID so it can be used immediately
   };
 
@@ -1747,7 +1768,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       const gross = amount;
       const feeAmount = input.factoringFee ?? (gross * (feePct / 100));
       const netFunded = input.netFundedAmount ?? (gross - feeAmount);
-      const txId = generateShortId();
+      const txId = `ftx_${invoiceId}`;
       const today = new Date().toISOString().split('T')[0];
       pendingFactoringTx = {
         id: txId,
@@ -1846,10 +1867,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
 
     if (pendingFactoringTx) {
+      const previousFactoringTransactions = factoringTransactions;
       setFactoringTransactions(prev => [pendingFactoringTx!, ...prev]);
-      saveFactoringTransaction(tenantId || 'default', pendingFactoringTx).catch(e =>
-        console.error('Failed to save factoring transaction:', e)
-      );
+      try {
+        await saveFactoringTransaction(tenantId || 'default', pendingFactoringTx);
+      } catch (e) {
+        setFactoringTransactions(previousFactoringTransactions);
+        console.error('Failed to save factoring transaction after invoice commit:', e);
+        throw e instanceof Error ? e : new Error('Failed to save factoring transaction');
+      }
     }
 
     setInvoices(prev => [newInvoice, ...prev]);
@@ -2503,24 +2529,46 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     firestoreDeleteFactoringCompany(tenantId || 'default', id).catch(e => console.error('Failed to delete factoring company:', e));
   };
 
-  const addFactoringTransaction = (input: NewFactoringTransactionInput): string => {
-    const id = generateShortId();
+  const addFactoringTransaction = async (
+    input: NewFactoringTransactionInput
+  ): Promise<string> => {
+    const id = input.invoiceId ? `ftx_${input.invoiceId}` : generateShortId();
     const tx: FactoringTransaction = {
       ...input,
       id,
       createdAt: new Date().toISOString(),
     };
-    setFactoringTransactions(prev => [tx, ...prev]);
-    saveFactoringTransaction(tenantId || 'default', tx).catch(e => console.error('Failed to save factoring transaction:', e));
+    const previous = factoringTransactions;
+    setFactoringTransactions(prev => [
+      tx,
+      ...prev.filter(existing => existing.id !== id),
+    ]);
+    try {
+      await saveFactoringTransaction(tenantId || 'default', tx);
+    } catch (e) {
+      setFactoringTransactions(previous);
+      console.error('Failed to save factoring transaction:', e);
+      throw e instanceof Error ? e : new Error('Failed to save factoring transaction');
+    }
     return id;
   };
 
-  const updateFactoringTransaction = (id: string, updates: Partial<FactoringTransaction>) => {
+  const updateFactoringTransaction = async (
+    id: string,
+    updates: Partial<FactoringTransaction>
+  ): Promise<void> => {
     const existing = factoringTransactions.find(t => t.id === id);
     if (!existing) return;
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    const previous = factoringTransactions;
     setFactoringTransactions(prev => prev.map(t => t.id === id ? updated : t));
-    saveFactoringTransaction(tenantId || 'default', updated).catch(e => console.error('Failed to save factoring transaction:', e));
+    try {
+      await saveFactoringTransaction(tenantId || 'default', updated);
+    } catch (e) {
+      setFactoringTransactions(previous);
+      console.error('Failed to save factoring transaction:', e);
+      throw e instanceof Error ? e : new Error('Failed to save factoring transaction');
+    }
 
     // Keep linked invoice funding fields in sync
     if (updated.invoiceId) {
@@ -2611,7 +2659,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   }, [tenantId, trucks, expenses, employees]);
 
   // Broker functions
-  const addBroker = (input: NewBrokerInput) => {
+  const addBroker = async (input: NewBrokerInput): Promise<void> => {
     const searchKey = generateSearchKey(input.name, input.aliases || []);
     const prefixes = generatePrefixes(searchKey);
 
@@ -2622,8 +2670,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       prefixes,
       createdAt: new Date().toISOString(),
     };
+    const previous = brokers;
     setBrokers(prev => [newBroker, ...prev]);
-    saveBroker(tenantId || 'default', newBroker).catch(e => console.error('Failed to save broker:', e));
+    try {
+      await saveBroker(tenantId || 'default', newBroker);
+    } catch (e) {
+      setBrokers(previous);
+      console.error('Failed to save broker:', e);
+      throw e instanceof Error ? e : new Error('Failed to save broker');
+    }
   };
 
   const updateBroker = (id: string, updates: Partial<Broker>) => {
@@ -2756,6 +2811,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addPlannedLoad = (input: NewPlannedLoadInput): string => {
+    const dateOrderError = assertDeliveryOnOrAfterPickup(
+      input.pickups?.[0]?.pickupDate,
+      input.deliveries?.[input.deliveries.length - 1]?.deliveryDate
+    );
+    if (dateOrderError) throw new Error(dateOrderError);
+
     const now = new Date().toISOString();
     const id = generateShortId();
     const systemLoadNumber = input.systemLoadNumber || generatePlannedLoadNumber();
@@ -2779,6 +2840,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const updatePlannedLoad = (id: string, updates: Partial<PlannedLoad>) => {
+    const existingPlannedLoad = plannedLoads.find(pl => pl.id === id);
+    if (!existingPlannedLoad) return;
+    const mergedPlannedLoad = { ...existingPlannedLoad, ...updates };
+    const dateOrderError = assertDeliveryOnOrAfterPickup(
+      mergedPlannedLoad.pickups?.[0]?.pickupDate,
+      mergedPlannedLoad.deliveries?.[mergedPlannedLoad.deliveries.length - 1]?.deliveryDate
+    );
+    if (dateOrderError) throw new Error(dateOrderError);
+
     let updatedPlannedLoad: PlannedLoad | null = null;
 
     setPlannedLoads(prev => prev.map(pl => {
@@ -2837,6 +2907,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addTrip = (input: NewTripInput): string => {
+    const dateOrderError = assertDeliveryOnOrAfterPickup(input.pickupDate, input.deliveryDate);
+    if (dateOrderError) throw new Error(dateOrderError);
+
     const now = new Date().toISOString();
     const id = generateShortId();
     const tripNumber = input.tripNumber || generateTripNumber();
@@ -2868,6 +2941,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const updateTrip = async (id: string, updates: Partial<Trip>) => {
+    const existingTrip = trips.find(trip => trip.id === id);
+    if (!existingTrip) return;
+    const dateOrderError = assertDeliveryOnOrAfterPickup(
+      updates.pickupDate ?? existingTrip.pickupDate,
+      updates.deliveryDate ?? existingTrip.deliveryDate
+    );
+    if (dateOrderError) throw new Error(dateOrderError);
+
     let updatedTrip: Trip | null = null;
     const lockedStatuses = new Set([
       LoadStatus.Delivered,
@@ -3150,6 +3231,13 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           `Rate Confirmation required before dispatching ${pl.systemLoadNumber}. Attach Rate Con on the planned load, wait for “Rate Con Attached”, then try again.`
         );
       }
+      const dateOrderError = assertDeliveryOnOrAfterPickup(
+        pl.pickups?.[0]?.pickupDate || tripData.pickupDate,
+        pl.deliveries?.[pl.deliveries.length - 1]?.deliveryDate || tripData.deliveryDate
+      );
+      if (dateOrderError) {
+        throw new Error(`${dateOrderError} for planned load ${pl.systemLoadNumber}`);
+      }
       // Keep memory in sync so subsequent UI checks pass
       if (plRec.rateConUrl || plRec.rateConfirmationUrl || plRec.customer?.rateConAttached) {
         setPlannedLoads(prev =>
@@ -3189,10 +3277,24 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const tid = tenantId || 'default';
     const now = new Date().toISOString();
     const originalPlannedSnapshots = loadsToDispatch.map(pl => ({ ...pl }));
+    // A unique claim is durable across browser sessions, unlike the in-memory guard.
+    // Generate the trip id now so a retry cannot take ownership of a prior dispatch.
+    const dispatchClaimEntityId = existingTripId || generateShortId();
+    const claimedPlannedDispatches: PlannedLoad[] = [];
     let newTrip: Trip | null = null;
     let createdLoadIds: string[] = [];
 
     try {
+      for (const plannedLoad of loadsToDispatch) {
+        await claimUniqueKey({
+          tenantId: tid,
+          kind: 'plannedDispatch',
+          value: plannedLoad.id,
+          entityId: dispatchClaimEntityId,
+        });
+        claimedPlannedDispatches.push(plannedLoad);
+      }
+
       let tripId = existingTripId;
       let tripNumber = '';
 
@@ -3201,7 +3303,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         if (!existing) throw new Error('Trip not found');
         tripNumber = existing.tripNumber;
       } else {
-        tripId = generateShortId();
+        tripId = dispatchClaimEntityId;
         tripNumber = tripData.tripNumber || generateTripNumber();
         const today = new Date().toISOString().split('T')[0];
         let status: TripStatus = 'future';
@@ -3441,6 +3543,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         ...originalPlannedSnapshots.map(pl => savePlannedLoad(tid, pl).catch(() => {})),
         ...(newTrip ? [firestoreDeleteTrip(tid, newTrip.id).catch(() => {})] : []),
         ...createdLoadIds.map(id => firestoreDeleteLoad(tid, id).catch(() => {})),
+        ...claimedPlannedDispatches.map(pl =>
+          releaseUniqueKey({
+            tenantId: tid,
+            kind: 'plannedDispatch',
+            value: pl.id,
+            entityId: dispatchClaimEntityId,
+          }).catch(() => {})
+        ),
       ]);
       errorHandler.handle(
         error,
@@ -3741,7 +3851,7 @@ export const useTMS = () => {
         addDriver: () => { },
         updateDriver: () => { },
         deleteDriver: () => { },
-        addTruck: () => '',
+        addTruck: async () => '',
         updateTruck: () => { },
         deleteTruck: () => { },
         addTrailer: () => '',
@@ -3765,10 +3875,10 @@ export const useTMS = () => {
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
         deleteFactoringCompany: () => { },
-        addFactoringTransaction: () => '',
-        updateFactoringTransaction: () => { },
+        addFactoringTransaction: async () => '',
+        updateFactoringTransaction: async () => { },
         deleteFactoringTransaction: () => { },
-        addBroker: () => { },
+        addBroker: async () => { },
         updateBroker: () => { },
         deleteBroker: () => { },
         addCustomer: () => { },

@@ -596,18 +596,12 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
 
   // POD + BOL are required before invoicing (hard block)
   const documents = load.documents || [];
-  const hasPOD =
-    !!load.podNumber ||
-    documents.some(d => {
-      const t = String(d.type || '').toLowerCase();
-      return t === 'pod' || t.includes('proof');
-    });
-  const hasBOL =
-    !!load.bolNumber ||
-    documents.some(d => {
-      const t = String(d.type || '').toLowerCase();
-      return t === 'bol' || t.includes('bill of lading');
-    });
+  // Reference numbers describe paperwork; they do not prove a file was uploaded.
+  const hasPOD = documents.some(d => {
+    const type = String(d.type || '').toLowerCase();
+    return type === 'pod' || type === 'proof_of_delivery' || type.includes('proof');
+  });
+  const hasBOL = documents.some(d => String(d.type || '').toLowerCase() === 'bol');
 
   const missing: string[] = [];
   if (!hasPOD) missing.push('POD');
@@ -615,7 +609,7 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
   if (missing.length > 0) {
     return {
       canInvoice: false,
-      reason: `Missing required paperwork: ${missing.join(' + ')}`,
+      reason: `Missing uploaded required document${missing.length > 1 ? 's' : ''}: ${missing.join(' + ')}`,
     };
   }
 
