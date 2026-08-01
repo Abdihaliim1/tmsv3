@@ -409,7 +409,7 @@ const Reports: React.FC = () => {
       }
     });
     // Overlay settlement net/deductions for the period
-    periodSettlements.forEach(settlement => {
+    filteredSettlements.forEach(settlement => {
       if (!settlement.driverId || !driverReports[settlement.driverId]) return;
       driverReports[settlement.driverId].deductions += settlement.totalDeductions || 0;
       driverReports[settlement.driverId].netPay += settlement.netPay || 0;
@@ -422,7 +422,7 @@ const Reports: React.FC = () => {
 
     const accruedDispatcher = calculateAccruedDispatcherCommission(
       revenueLoads,
-      settlements,
+      filteredSettlements,
       employees
     );
 
