@@ -65,6 +65,33 @@ const formatDate = (dateString: string | undefined) => {
   return formatDateOnly(dateString, { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+/** Loads delivered in the last 45 days or in the current/previous calendar month. */
+const isRecentDeliveredLoad = (load: Load): boolean => {
+  const deliveredDate = load.deliveryDate || load.updatedAt;
+  if (!deliveredDate) return false;
+  const date = parseDateOnlyLocal(deliveredDate);
+  const now = new Date();
+
+  const fortyFiveDaysAgo = new Date(now);
+  fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
+  if (date >= fortyFiveDaysAgo) return true;
+
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+  const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+  const loadMonth = date.getMonth();
+  const loadYear = date.getFullYear();
+
+  return (
+    (loadYear === currentYear && loadMonth === currentMonth)
+    || (loadYear === prevYear && loadMonth === prevMonth)
+  );
+};
+
+/** Prevent duplicate backfill factoring TX creation across effect re-runs. */
+const backfillFactoringInFlight = new Set<string>();
+
 // ============================================================================
 // Loads Not Invoiced View
 // ============================================================================
@@ -216,7 +243,12 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
                       </td>
                       <td className="py-4 px-4 text-right">
                         <button
-                          onClick={() => onCreateInvoice(customerName, customerLoads.map(l => l.id))}
+                          onClick={() => {
+                            const recentIds = customerLoads
+                              .filter(isRecentDeliveredLoad)
+                              .map(l => l.id);
+                            onCreateInvoice(customerName, recentIds);
+                          }}
                           className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium flex items-center gap-2 ml-auto"
                         >
                           <Plus size={16} />
@@ -1138,8 +1170,9 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
   useEffect(() => {
     invoices.forEach(inv => {
       if (!inv.isFactored) return;
-      const existing = factoringTransactions.find(t => t.invoiceId === inv.id);
-      if (existing) return;
+      if (factoringTransactions.some(t => t.invoiceId === inv.id)) return;
+      if (backfillFactoringInFlight.has(inv.id)) return;
+      backfillFactoringInFlight.add(inv.id);
       const feePct = inv.factoringFeePercent || 2.5;
       const fee = inv.factoringFee ?? (inv.amount * (feePct / 100));
       addFactoringTransaction({
@@ -1157,8 +1190,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
         recourseStatus: 'none',
       });
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoices.length, factoringTransactions.length]);
+  }, [invoices, factoringTransactions, addFactoringTransaction]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1632,6 +1664,7 @@ const FactoredLoadsTab: React.FC = () => {
     factoringTransactions,
     updateInvoice,
     updateLoad,
+    updateFactoringTransaction,
     markLoadsFunded,
   } = useTMS();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
@@ -1751,6 +1784,14 @@ const FactoredLoadsTab: React.FC = () => {
       paymentReference: derived.paymentReference,
       netFundedAmount: derived.paidAmount,
     });
+    const tx = factoringTransactions.find(t => t.invoiceId === invoiceId);
+    if (tx) {
+      updateFactoringTransaction(tx.id, {
+        fundingStatus: derived.fundingStatus as FactoringFundingStatus,
+        fundedDate: derived.factorFundedDate,
+        netFundedAmount: derived.paidAmount,
+      });
+    }
   };
 
   const handleMarkLoadFunded = async (loadId: string) => {

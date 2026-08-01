@@ -37,8 +37,8 @@ import {
   loadLoads, loadInvoices, loadSettlements, loadEmployees, loadTrucks, loadTrailers,
   loadExpenses, loadFactoringCompanies, loadFactoringTransactions, loadBrokers, loadCustomers, loadPlannedLoads, loadTrips,
   saveLoad, saveInvoice, saveSettlement, saveEmployee, saveTruck, saveTrailer,
-  saveExpense, saveFactoringCompany, saveFactoringTransaction, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
-  deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
+  saveExpense, clearExpenseFields, saveFactoringCompany, saveFactoringTransaction, saveBroker, saveCustomer, savePlannedLoad, saveTrip,
+  deleteLoadWithUnlink, deleteLoad as firestoreDeleteLoad, deleteInvoice as firestoreDeleteInvoice,
   deleteSettlement as firestoreDeleteSettlement, deleteEmployee as firestoreDeleteEmployee,
   commitParentWithLinkedLoads, deleteSettlementWithUnlink, deleteInvoiceWithUnlink,
   clearLoadSettlementLinks,
@@ -62,6 +62,7 @@ import { appendEmployeeHistory } from '../services/employeeHistory';
 import { claimUniqueKey, releaseUniqueKey } from '../services/uniqueKeyService';
 import { allocateStateMiles } from '../services/stateMiles';
 import { syncEmployeeAppRoleToUser } from '../services/userRoleSync';
+import { assertDeliveryOnOrAfterPickup } from '../utils/dateOnly';
 
 /** In-flight guards against double-click / concurrent creates (client-side). */
 const inFlightInvoiceKeys = new Set<string>();
@@ -97,11 +98,11 @@ interface TMSContextType {
   trips: Trip[]; // Dispatched trips
   tasks: Task[]; // Workflow tasks
   kpis: KPIMetrics;
-  addLoad: (load: NewLoadInput) => void;
-  updateLoad: (id: string, load: Partial<Load>, reason?: string) => void;
+  addLoad: (load: NewLoadInput) => Promise<void>;
+  updateLoad: (id: string, load: Partial<Load>, reason?: string) => Promise<void>;
   updateLoadStatus: (id: string, newStatus: LoadStatus, statusChangeInfo: StatusChangeInfo) => Promise<void>;
-  deleteLoad: (id: string, force?: boolean) => void;
-  addEmployee: (employee: NewEmployeeInput) => void;
+  deleteLoad: (id: string, force?: boolean) => Promise<void>;
+  addEmployee: (employee: NewEmployeeInput) => Promise<void> | void;
   updateEmployee: (id: string, employee: Partial<Employee>) => void;
   deleteEmployee: (id: string) => void;
   addDriver: (driver: NewDriverInput) => void; // Legacy: creates employee with type=driver
@@ -130,8 +131,13 @@ interface TMSContextType {
   ) => Promise<string>;
   updateSettlement: (id: string, settlement: Partial<Settlement>) => void;
   deleteSettlement: (id: string, force?: boolean) => void;
-  addExpense: (expense: NewExpenseInput) => void;
-  updateExpense: (id: string, expense: Partial<Expense>) => void;
+  addExpense: (expense: NewExpenseInput) => Promise<void>;
+  updateExpense: (id: string, expense: Partial<Expense> & {
+    driverId?: string | null;
+    driverName?: string | null;
+    truckId?: string | null;
+    truckNumber?: string | null;
+  }) => Promise<void>;
   deleteExpense: (id: string) => Promise<void>;
   addFactoringCompany: (company: NewFactoringCompanyInput) => void;
   updateFactoringCompany: (id: string, company: Partial<FactoringCompany>) => void;
@@ -204,11 +210,11 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
           activeLoads: 0,
           activeDrivers: 0,
         },
-        addLoad: () => { },
-        updateLoad: () => { },
+        addLoad: async () => { },
+        updateLoad: async () => { },
         updateLoadStatus: async () => { },
-        deleteLoad: () => { },
-        addEmployee: () => { },
+        deleteLoad: async () => { },
+        addEmployee: async () => { },
         updateEmployee: () => { },
         deleteEmployee: () => { },
         addDriver: () => { },
@@ -232,8 +238,8 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },
-        addExpense: () => { },
-        updateExpense: () => { },
+        addExpense: async () => { },
+        updateExpense: async () => { },
         deleteExpense: async () => { },
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },
@@ -558,6 +564,14 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       : null;
     const withCommission = withDispatcherCommission(sanitizedInput, dispatcher);
 
+    const dateOrderError = assertDeliveryOnOrAfterPickup(
+      sanitizedInput.pickupDate,
+      sanitizedInput.deliveryDate
+    );
+    if (dateOrderError) {
+      throw new Error(dateOrderError);
+    }
+
     // Lifecycle: create may only start in early operational statuses.
     // Delivered/Invoiced/Paid/Completed require docs + transitions after create.
     const allowedCreateStatuses = new Set<LoadStatus>([
@@ -704,6 +718,13 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       return Promise.reject(
         new Error(`Load number "${sanitizedUpdates.loadNumber}" already exists. Use a unique load number.`)
       );
+    }
+
+    const mergedPickup = sanitizedUpdates.pickupDate ?? oldLoad.pickupDate;
+    const mergedDelivery = sanitizedUpdates.deliveryDate ?? oldLoad.deliveryDate;
+    const dateOrderError = assertDeliveryOnOrAfterPickup(mergedPickup, mergedDelivery);
+    if (dateOrderError) {
+      return Promise.reject(new Error(dateOrderError));
     }
 
     if (
@@ -1313,8 +1334,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     setLoads(prev => prev.filter(l => l.id !== id));
 
     try {
-      // Delete from Firestore and release uniqueness claim
-      await firestoreDeleteLoad(tenantId || 'default', id);
+      await deleteLoadWithUnlink({
+        tenantId: tenantId || 'default',
+        loadId: id,
+        invoices: linkedInvoices,
+        settlements: linkedSettlements,
+      });
       if (load.loadNumber) {
         await releaseUniqueKey({
           tenantId: tenantId || 'default',
@@ -1684,8 +1709,26 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       }
     }
 
-    const invoiceId = generateShortId();
     const invoiceLoadIds = input.loadIds || (input.loadId ? [input.loadId] : []);
+    let amount = input.amount || 0;
+    if (invoiceLoadIds.length > 0) {
+      amount = invoiceLoadIds.reduce((sum, id) => {
+        const load = loads.find(l => l.id === id);
+        return sum + (load?.grandTotal || load?.rate || 0);
+      }, 0);
+      input = { ...input, amount };
+      if (input.isFactored) {
+        const feePct = input.factoringFeePercent || 2.5;
+        const feeAmount = amount * (feePct / 100);
+        input = {
+          ...input,
+          factoringFee: feeAmount,
+          netFundedAmount: amount - feeAmount,
+        };
+      }
+    }
+
+    const invoiceId = generateShortId();
     const invoiceNumber = input.invoiceNumber || generateUniqueInvoiceNumber(tenantId, invoices);
 
     // Transactional uniqueness claim (cross-tab / concurrent create)
@@ -1697,15 +1740,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     });
 
     let factoringExtras: Partial<Invoice> = {};
+    let pendingFactoringTx: FactoringTransaction | null = null;
 
     if (input.isFactored) {
       const feePct = input.factoringFeePercent || 2.5;
-      const gross = input.amount || 0;
+      const gross = amount;
       const feeAmount = input.factoringFee ?? (gross * (feePct / 100));
       const netFunded = input.netFundedAmount ?? (gross - feeAmount);
       const txId = generateShortId();
       const today = new Date().toISOString().split('T')[0];
-      const tx: FactoringTransaction = {
+      pendingFactoringTx = {
         id: txId,
         invoiceId,
         invoiceNumber: input.invoiceNumber,
@@ -1721,8 +1765,6 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         recourseStatus: 'none',
         createdAt: new Date().toISOString(),
       };
-      setFactoringTransactions(prev => [tx, ...prev]);
-      saveFactoringTransaction(tenantId || 'default', tx).catch(e => console.error('Failed to save factoring transaction:', e));
       factoringExtras = {
         factoringFeePercent: feePct,
         factoringFee: feeAmount,
@@ -1736,6 +1778,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const newInvoice: Invoice = {
       ...input,
       ...factoringExtras,
+      amount,
       id: invoiceId,
       invoiceNumber,
       createdAt: new Date().toISOString(),
@@ -1800,6 +1843,13 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         entityId: invoiceId,
       }).catch(() => {});
       throw e;
+    }
+
+    if (pendingFactoringTx) {
+      setFactoringTransactions(prev => [pendingFactoringTx!, ...prev]);
+      saveFactoringTransaction(tenantId || 'default', pendingFactoringTx).catch(e =>
+        console.error('Failed to save factoring transaction:', e)
+      );
     }
 
     setInvoices(prev => [newInvoice, ...prev]);
@@ -2053,14 +2103,22 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       };
     });
 
+    const factoringTxIds = factoringTransactions
+      .filter(t => t.invoiceId === id)
+      .map(t => t.id);
+
     void deleteInvoiceWithUnlink({
       tenantId: tid,
       invoiceId: id,
       loadIds: linkedIds,
       restoredStatusByLoadId,
+      factoringTransactionIds: factoringTxIds,
     }).catch(e => {
       console.error('Failed atomic invoice delete; falling back', e);
       firestoreDeleteInvoice(tid, id).catch(() => {});
+      factoringTxIds.forEach(txId => {
+        firestoreDeleteFactoringTransaction(tid, txId).catch(() => {});
+      });
       linkedIds.forEach(loadId => {
         clearLoadInvoiceLinks(tid, loadId, restoredStatusByLoadId[loadId]).catch(() => {});
       });
@@ -2068,6 +2126,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     setLoads(nextLoads);
     setInvoices(prev => prev.filter(inv => inv.id !== id));
+    if (factoringTxIds.length > 0) {
+      setFactoringTransactions(prev => prev.filter(t => t.invoiceId !== id));
+    }
     if (invoice.invoiceNumber) {
       releaseUniqueKey({
         tenantId: tid,
@@ -2269,24 +2330,87 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
   };
 
-  const addExpense = (input: NewExpenseInput) => {
+  const addExpense = async (input: NewExpenseInput): Promise<void> => {
     const newExpense: Expense = {
       ...input,
+      type: (input.type || 'other') as Expense['type'],
+      status: (input.status || 'pending') as Expense['status'],
+      category: input.category || input.type || 'other',
+      description: input.description || '',
+      amount: Number(input.amount) || 0,
+      date: input.date || new Date().toISOString().slice(0, 10),
       id: generateShortId(),
-      category: input.category || input.type,
       createdAt: new Date().toISOString(),
     };
+
+    for (const key of ['driverId', 'driverName', 'truckId', 'truckNumber'] as const) {
+      const record = newExpense as unknown as Record<string, unknown>;
+      if (record[key] == null) {
+        delete record[key];
+      }
+    }
+
+    const previous = expenses;
     setExpenses(prev => [newExpense, ...prev]);
-    saveExpense(tenantId || 'default', newExpense).catch(e => console.error('Failed to save expense:', e));
+    try {
+      await saveExpense(tenantId || 'default', newExpense);
+    } catch (e) {
+      setExpenses(previous);
+      console.error('Failed to save expense:', e);
+      throw e instanceof Error ? e : new Error('Failed to save expense');
+    }
   };
 
-  const updateExpense = (id: string, updates: Partial<Expense>) => {
+  const updateExpense = async (
+    id: string,
+    updates: Partial<Expense> & {
+      driverId?: string | null;
+      driverName?: string | null;
+      truckId?: string | null;
+      truckNumber?: string | null;
+    }
+  ): Promise<void> => {
     const expense = expenses.find(e => e.id === id);
-    const updatedExpense = expense ? { ...expense, ...updates, updatedAt: new Date().toISOString() } : null;
+    if (!expense) {
+      throw new Error('Expense not found');
+    }
 
-    setExpenses(prev => prev.map(e => e.id === id ? updatedExpense! : e));
-    if (updatedExpense) {
-      saveExpense(tenantId || 'default', updatedExpense).catch(e => console.error('Failed to save expense:', e));
+    const clearFields: Array<'driverId' | 'driverName' | 'truckId' | 'truckNumber'> = [];
+    const merged: Expense = { ...expense, updatedAt: new Date().toISOString() };
+    const mergedRecord = merged as unknown as Record<string, unknown>;
+
+    for (const key of ['driverId', 'driverName', 'truckId', 'truckNumber'] as const) {
+      if (key in updates) {
+        const val = updates[key];
+        if (val == null || val === '') {
+          delete mergedRecord[key];
+          clearFields.push(key);
+        } else {
+          mergedRecord[key] = val;
+        }
+      }
+    }
+
+    Object.assign(merged, updates);
+
+    if (updates.type != null && updates.category == null) {
+      merged.category = updates.type;
+    }
+    merged.type = (merged.type || 'other') as Expense['type'];
+    merged.status = (merged.status || 'pending') as Expense['status'];
+    if (!merged.category) merged.category = merged.type;
+
+    const previous = expenses;
+    setExpenses(prev => prev.map(e => e.id === id ? merged : e));
+    try {
+      await saveExpense(tenantId || 'default', merged);
+      if (clearFields.length > 0) {
+        await clearExpenseFields(tenantId || 'default', id, clearFields);
+      }
+    } catch (e) {
+      setExpenses(previous);
+      console.error('Failed to save expense:', e);
+      throw e instanceof Error ? e : new Error('Failed to save expense');
     }
   };
 
@@ -2416,13 +2540,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     firestoreDeleteFactoringTransaction(tenantId || 'default', id).catch(e => console.error('Failed to delete factoring transaction:', e));
   };
 
-  // Auto-generate due monthly insurance expenses (no backfill before truck start)
-  const insuranceGenKeyRef = React.useRef('');
+  // Auto-generate due monthly insurance expenses (current month only; idempotent across tabs)
   useEffect(() => {
     if (!tenantId || trucks.length === 0) return;
-    const key = `${trucks.map(t => `${t.id}:${t.monthlyInsuranceCost}:${t.createdAt}`).join('|')}|${expenses.length}`;
-    if (insuranceGenKeyRef.current === key) return;
-    insuranceGenKeyRef.current = key;
 
     const driverList = employees.filter(
       e => e.employeeType === 'driver' || e.employeeType === 'owner_operator'
@@ -2430,19 +2550,64 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const due = buildDueInsuranceExpenses(trucks, expenses, driverList);
     if (due.length === 0) return;
 
-    due.forEach(exp => {
-      if (expenses.some(e => e.recurrenceKey === exp.recurrenceKey)) return;
-      const newExpense: Expense = {
-        ...exp,
-        id: generateShortId(),
-        createdAt: new Date().toISOString(),
-      };
-      setExpenses(prev => {
-        if (prev.some(e => e.recurrenceKey === newExpense.recurrenceKey)) return prev;
-        return [newExpense, ...prev];
-      });
-      saveExpense(tenantId, newExpense).catch(err => console.error('Failed to save insurance expense:', err));
-    });
+    let cancelled = false;
+
+    (async () => {
+      for (const exp of due) {
+        if (cancelled) return;
+        if (!exp.recurrenceKey) continue;
+        if (expenses.some(e => e.recurrenceKey === exp.recurrenceKey)) continue;
+
+        const newExpense: Expense = {
+          ...exp,
+          id: generateShortId(),
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          await claimUniqueKey({
+            tenantId,
+            kind: 'expenseRecurrenceKey',
+            value: exp.recurrenceKey,
+            entityId: newExpense.id,
+          });
+        } catch {
+          continue;
+        }
+
+        if (cancelled) {
+          releaseUniqueKey({
+            tenantId,
+            kind: 'expenseRecurrenceKey',
+            value: exp.recurrenceKey,
+            entityId: newExpense.id,
+          }).catch(() => {});
+          return;
+        }
+
+        setExpenses(prev => {
+          if (prev.some(e => e.recurrenceKey === newExpense.recurrenceKey)) return prev;
+          return [newExpense, ...prev];
+        });
+
+        try {
+          await saveExpense(tenantId, newExpense);
+        } catch (err) {
+          setExpenses(prev => prev.filter(e => e.id !== newExpense.id));
+          releaseUniqueKey({
+            tenantId,
+            kind: 'expenseRecurrenceKey',
+            value: exp.recurrenceKey,
+            entityId: newExpense.id,
+          }).catch(() => {});
+          console.error('Failed to save insurance expense:', err);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [tenantId, trucks, expenses, employees]);
 
   // Broker functions
@@ -2702,8 +2867,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     return id;
   };
 
-  const updateTrip = (id: string, updates: Partial<Trip>) => {
+  const updateTrip = async (id: string, updates: Partial<Trip>) => {
     let updatedTrip: Trip | null = null;
+    const lockedStatuses = new Set([
+      LoadStatus.Delivered,
+      LoadStatus.DeliveredWithBOL,
+      LoadStatus.Invoiced,
+      LoadStatus.Paid,
+      LoadStatus.Completed,
+    ]);
+    const loadsToSync: Load[] = [];
 
     setTrips(prev => prev.map(trip => {
       if (trip.id === id) {
@@ -2714,113 +2887,182 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       return trip;
     }));
 
-    if (updatedTrip) {
-      saveTrip(tenantId || 'default', updatedTrip).catch(e => console.error('Failed to update trip:', e));
+    if (!updatedTrip) return;
 
-      // Sync trip changes to associated loads
-      // Find all loads that belong to this trip and update relevant fields
-      const loadUpdates: Partial<Load> = {};
-      const now = new Date().toISOString();
+    const loadUpdates: Partial<Load> = {};
+    const now = new Date().toISOString();
 
-      // Sync driver assignment
-      if (updates.driverId !== undefined) loadUpdates.driverId = updates.driverId;
-      if (updates.driverName !== undefined) loadUpdates.driverName = updates.driverName;
+    if (updates.driverId !== undefined) loadUpdates.driverId = updates.driverId;
+    if (updates.driverName !== undefined) loadUpdates.driverName = updates.driverName;
 
-      // Sync dispatcher assignment + commission defaults
-      if (updates.dispatcherId !== undefined) {
-        const dispatcher = updates.dispatcherId
-          ? employees.find(e => e.id === updates.dispatcherId)
-          : null;
-        Object.assign(loadUpdates, withDispatcherCommission(loadUpdates, dispatcher));
-        if (!updates.dispatcherId) {
-          loadUpdates.dispatcherId = undefined;
-          loadUpdates.dispatcherName = undefined;
+    if (updates.dispatcherId !== undefined) {
+      const dispatcher = updates.dispatcherId
+        ? employees.find(e => e.id === updates.dispatcherId)
+        : null;
+      Object.assign(loadUpdates, withDispatcherCommission(loadUpdates, dispatcher));
+      if (!updates.dispatcherId) {
+        loadUpdates.dispatcherId = undefined;
+        loadUpdates.dispatcherName = undefined;
+      }
+    } else if (updates.dispatcherName !== undefined) {
+      loadUpdates.dispatcherName = updates.dispatcherName;
+    }
+
+    if (updates.truckId !== undefined) loadUpdates.truckId = updates.truckId;
+    if (updates.truckNumber !== undefined) loadUpdates.truckNumber = updates.truckNumber;
+    if (updates.trailerId !== undefined) loadUpdates.trailerId = updates.trailerId;
+    if (updates.trailerNumber !== undefined) loadUpdates.trailerNumber = updates.trailerNumber;
+    if (updates.tripNumber !== undefined) loadUpdates.tripNumber = updates.tripNumber;
+    if (updates.pickupDate !== undefined) loadUpdates.pickupDate = updates.pickupDate;
+    if (updates.deliveryDate !== undefined) loadUpdates.deliveryDate = updates.deliveryDate;
+
+    if (Object.keys(loadUpdates).length > 0) {
+      loadUpdates.updatedAt = now;
+      setLoads(prev => prev.map(load => {
+        if (load.tripId !== id) return load;
+        if (lockedStatuses.has(load.status as LoadStatus) || load.isLocked) {
+          return load;
         }
-      } else if (updates.dispatcherName !== undefined) {
-        loadUpdates.dispatcherName = updates.dispatcherName;
+        const updatedLoad = { ...load, ...loadUpdates };
+        loadsToSync.push(updatedLoad);
+        return updatedLoad;
+      }));
+    }
+
+    const tid = tenantId || 'default';
+    const originalTrips = trips;
+    const originalLoads = loads;
+
+    try {
+      await saveTrip(tid, updatedTrip);
+      if (loadsToSync.length > 0) {
+        await Promise.all(loadsToSync.map(l => saveLoad(tid, l)));
       }
 
-      // Sync equipment
-      if (updates.truckId !== undefined) loadUpdates.truckId = updates.truckId;
-      if (updates.truckNumber !== undefined) loadUpdates.truckNumber = updates.truckNumber;
-      if (updates.trailerId !== undefined) loadUpdates.trailerId = updates.trailerId;
-      if (updates.trailerNumber !== undefined) loadUpdates.trailerNumber = updates.trailerNumber;
-
-      // Sync trip number if changed
-      if (updates.tripNumber !== undefined) loadUpdates.tripNumber = updates.tripNumber;
-
-      // Sync dates
-      if (updates.pickupDate !== undefined) loadUpdates.pickupDate = updates.pickupDate;
-      if (updates.deliveryDate !== undefined) loadUpdates.deliveryDate = updates.deliveryDate;
-
-      // Only update loads if there are relevant changes
       if (Object.keys(loadUpdates).length > 0) {
-        loadUpdates.updatedAt = now;
-        const lockedStatuses = new Set([
-          LoadStatus.Delivered,
-          LoadStatus.DeliveredWithBOL,
-          LoadStatus.Invoiced,
-          LoadStatus.Paid,
-          LoadStatus.Completed,
-        ]);
-
-        // Update associated loads — never overwrite delivered/financial loads from trip edits
-        setLoads(prev => prev.map(load => {
-          if (load.tripId !== id) return load;
-          if (lockedStatuses.has(load.status as LoadStatus) || load.isLocked) {
-            return load;
-          }
-          const updatedLoad = { ...load, ...loadUpdates };
-          saveLoad(tenantId || 'default', updatedLoad).catch(e =>
-            console.error('Failed to sync load with trip update:', e)
-          );
-          return updatedLoad;
-        }));
-
         logger.info('[TMSContext] Synced trip changes to associated loads', {
           tripId: id,
           tripNumber: updatedTrip.tripNumber,
           updatedFields: Object.keys(loadUpdates),
         });
       }
+    } catch (error) {
+      setTrips(originalTrips);
+      setLoads(originalLoads);
+      errorHandler.handle(
+        error,
+        {
+          operation: 'update trip',
+          tenantId: tid,
+          userId: authUser?.uid,
+          metadata: { tripId: id },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+      throw error;
     }
   };
 
-  const deleteTrip = (id: string) => {
+  const deleteTrip = async (id: string) => {
     const trip = trips.find(t => t.id === id);
     if (!trip) return;
 
-    // Check if trip has loads
+    const blockedStatuses = new Set([
+      LoadStatus.Delivered,
+      LoadStatus.DeliveredWithBOL,
+      LoadStatus.Invoiced,
+      LoadStatus.Paid,
+      LoadStatus.Completed,
+    ]);
+    const linkedLiveLoads = loads.filter(l => l.tripId === id);
+    const blockedLoads = linkedLiveLoads.filter(
+      l => l.isLocked || blockedStatuses.has(l.status as LoadStatus)
+    );
+    if (blockedLoads.length > 0) {
+      const nums = blockedLoads.map(l => l.loadNumber).join(', ');
+      alert(
+        `Cannot delete trip ${trip.tripNumber}: delivered or locked loads are still linked (${nums}). Unlink or adjust those loads first.`
+      );
+      throw new Error(`Cannot delete trip ${trip.tripNumber}: ${blockedLoads.length} locked/delivered load(s) linked`);
+    }
+
     if (trip.plannedLoadIds.length > 0) {
       if (!window.confirm(`Trip ${trip.tripNumber} has ${trip.plannedLoadIds.length} load(s). Deleting will unlink these loads. Continue?`)) {
         return;
       }
-
-      // Unlink planned loads from trip
-      trip.plannedLoadIds.forEach(loadId => {
-        updatePlannedLoad(loadId, {
-          tripId: undefined,
-          tripNumber: undefined,
-          status: 'planned',
-          currentStep: 1,
-        });
-      });
     }
 
-    // Clear trip references on live loads so they are not orphaned
-    setLoads(prev =>
-      prev.map(load => {
-        if (load.tripId !== id) return load;
-        const cleared = { ...load, tripId: undefined, tripNumber: undefined };
-        saveLoad(tenantId || 'default', cleared).catch(e =>
-          console.error('Failed to clear trip link on load:', e)
-        );
-        return cleared;
+    const tid = tenantId || 'default';
+    const originalTrips = trips;
+    const originalLoads = loads;
+    const originalPlannedLoads = plannedLoads;
+
+    const isLoadBlocked = (l: Load) =>
+      l.isLocked || blockedStatuses.has(l.status as LoadStatus);
+
+    const plannedLoadsToReset: PlannedLoad[] = [];
+    trip.plannedLoadIds.forEach(loadId => {
+      const pl = plannedLoads.find(p => p.id === loadId);
+      if (!pl) return;
+      const liveForPlanned = linkedLiveLoads.filter(
+        l =>
+          l.notes?.includes(pl.systemLoadNumber) ||
+          l.loadNumber === (pl.customLoadNumber || pl.systemLoadNumber)
+      );
+      if (liveForPlanned.some(isLoadBlocked)) return;
+      plannedLoadsToReset.push({
+        ...pl,
+        tripId: undefined,
+        tripNumber: undefined,
+        status: 'planned' as PlannedLoadStatus,
+        currentStep: 1,
+        updatedAt: new Date().toISOString(),
+      });
+    });
+
+    const loadsToClear = linkedLiveLoads.filter(l => !isLoadBlocked(l)).map(load => ({
+      ...load,
+      tripId: undefined,
+      tripNumber: undefined,
+      updatedAt: new Date().toISOString(),
+    }));
+
+    setPlannedLoads(prev =>
+      prev.map(pl => {
+        const reset = plannedLoadsToReset.find(r => r.id === pl.id);
+        return reset || pl;
       })
     );
-
+    setLoads(prev =>
+      prev.map(load => {
+        const cleared = loadsToClear.find(c => c.id === load.id);
+        return cleared || load;
+      })
+    );
     setTrips(prev => prev.filter(t => t.id !== id));
-    firestoreDeleteTrip(tenantId || 'default', id).catch(e => console.error('Failed to delete trip:', e));
+
+    try {
+      await Promise.all([
+        ...plannedLoadsToReset.map(pl => savePlannedLoad(tid, pl)),
+        ...loadsToClear.map(l => saveLoad(tid, l)),
+        firestoreDeleteTrip(tid, id),
+      ]);
+    } catch (error) {
+      setTrips(originalTrips);
+      setLoads(originalLoads);
+      setPlannedLoads(originalPlannedLoads);
+      errorHandler.handle(
+        error,
+        {
+          operation: 'delete trip',
+          tenantId: tid,
+          userId: authUser?.uid,
+          metadata: { tripId: id, tripNumber: trip.tripNumber },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+      throw error;
+    }
   };
 
   /**
@@ -2944,36 +3186,53 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
     loadsToDispatch.forEach(pl => inFlightPlannedDispatchIds.add(pl.id));
 
-    try {
-    // Attach to existing trip, or create a new one
-    const tripId = existingTripId || addTrip({
-      ...tripData,
-      plannedLoadIds,
-    });
-    if (existingTripId && !trips.find(t => t.id === existingTripId)) {
-      throw new Error('Trip not found');
-    }
-
-    const tripNumber =
-      trips.find(t => t.id === tripId)?.tripNumber ||
-      tripData.tripNumber ||
-      '';
-
-    // Mark all planned loads dispatched in one state update before creating Loads
+    const tid = tenantId || 'default';
     const now = new Date().toISOString();
-    setPlannedLoads(prev =>
-      prev.map(pl => {
-        if (!plannedLoadIds.includes(pl.id) || pl.status !== 'planned') return pl;
+    const originalPlannedSnapshots = loadsToDispatch.map(pl => ({ ...pl }));
+    let newTrip: Trip | null = null;
+    let createdLoadIds: string[] = [];
+
+    try {
+      let tripId = existingTripId;
+      let tripNumber = '';
+
+      if (existingTripId) {
+        const existing = trips.find(t => t.id === existingTripId);
+        if (!existing) throw new Error('Trip not found');
+        tripNumber = existing.tripNumber;
+      } else {
+        tripId = generateShortId();
+        tripNumber = tripData.tripNumber || generateTripNumber();
+        const today = new Date().toISOString().split('T')[0];
+        let status: TripStatus = 'future';
+        if (tripData.pickupDate <= today && tripData.deliveryDate >= today) {
+          status = 'in_progress';
+        } else if (tripData.deliveryDate < today) {
+          status = 'past';
+        }
+        newTrip = {
+          ...tripData,
+          id: tripId,
+          tripNumber,
+          plannedLoadIds,
+          status,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: authUser?.uid || 'system',
+        };
+      }
+
+      const updatedPlannedLoads: PlannedLoad[] = loadsToDispatch.map(pl => {
         const dispatcher =
           (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
           (pl.dispatcherId && employees.find(e => e.id === pl.dispatcherId)) ||
           null;
         const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
-        const updated: PlannedLoad = {
+        return {
           ...pl,
-          status: 'dispatched',
+          status: 'dispatched' as PlannedLoadStatus,
           currentStep: 2,
-          tripId,
+          tripId: tripId!,
           tripNumber,
           driverId: tripData.driverId,
           driverName: tripData.driverName,
@@ -2981,215 +3240,219 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           dispatcherName: dispatcherFields.dispatcherName || tripData.dispatcherName || pl.dispatcherName,
           updatedAt: now,
         };
-        savePlannedLoad(tenantId || 'default', updated).catch(e =>
-          console.error('Failed to save planned load after dispatch claim:', e)
-        );
-        return updated;
-      })
-    );
+      });
 
-    // Update each planned load and create Load entries
-    for (const plannedLoad of loadsToDispatch) {
-      const dispatcher =
-        (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
-        (plannedLoad.dispatcherId && employees.find(e => e.id === plannedLoad.dispatcherId)) ||
-        null;
-      const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
+      const newLoads: Load[] = [];
+      for (const plannedLoad of loadsToDispatch) {
+        const dispatcher =
+          (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
+          (plannedLoad.dispatcherId && employees.find(e => e.id === plannedLoad.dispatcherId)) ||
+          null;
+        const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
 
-      // Create a Load entry for the Loads page and Dispatch Board
-      // Extract first pickup and delivery info
-      const firstPickup = plannedLoad.pickups?.[0];
-      const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
+        const firstPickup = plannedLoad.pickups?.[0];
+        const lastDelivery = plannedLoad.deliveries?.[plannedLoad.deliveries?.length - 1 || 0];
 
-      const driver = tripData.driverId
-        ? drivers.find(d => d.id === tripData.driverId) || employees.find(e => e.id === tripData.driverId)
-        : undefined;
+        const driver = tripData.driverId
+          ? drivers.find(d => d.id === tripData.driverId) || employees.find(e => e.id === tripData.driverId)
+          : undefined;
 
-      const plannedDocs = (plannedLoad.documents || [])
-        .filter(d => !!d.url)
-        .map((d) => {
-          const rawType = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
-          const type =
-            rawType === 'RATE_CON' || rawType === 'RATECON'
-              ? 'RATE_CON'
-              : rawType === 'BOL'
-                ? 'BOL'
-                : rawType === 'POD'
-                  ? 'POD'
-                  : 'OTHER';
-          return {
-            id: d.id || generateShortId(),
-            type,
-            fileName: d.name || `${type}.pdf`,
-            url: d.url,
-            uploadedAt: d.uploadedAt || now,
+        const plannedDocs = (plannedLoad.documents || [])
+          .filter(d => !!d.url)
+          .map((d) => {
+            const rawType = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
+            const type =
+              rawType === 'RATE_CON' || rawType === 'RATECON'
+                ? 'RATE_CON'
+                : rawType === 'BOL'
+                  ? 'BOL'
+                  : rawType === 'POD'
+                    ? 'POD'
+                    : 'OTHER';
+            return {
+              id: d.id || generateShortId(),
+              type,
+              fileName: d.name || `${type}.pdf`,
+              url: d.url,
+              uploadedAt: d.uploadedAt || now,
+              uploadedBy: authUser?.uid || 'system',
+            };
+          });
+        if (
+          plannedLoad.rateConUrl
+          && !plannedDocs.some(d => d.type === 'RATE_CON')
+        ) {
+          plannedDocs.push({
+            id: generateShortId(),
+            type: 'RATE_CON',
+            fileName: 'rate-con.pdf',
+            url: plannedLoad.rateConUrl,
+            uploadedAt: now,
             uploadedBy: authUser?.uid || 'system',
-          };
-        });
-      if (
-        plannedLoad.rateConUrl
-        && !plannedDocs.some(d => d.type === 'RATE_CON')
-      ) {
-        plannedDocs.push({
+          });
+        }
+        if (
+          plannedLoad.bolUrl
+          && !plannedDocs.some(d => d.type === 'BOL')
+        ) {
+          plannedDocs.push({
+            id: generateShortId(),
+            type: 'BOL',
+            fileName: 'bol.pdf',
+            url: plannedLoad.bolUrl,
+            uploadedAt: now,
+            uploadedBy: authUser?.uid || 'system',
+          });
+        }
+
+        const draftLoad: Load = {
           id: generateShortId(),
-          type: 'RATE_CON',
-          fileName: 'rate-con.pdf',
-          url: plannedLoad.rateConUrl,
-          uploadedAt: now,
-          uploadedBy: authUser?.uid || 'system',
+          loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
+          status: LoadStatus.Dispatched,
+          customerName: plannedLoad.customer?.name || '',
+          customerId: plannedLoad.customerId,
+          brokerName: plannedLoad.customer?.name || '',
+          driverId: tripData.driverId,
+          driverName: tripData.driverName,
+          dispatcherId: dispatcherFields.dispatcherId || undefined,
+          dispatcherName: dispatcherFields.dispatcherName || undefined,
+          dispatcherCommissionType: dispatcherFields.dispatcherCommissionType,
+          dispatcherCommissionRate: dispatcherFields.dispatcherCommissionRate || undefined,
+          truckId: tripData.truckId,
+          truckNumber: tripData.truckNumber,
+          trailerId: tripData.trailerId,
+          trailerNumber: tripData.trailerNumber,
+          originCity: firstPickup?.shipper?.city || tripData.fromCity || '',
+          originState: firstPickup?.shipper?.state || tripData.fromState || '',
+          destCity: lastDelivery?.consignee?.city || tripData.toCity || '',
+          destState: lastDelivery?.consignee?.state || tripData.toState || '',
+          pickupDate: firstPickup?.pickupDate || tripData.pickupDate,
+          deliveryDate: lastDelivery?.deliveryDate || tripData.deliveryDate,
+          rate: plannedLoad.fees?.primaryFee || 0,
+          miles: plannedLoad.totalMiles || tripData.totalMiles || 0,
+          ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
+            ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
+            : 0,
+          hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
+          fscAmount: plannedLoad.fees?.fscAmount || 0,
+          hasDetention: (plannedLoad.fees?.accessoryFees?.detention || 0) > 0,
+          detentionAmount: plannedLoad.fees?.accessoryFees?.detention || 0,
+          hasLumper: (plannedLoad.fees?.accessoryFees?.lumper || 0) > 0,
+          lumperAmount: plannedLoad.fees?.accessoryFees?.lumper || 0,
+          totalAccessorials:
+            (plannedLoad.fees?.accessoryFees?.detention || 0) +
+            (plannedLoad.fees?.accessoryFees?.lumper || 0) +
+            (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
+            (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
+          grandTotal: plannedLoad.totalCharge || (
+            (plannedLoad.fees?.primaryFee || 0) +
+            (plannedLoad.fees?.fscAmount || 0) +
+            (plannedLoad.fees?.accessoryFees?.detention || 0) +
+            (plannedLoad.fees?.accessoryFees?.lumper || 0) +
+            (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
+            (plannedLoad.fees?.accessoryFees?.tarpFee || 0) -
+            (plannedLoad.fees?.invoiceAdvance || 0)
+          ),
+          bolNumber: firstPickup?.bolNumber,
+          documents: plannedDocs as Load['documents'],
+          rateConUrl:
+            plannedLoad.rateConUrl
+            || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
+          rateConfirmationUrl:
+            plannedLoad.rateConUrl
+            || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
+          tripId: tripId!,
+          tripNumber,
+          createdAt: now,
+          createdBy: authUser?.uid || 'system',
+          statusHistory: [{
+            status: LoadStatus.Dispatched,
+            timestamp: now,
+            changedBy: authUser?.displayName || authUser?.email || 'system',
+            changedByRole: 'dispatcher',
+            changedByUserId: authUser?.uid,
+            note: `Dispatched from Trip ${tripNumber}`,
+          }],
+          notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${tripNumber}`,
+        };
+
+        const withCommission = withDispatcherCommission(draftLoad, dispatcher) as Load;
+        const driverBasePay = driver ? calculateDriverPay(withCommission, driver as Driver) : 0;
+        newLoads.push({
+          ...withCommission,
+          driverBasePay,
+          driverDetentionPay: withCommission.detentionAmount || 0,
+          driverLayoverPay: withCommission.layoverAmount || 0,
+          driverTotalGross:
+            driverBasePay +
+            (withCommission.detentionAmount || 0) +
+            (withCommission.layoverAmount || 0),
         });
       }
-      if (
-        plannedLoad.bolUrl
-        && !plannedDocs.some(d => d.type === 'BOL')
-      ) {
-        plannedDocs.push({
-          id: generateShortId(),
-          type: 'BOL',
-          fileName: 'bol.pdf',
-          url: plannedLoad.bolUrl,
-          uploadedAt: now,
-          uploadedBy: authUser?.uid || 'system',
+
+      createdLoadIds = newLoads.map(l => l.id);
+
+      if (newTrip) setTrips(prev => [newTrip!, ...prev]);
+      setPlannedLoads(prev =>
+        prev.map(pl => {
+          const updated = updatedPlannedLoads.find(u => u.id === pl.id);
+          return updated || pl;
+        })
+      );
+      setLoads(prev => [...newLoads, ...prev]);
+
+      await Promise.all([
+        ...updatedPlannedLoads.map(pl => savePlannedLoad(tid, pl)),
+        ...newLoads.map(l => saveLoad(tid, l)),
+        ...(newTrip ? [saveTrip(tid, newTrip)] : []),
+      ]);
+
+      newLoads.forEach((newLoad, i) => {
+        logger.info('[TMSContext] Load created from planned load dispatch', {
+          loadId: newLoad.id,
+          loadNumber: newLoad.loadNumber,
+          plannedLoadId: loadsToDispatch[i]?.id,
+          tripId,
         });
-      }
+      });
 
-      const draftLoad: Load = {
-        id: generateShortId(),
-        loadNumber: plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber,
-        status: LoadStatus.Dispatched,
-
-        // Customer/Broker info
-        customerName: plannedLoad.customer?.name || '',
-        customerId: plannedLoad.customerId,
-        brokerName: plannedLoad.customer?.name || '',
-
-        // Driver assignment
-        driverId: tripData.driverId,
-        driverName: tripData.driverName,
-
-        // Dispatcher assignment (propagated from trip / planned load)
-        dispatcherId: dispatcherFields.dispatcherId || undefined,
-        dispatcherName: dispatcherFields.dispatcherName || undefined,
-        dispatcherCommissionType: dispatcherFields.dispatcherCommissionType,
-        dispatcherCommissionRate: dispatcherFields.dispatcherCommissionRate || undefined,
-
-        // Equipment
-        truckId: tripData.truckId,
-        truckNumber: tripData.truckNumber,
-        trailerId: tripData.trailerId,
-        trailerNumber: tripData.trailerNumber,
-
-        // Route - from first pickup to last delivery
-        originCity: firstPickup?.shipper?.city || tripData.fromCity || '',
-        originState: firstPickup?.shipper?.state || tripData.fromState || '',
-        destCity: lastDelivery?.consignee?.city || tripData.toCity || '',
-        destState: lastDelivery?.consignee?.state || tripData.toState || '',
-
-        // Dates
-        pickupDate: firstPickup?.pickupDate || tripData.pickupDate,
-        deliveryDate: lastDelivery?.deliveryDate || tripData.deliveryDate,
-
-        // Financial - Calculate complete grand total including all fees
-        rate: plannedLoad.fees?.primaryFee || 0,
-        miles: plannedLoad.totalMiles || tripData.totalMiles || 0,
-        ratePerMile: plannedLoad.totalMiles && plannedLoad.fees?.primaryFee
-          ? plannedLoad.fees.primaryFee / plannedLoad.totalMiles
-          : 0,
-
-        // FSC
-        hasFSC: (plannedLoad.fees?.fscAmount || 0) > 0,
-        fscAmount: plannedLoad.fees?.fscAmount || 0,
-
-        // Accessorials
-        hasDetention: (plannedLoad.fees?.accessoryFees?.detention || 0) > 0,
-        detentionAmount: plannedLoad.fees?.accessoryFees?.detention || 0,
-        hasLumper: (plannedLoad.fees?.accessoryFees?.lumper || 0) > 0,
-        lumperAmount: plannedLoad.fees?.accessoryFees?.lumper || 0,
-        totalAccessorials:
-          (plannedLoad.fees?.accessoryFees?.detention || 0) +
-          (plannedLoad.fees?.accessoryFees?.lumper || 0) +
-          (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
-          (plannedLoad.fees?.accessoryFees?.tarpFee || 0),
-
-        // Grand Total: Primary Fee + FSC + All Accessorials - Invoice Advance
-        grandTotal: plannedLoad.totalCharge || (
-          (plannedLoad.fees?.primaryFee || 0) +
-          (plannedLoad.fees?.fscAmount || 0) +
-          (plannedLoad.fees?.accessoryFees?.detention || 0) +
-          (plannedLoad.fees?.accessoryFees?.lumper || 0) +
-          (plannedLoad.fees?.accessoryFees?.stopOff || 0) +
-          (plannedLoad.fees?.accessoryFees?.tarpFee || 0) -
-          (plannedLoad.fees?.invoiceAdvance || 0)
-        ),
-
-        // Document numbers
-        bolNumber: firstPickup?.bolNumber,
-
-        documents: plannedDocs as Load['documents'],
-        rateConUrl:
-          plannedLoad.rateConUrl
-          || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
-        rateConfirmationUrl:
-          plannedLoad.rateConUrl
-          || plannedDocs.find(d => d.type === 'RATE_CON')?.url,
-
-        // Trip Linking
+      logger.info('[TMSContext] Planned loads dispatched to trip', {
         tripId,
         tripNumber,
-
-        // Metadata
-        createdAt: now,
-        createdBy: authUser?.uid || 'system',
-
-        // Status history
-        statusHistory: [{
-          status: LoadStatus.Dispatched,
-          timestamp: now,
-          changedBy: authUser?.displayName || authUser?.email || 'system',
-          changedByRole: 'dispatcher',
-          changedByUserId: authUser?.uid,
-          note: `Dispatched from Trip ${tripNumber}`,
-        }],
-
-        // Notes
-        notes: `Created from Planned Load ${plannedLoad.systemLoadNumber}. Trip: ${tripNumber}`,
-      };
-
-      const withCommission = withDispatcherCommission(draftLoad, dispatcher) as Load;
-      const driverBasePay = driver ? calculateDriverPay(withCommission, driver as Driver) : 0;
-      const newLoad: Load = {
-        ...withCommission,
-        driverBasePay,
-        driverDetentionPay: withCommission.detentionAmount || 0,
-        driverLayoverPay: withCommission.layoverAmount || 0,
-        driverTotalGross:
-          driverBasePay +
-          (withCommission.detentionAmount || 0) +
-          (withCommission.layoverAmount || 0),
-      };
-
-      // Add the load to state and persist
-      setLoads(prev => [newLoad, ...prev]);
-      saveLoad(tenantId || 'default', newLoad).catch(e =>
-        console.error('Failed to save load from dispatch:', e)
-      );
-
-      logger.info('[TMSContext] Load created from planned load dispatch', {
-        loadId: newLoad.id,
-        loadNumber: newLoad.loadNumber,
-        plannedLoadId: plannedLoad.id,
-        tripId,
+        loadCount: plannedLoadIds.length,
+        loadIds: plannedLoadIds,
       });
-    }
 
-    logger.info('[TMSContext] Planned loads dispatched to trip', {
-      tripId,
-      tripNumber,
-      loadCount: plannedLoadIds.length,
-      loadIds: plannedLoadIds,
-    });
-
-    return tripId;
+      return tripId!;
+    } catch (error) {
+      setPlannedLoads(prev =>
+        prev.map(pl => {
+          const orig = originalPlannedSnapshots.find(o => o.id === pl.id);
+          return orig || pl;
+        })
+      );
+      if (newTrip) {
+        setTrips(prev => prev.filter(t => t.id !== newTrip!.id));
+      }
+      if (createdLoadIds.length > 0) {
+        setLoads(prev => prev.filter(l => !createdLoadIds.includes(l.id)));
+      }
+      await Promise.all([
+        ...originalPlannedSnapshots.map(pl => savePlannedLoad(tid, pl).catch(() => {})),
+        ...(newTrip ? [firestoreDeleteTrip(tid, newTrip.id).catch(() => {})] : []),
+        ...createdLoadIds.map(id => firestoreDeleteLoad(tid, id).catch(() => {})),
+      ]);
+      errorHandler.handle(
+        error,
+        {
+          operation: 'dispatch planned loads to trip',
+          tenantId: tid,
+          userId: authUser?.uid,
+          metadata: { plannedLoadIds },
+        },
+        { severity: ErrorSeverity.HIGH }
+      );
+      throw error;
     } finally {
       loadsToDispatch.forEach(pl => inFlightPlannedDispatchIds.delete(pl.id));
     }
@@ -3468,11 +3731,11 @@ export const useTMS = () => {
           activeLoads: 0,
           activeDrivers: 0,
         },
-        addLoad: () => { },
-        updateLoad: () => { },
+        addLoad: async () => { },
+        updateLoad: async () => { },
         updateLoadStatus: async () => { },
-        deleteLoad: () => { },
-        addEmployee: () => { },
+        deleteLoad: async () => { },
+        addEmployee: async () => { },
         updateEmployee: () => { },
         deleteEmployee: () => { },
         addDriver: () => { },
@@ -3496,8 +3759,8 @@ export const useTMS = () => {
         addSettlement: async () => '',
         updateSettlement: () => { },
         deleteSettlement: () => { },
-        addExpense: () => { },
-        updateExpense: () => { },
+        addExpense: async () => { },
+        updateExpense: async () => { },
         deleteExpense: async () => { },
         addFactoringCompany: () => { },
         updateFactoringCompany: () => { },

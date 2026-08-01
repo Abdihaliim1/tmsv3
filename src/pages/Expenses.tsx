@@ -3,13 +3,13 @@ import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSi
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useTMS } from '../context/TMSContext';
 import { useTenant } from '../context/TenantContext';
-import { Expense } from '../types';
+import { Expense, Truck } from '../types';
 import { downloadCSV } from '../services/exportService';
 import { storage } from '../lib/firebase';
 import { getTodayDateString } from '../utils/dateOnly';
 
 const Expenses: React.FC = () => {
-  const { drivers, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
+  const { drivers, trucks, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
   const { activeTenantId } = useTenant();
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -20,8 +20,10 @@ const Expenses: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   
   // Form state
-  const [formData, setFormData] = useState<Omit<Expense, 'id'>>({
+  const [formData, setFormData] = useState<Partial<Omit<Expense, 'id'>> & Pick<Expense, 'date'>>({
     date: getTodayDateString(),
+    type: 'other',
+    status: 'pending',
   });
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [selectedTruckId, setSelectedTruckId] = useState<string>('');
@@ -41,7 +43,7 @@ const Expenses: React.FC = () => {
     };
   }, [openMenuId]);
 
-  const getTypeIcon = (type: Expense['type']) => {
+  const getTypeIcon = (type: Expense['type'] | undefined) => {
     const icons = {
       fuel: Fuel,
       maintenance: Wrench,
@@ -52,10 +54,10 @@ const Expenses: React.FC = () => {
       lodging: Bed,
       other: Receipt,
     };
-    return icons[type] || Receipt;
+    return icons[type || 'other'] || Receipt;
   };
 
-  const getTypeColor = (type: Expense['type']) => {
+  const getTypeColor = (type: Expense['type'] | undefined) => {
     const colors = {
       fuel: 'bg-blue-100 text-blue-700 border-blue-200',
       maintenance: 'bg-orange-100 text-orange-700 border-orange-200',
@@ -66,20 +68,71 @@ const Expenses: React.FC = () => {
       lodging: 'bg-pink-100 text-pink-700 border-pink-200',
       other: 'bg-gray-100 text-gray-700 border-gray-200',
     };
-    return colors[type] || colors.other;
+    return colors[type || 'other'] || colors.other;
   };
 
-  const getStatusBadge = (status: Expense['status']) => {
+  const getStatusBadge = (status: Expense['status'] | undefined) => {
+    const resolved = status || 'pending';
     const styles = {
       pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
       approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       rejected: 'bg-red-50 text-red-700 border-red-200',
     };
     return (
-      <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${styles[status]}`}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
+      <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${styles[resolved]}`}>
+        {resolved.charAt(0).toUpperCase() + resolved.slice(1)}
       </span>
     );
+  };
+
+  const resolveTruckAssignment = (
+    freeText: string,
+    fleetTrucks: Truck[]
+  ): { truckId?: string | null; truckNumber?: string | null } => {
+    const trimmed = freeText.trim();
+    if (!trimmed) return { truckId: null, truckNumber: null };
+
+    const byId = fleetTrucks.find(t => t.id === trimmed);
+    if (byId) {
+      return {
+        truckId: byId.id,
+        truckNumber: byId.number || byId.truckNumber || trimmed,
+      };
+    }
+
+    const byNumber = fleetTrucks.find(
+      t => t.number === trimmed || t.truckNumber === trimmed
+    );
+    if (byNumber) {
+      return {
+        truckId: byNumber.id,
+        truckNumber: byNumber.number || byNumber.truckNumber || trimmed,
+      };
+    }
+
+    return { truckId: null, truckNumber: trimmed };
+  };
+
+  const buildAssignmentFields = () => {
+    const driverName = selectedDriverId
+      ? `${drivers.find(d => d.id === selectedDriverId)?.firstName || ''} ${drivers.find(d => d.id === selectedDriverId)?.lastName || ''}`.trim()
+      : undefined;
+    const truckFields = resolveTruckAssignment(selectedTruckId, trucks);
+    return {
+      driverId: selectedDriverId ? selectedDriverId : null,
+      driverName: selectedDriverId ? driverName : null,
+      ...truckFields,
+    };
+  };
+
+  const resetForm = () => {
+    setFormData({
+      date: getTodayDateString(),
+      type: 'other',
+      status: 'pending',
+    });
+    setSelectedDriverId('');
+    setSelectedTruckId('');
   };
 
   const filteredExpenses = expenses.filter(expense => {
@@ -233,21 +286,22 @@ const Expenses: React.FC = () => {
                 </tr>
               ) : (
                 filteredExpenses.map((expense) => {
-                  const TypeIcon = getTypeIcon(expense.type);
+                  const expenseType = expense.type || 'other';
+                  const TypeIcon = getTypeIcon(expenseType);
                   return (
                     <tr key={expense.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{expense.date}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <TypeIcon size={18} className="text-slate-500" />
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${getTypeColor(expense.type)}`}>
-                            {expense.type.charAt(0).toUpperCase() + expense.type.slice(1)}
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${getTypeColor(expenseType)}`}>
+                            {expenseType.charAt(0).toUpperCase() + expenseType.slice(1)}
                           </span>
                         </div>
                       </td>
                       <td className="px-6 py-4 text-sm text-slate-900">{expense.description}</td>
                       <td className="px-6 py-4 text-sm text-slate-600">
-                        {expense.driverName || expense.truckId || <span className="text-slate-400 italic">N/A</span>}
+                        {expense.driverName || expense.truckNumber || expense.truckId || <span className="text-slate-400 italic">N/A</span>}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right font-medium text-slate-900">
                         ${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -304,7 +358,7 @@ const Expenses: React.FC = () => {
                                     paidBy: expenseToEdit.paidBy,
                                   });
                                   setSelectedDriverId(expenseToEdit.driverId || drivers.find(d => `${d.firstName} ${d.lastName}` === expenseToEdit.driverName)?.id || '');
-                                  setSelectedTruckId(expenseToEdit.truckId || '');
+                                  setSelectedTruckId(expenseToEdit.truckId || expenseToEdit.truckNumber || '');
                                   setEditingExpenseId(expenseToEdit.id);
                                   setIsEditModalOpen(true);
                                   setOpenMenuId(null);
@@ -368,42 +422,40 @@ const Expenses: React.FC = () => {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={(e) => {
+            <form onSubmit={async (e) => {
               e.preventDefault();
               const amount = Number(formData.amount);
               if (!Number.isFinite(amount) || amount <= 0) {
                 alert('Expense amount must be greater than zero.');
                 return;
               }
-              const normalized = { ...formData, amount };
-              if (isEditModalOpen && editingExpenseId) {
-                // Update existing expense
-                const driverName = selectedDriverId ? drivers.find(d => d.id === selectedDriverId)?.firstName + ' ' + drivers.find(d => d.id === selectedDriverId)?.lastName : undefined;
-                updateExpense(editingExpenseId, {
-                  ...normalized,
-                  driverId: selectedDriverId || undefined,
-                  driverName,
-                  truckId: selectedTruckId || undefined,
-                });
-                setIsEditModalOpen(false);
-                setEditingExpenseId(null);
-              } else {
-                // Add new expense
-                const driverName = selectedDriverId ? drivers.find(d => d.id === selectedDriverId)?.firstName + ' ' + drivers.find(d => d.id === selectedDriverId)?.lastName : undefined;
-                addExpense({
-                  ...normalized,
-                  driverId: selectedDriverId || undefined,
-                  driverName,
-                  truckId: selectedTruckId || undefined,
-                });
-                setIsAddModalOpen(false);
+              const normalized = {
+                ...formData,
+                amount,
+                type: (formData.type || 'other') as Expense['type'],
+                status: (formData.status || 'pending') as Expense['status'],
+                category: formData.category || formData.type || 'other',
+              };
+              const assignment = buildAssignmentFields();
+              try {
+                if (isEditModalOpen && editingExpenseId) {
+                  await updateExpense(editingExpenseId, {
+                    ...normalized,
+                    ...assignment,
+                  });
+                  setIsEditModalOpen(false);
+                  setEditingExpenseId(null);
+                } else {
+                  await addExpense({
+                    ...normalized,
+                    ...assignment,
+                  });
+                  setIsAddModalOpen(false);
+                }
+                resetForm();
+              } catch (err) {
+                alert(err instanceof Error ? err.message : 'Failed to save expense.');
               }
-              // Reset form
-              setFormData({
-                date: getTodayDateString(),
-              });
-              setSelectedDriverId('');
-              setSelectedTruckId('');
             }} className="p-6 space-y-6">
               {/* Basic Information */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -413,8 +465,11 @@ const Expenses: React.FC = () => {
                   </label>
                   <select
                     required
-                    value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value as Expense['type'] })}
+                    value={formData.type || 'other'}
+                    onChange={(e) => {
+                      const nextType = e.target.value as Expense['type'];
+                      setFormData({ ...formData, type: nextType, category: nextType });
+                    }}
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="fuel">Fuel</option>
@@ -558,7 +613,7 @@ const Expenses: React.FC = () => {
                   Status
                 </label>
                 <select
-                  value={formData.status}
+                    value={formData.status || 'pending'}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as Expense['status'] })}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
@@ -576,11 +631,7 @@ const Expenses: React.FC = () => {
                     setIsAddModalOpen(false);
                     setIsEditModalOpen(false);
                     setEditingExpenseId(null);
-                    setFormData({
-                date: getTodayDateString(),
-                    });
-                    setSelectedDriverId('');
-                    setSelectedTruckId('');
+                    resetForm();
                   }}
                   className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
                 >

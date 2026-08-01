@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, X, CheckCircle, AlertCircle, Clock, FileText, Database, Cloud, BarChart3 } from 'lucide-react';
+import { Upload, Download, X, CheckCircle, FileText, Database, Cloud, BarChart3 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Load, Employee, Expense, Truck, LoadStatus, NewLoadInput, NewEmployeeInput, NewExpenseInput, NewTruckInput, NewBrokerInput } from '../types';
+import { LoadStatus, NewLoadInput, NewEmployeeInput, NewExpenseInput, NewTruckInput, NewBrokerInput } from '../types';
 import { generateLoadNumber } from '../utils/idGenerator';
 
 interface ImportHistory {
@@ -20,7 +20,18 @@ interface FieldMapping {
 }
 
 const Import: React.FC = () => {
-  const { loads, employees, expenses, trucks, brokers, addLoad, addEmployee, addExpense, addTruck, addBroker } = useTMS();
+  const {
+    loads,
+    employees,
+    trucks,
+    trailers,
+    brokers,
+    addLoad,
+    addEmployee,
+    addExpense,
+    addTruck,
+    addBroker,
+  } = useTMS();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [dataType, setDataType] = useState<'loads' | 'drivers' | 'customers' | 'expenses' | 'fleet'>('loads');
   const [skipDuplicates, setSkipDuplicates] = useState(false);
@@ -143,14 +154,24 @@ const Import: React.FC = () => {
   const getSystemFields = (type: string): { [key: string]: string[] } => {
     const fields: { [key: string]: { [key: string]: string[] } } = {
       loads: {
-        loadNumber: ['loadnumber', 'load', 'pro', 'pronumber'],
+        loadNumber: ['loadnumber', 'load', 'pro', 'pronumber', 'customloadnumber'],
         originCity: ['origincity', 'origin', 'pickupcity', 'fromcity'],
         originState: ['originstate', 'pickupstate', 'fromstate'],
         destCity: ['destcity', 'destinationcity', 'deliverycity', 'tocity'],
         destState: ['deststate', 'destinationstate', 'deliverystate', 'tostate'],
         rate: ['rate', 'price', 'amount', 'revenue'],
         miles: ['miles', 'mileage', 'distance'],
-        customerName: ['customer', 'customername', 'broker', 'brokername']
+        customerName: ['customer', 'customername', 'broker', 'brokername'],
+        pickupDate: ['pickupdate', 'pickup', 'shipdate'],
+        deliveryDate: ['deliverydate', 'delivery', 'deldate'],
+        driverName: ['driver', 'drivername'],
+        driverId: ['driverid'],
+        dispatcherName: ['dispatcher', 'dispatchername'],
+        dispatcherId: ['dispatcherid'],
+        truckNumber: ['truck', 'trucknumber', 'unit'],
+        truckId: ['truckid'],
+        trailerNumber: ['trailer', 'trailernumber'],
+        trailerId: ['trailerid'],
       },
       drivers: {
         firstName: ['firstname', 'first', 'fname'],
@@ -241,38 +262,130 @@ const Import: React.FC = () => {
     });
   };
 
+  const normalizeImportDate = (raw: unknown): string => {
+    if (raw == null || raw === '') return '';
+    const s = String(raw).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.split('T')[0];
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const resolveDriver = (row: any) => {
+    if (row.driverId && employees.some(e => e.id === row.driverId)) {
+      const e = employees.find(x => x.id === row.driverId)!;
+      return { driverId: e.id, driverName: `${e.firstName} ${e.lastName}`.trim() };
+    }
+    const name = String(row.driverName || '').trim().toLowerCase();
+    if (!name) return { driverId: undefined, driverName: undefined };
+    const match = employees.find(e =>
+      (e.employeeType === 'driver' || e.employeeType === 'owner_operator') &&
+      `${e.firstName} ${e.lastName}`.trim().toLowerCase() === name
+    );
+    return match
+      ? { driverId: match.id, driverName: `${match.firstName} ${match.lastName}`.trim() }
+      : { driverId: undefined, driverName: String(row.driverName).trim() };
+  };
+
+  const resolveDispatcher = (row: any) => {
+    if (row.dispatcherId && employees.some(e => e.id === row.dispatcherId)) {
+      const e = employees.find(x => x.id === row.dispatcherId)!;
+      return { dispatcherId: e.id, dispatcherName: `${e.firstName} ${e.lastName}`.trim() };
+    }
+    const name = String(row.dispatcherName || '').trim().toLowerCase();
+    if (!name) return { dispatcherId: undefined, dispatcherName: undefined };
+    const match = employees.find(e =>
+      e.employeeType === 'dispatcher' &&
+      `${e.firstName} ${e.lastName}`.trim().toLowerCase() === name
+    );
+    return match
+      ? { dispatcherId: match.id, dispatcherName: `${match.firstName} ${match.lastName}`.trim() }
+      : { dispatcherId: undefined, dispatcherName: String(row.dispatcherName).trim() };
+  };
+
+  const resolveTruck = (row: any) => {
+    if (row.truckId && trucks.some(t => t.id === row.truckId)) {
+      const t = trucks.find(x => x.id === row.truckId)!;
+      return { truckId: t.id, truckNumber: t.truckNumber || t.number };
+    }
+    const num = String(row.truckNumber || '').trim().toLowerCase();
+    if (!num) return { truckId: undefined, truckNumber: undefined };
+    const match = trucks.find(t =>
+      String(t.truckNumber || t.number || '').trim().toLowerCase() === num
+    );
+    return match
+      ? { truckId: match.id, truckNumber: match.truckNumber || match.number }
+      : { truckId: undefined, truckNumber: String(row.truckNumber).trim() };
+  };
+
+  const resolveTrailer = (row: any) => {
+    if (row.trailerId && trailers.some(t => t.id === row.trailerId)) {
+      const t = trailers.find(x => x.id === row.trailerId)!;
+      return { trailerId: t.id, trailerNumber: t.trailerNumber || t.number };
+    }
+    const num = String(row.trailerNumber || '').trim().toLowerCase();
+    if (!num) return { trailerId: undefined, trailerNumber: undefined };
+    const match = trailers.find(t =>
+      String(t.trailerNumber || t.number || '').trim().toLowerCase() === num
+    );
+    return match
+      ? { trailerId: match.id, trailerNumber: match.trailerNumber || match.number }
+      : { trailerId: undefined, trailerNumber: String(row.trailerNumber).trim() };
+  };
+
   const importRow = async (type: string, row: any, skipDup: boolean): Promise<string> => {
     try {
       if (type === 'loads') {
-        const loadNumber = row.loadNumber || generateLoadNumber();
-        
+        const loadNumber = String(row.loadNumber || '').trim() || generateLoadNumber();
+
         if (skipDup && loads.find(l => l.loadNumber === loadNumber)) {
           return 'warning';
         }
 
+        const pickupDate = normalizeImportDate(row.pickupDate);
+        const deliveryDate = normalizeImportDate(row.deliveryDate);
+        if (pickupDate && deliveryDate && deliveryDate < pickupDate) {
+          return `Load ${loadNumber}: delivery date is before pickup date`;
+        }
+
+        const driver = resolveDriver(row);
+        const dispatcher = resolveDispatcher(row);
+        const truck = resolveTruck(row);
+        const trailer = resolveTrailer(row);
+
         const newLoad: NewLoadInput = {
+          loadNumber,
           status: LoadStatus.Available,
           customerName: row.customerName || 'Imported Customer',
           originCity: row.originCity || '',
           originState: row.originState || '',
           destCity: row.destCity || '',
           destState: row.destState || '',
-          rate: parseFloat(row.rate || 0),
-          miles: parseFloat(row.miles || 0),
-          pickupDate: '',
-          deliveryDate: '',
-          driverId: '',
-          driverName: ''
+          rate: parseFloat(row.rate || 0) || 0,
+          miles: parseFloat(row.miles || 0) || 0,
+          pickupDate: pickupDate || undefined,
+          deliveryDate: deliveryDate || undefined,
+          driverId: driver.driverId,
+          driverName: driver.driverName,
+          dispatcherId: dispatcher.dispatcherId,
+          dispatcherName: dispatcher.dispatcherName,
+          truckId: truck.truckId,
+          truckNumber: truck.truckNumber,
+          trailerId: trailer.trailerId,
+          trailerNumber: trailer.trailerNumber,
         };
 
-        addLoad(newLoad);
+        await Promise.resolve(addLoad(newLoad));
         return 'success';
       } else if (type === 'drivers') {
         if (!row.firstName || !row.lastName) {
           return 'Missing required fields: firstName, lastName';
         }
 
-        if (skipDup && employees.find(e => 
+        if (skipDup && employees.find(e =>
           e.firstName === row.firstName && e.lastName === row.lastName)) {
           return 'warning';
         }
@@ -287,7 +400,7 @@ const Import: React.FC = () => {
           status: 'active'
         };
 
-        addEmployee(newEmployee);
+        await Promise.resolve(addEmployee(newEmployee));
         return 'success';
       } else if (type === 'expenses') {
         if (!row.amount || !row.type) {
@@ -298,13 +411,13 @@ const Import: React.FC = () => {
           type: row.type,
           category: row.type,
           amount: parseFloat(row.amount || 0),
-          date: row.date || new Date().toISOString().split('T')[0],
+          date: normalizeImportDate(row.date) || new Date().toISOString().split('T')[0],
           description: row.description || '',
           paidBy: 'company',
           status: 'pending'
         };
 
-        addExpense(newExpense);
+        await Promise.resolve(addExpense(newExpense));
         return 'success';
       } else if (type === 'customers') {
         if (!row.name) {
@@ -326,14 +439,14 @@ const Import: React.FC = () => {
           notes: row.notes || ''
         };
 
-        addBroker(newBroker);
+        await Promise.resolve(addBroker(newBroker));
         return 'success';
       } else if (type === 'fleet') {
         if (!row.truckNumber) {
           return 'Missing required field: truckNumber';
         }
 
-        if (skipDup && trucks.find(t => t.number === row.truckNumber)) {
+        if (skipDup && trucks.find(t => t.number === row.truckNumber || t.truckNumber === row.truckNumber)) {
           return 'warning';
         }
 
@@ -350,7 +463,7 @@ const Import: React.FC = () => {
           ownership: 'owned' // Alias
         };
 
-        addTruck(newTruck);
+        await Promise.resolve(addTruck(newTruck));
         return 'success';
       }
       return 'success';
@@ -442,7 +555,7 @@ const Import: React.FC = () => {
 
   const downloadTemplate = () => {
     const templates: { [key: string]: string[][] } = {
-      loads: [["Load Number", "Origin City", "Origin State", "Destination City", "Destination State", "Rate", "Miles", "Customer Name"]],
+      loads: [["Load Number", "Origin City", "Origin State", "Destination City", "Destination State", "Rate", "Miles", "Customer Name", "Pickup Date", "Delivery Date", "Driver Name", "Dispatcher Name", "Truck Number", "Trailer Number"]],
       drivers: [["First Name", "Last Name", "Phone", "Email", "Employee Type"]],
       expenses: [["Type", "Amount", "Date", "Description"]],
       customers: [["Name", "Address", "City", "State", "Zip Code", "Phone", "Email"]],

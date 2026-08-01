@@ -13,7 +13,7 @@ import {
   calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
 } from '../services/businessLogic';
-import { parseDateOnlyLocal } from '../utils/dateOnly';
+import { parseDateOnlyLocal, tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { allocateSettlementToPeriod } from '../services/settlementPeriod';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -78,15 +78,76 @@ const Reports: React.FC = () => {
     return { start, end };
   };
 
+  const getPreviousDateRange = (period: PeriodType): { start: Date; end: Date } | null => {
+    const now = new Date();
+    switch (period) {
+      case 'current_month':
+        return {
+          start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+          end: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999),
+        };
+      case 'last_month':
+        return {
+          start: new Date(now.getFullYear(), now.getMonth() - 2, 1),
+          end: new Date(now.getFullYear(), now.getMonth() - 1, 0, 23, 59, 59, 999),
+        };
+      case 'current_quarter': {
+        const q = Math.floor(now.getMonth() / 3);
+        const prevQ = q === 0 ? 3 : q - 1;
+        const year = q === 0 ? now.getFullYear() - 1 : now.getFullYear();
+        return {
+          start: new Date(year, prevQ * 3, 1),
+          end: new Date(year, prevQ * 3 + 3, 0, 23, 59, 59, 999),
+        };
+      }
+      case 'current_year':
+        return {
+          start: new Date(now.getFullYear() - 1, 0, 1),
+          end: new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999),
+        };
+      case 'custom_month': {
+        const [y, m] = customMonth.split('-').map(Number);
+        return {
+          start: new Date(y, m - 2, 1),
+          end: new Date(y, m - 1, 0, 23, 59, 59, 999),
+        };
+      }
+      case 'custom_range': {
+        if (!customStart) return null;
+        const start = tryParseDateOnlyLocal(customStart);
+        if (!start) return null;
+        const end = customEnd ? tryParseDateOnlyLocal(customEnd) : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        if (!end) return null;
+        end.setHours(23, 59, 59, 999);
+        const dayMs = 24 * 60 * 60 * 1000;
+        const spanDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / dayMs) + 1);
+        const prevEnd = new Date(start.getTime() - dayMs);
+        prevEnd.setHours(23, 59, 59, 999);
+        const prevStart = new Date(prevEnd.getTime() - (spanDays - 1) * dayMs);
+        prevStart.setHours(0, 0, 0, 0);
+        return { start: prevStart, end: prevEnd };
+      }
+      default:
+        return null;
+    }
+  };
+
+  const isInPeriod = (raw: string | undefined, start: Date | null, end: Date): boolean => {
+    const date = tryParseDateOnlyLocal(raw || '');
+    if (!date) return false;
+    if (!start) return date <= end;
+    return date >= start && date <= end;
+  };
+
   // Filter data by period
   const { start: periodStart, end: periodEnd } = getDateRange(reportPeriod);
   const filteredLoads = useMemo(() => {
-    if (!periodStart) return loads;
-    return loads.filter(load => {
-      // Use local date parsing to avoid timezone shift bug
-      const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
-      return date >= periodStart && date <= periodEnd;
-    });
+    if (!periodStart) {
+      return loads.filter(load => tryParseDateOnlyLocal(load.deliveryDate || load.pickupDate || '') !== null);
+    }
+    return loads.filter(load =>
+      isInPeriod(load.deliveryDate || load.pickupDate || '', periodStart, periodEnd)
+    );
   }, [loads, periodStart, periodEnd]);
 
   // Filter settlements by the delivery dates of their loads, NOT by settlement creation date
@@ -124,22 +185,19 @@ const Reports: React.FC = () => {
       }
 
       // Include settlement if ANY of its loads were delivered in the period
-      return settlementLoads.some(load => {
-        // Use local date parsing to avoid timezone shift bug
-        const deliveryDate = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
-        if (isNaN(deliveryDate.getTime())) return false;
-        return deliveryDate >= periodStart && deliveryDate <= periodEnd;
-      });
+      return settlementLoads.some(load =>
+        isInPeriod(load.deliveryDate || load.pickupDate || '', periodStart, periodEnd)
+      );
     });
   }, [settlements, loads, periodStart, periodEnd]);
 
   const filteredExpenses = useMemo(() => {
-    if (!periodStart) return expenses;
-    return expenses.filter(expense => {
-      // Use local date parsing to avoid timezone shift bug
-      const date = parseDateOnlyLocal(expense.date || expense.createdAt || '');
-      return date >= periodStart && date <= periodEnd;
-    });
+    if (!periodStart) {
+      return expenses.filter(expense => tryParseDateOnlyLocal(expense.date || expense.createdAt || '') !== null);
+    }
+    return expenses.filter(expense =>
+      isInPeriod(expense.date || expense.createdAt || '', periodStart, periodEnd)
+    );
   }, [expenses, periodStart, periodEnd]);
 
   // Calculate report data
@@ -262,7 +320,6 @@ const Reports: React.FC = () => {
       // Office expenses (rent, utilities, software, accounting, legal, marketing)
       office: companyExpenses.filter(e => {
         const type = (e.type || '').toLowerCase();
-        const category = (e.category || '').toLowerCase();
         const description = (e.description || '').toLowerCase();
         return type === 'other' && (
           description.includes('office') || description.includes('rent') ||
@@ -294,6 +351,7 @@ const Reports: React.FC = () => {
           type === 'fuel' || category === 'fuel' ||
           type === 'insurance' || category === 'insurance' ||
           type === 'maintenance' || category === 'maintenance' ||
+          type.includes('repair') || category.includes('repair') ||
           type === 'permit' || category === 'permit' ||
           type === 'eld' || category === 'eld' ||
           type === 'toll' || category === 'toll' ||
@@ -315,16 +373,24 @@ const Reports: React.FC = () => {
 
     // Note: dispatcherCost, netProfit, and profitMargin will be calculated after dispatcherReports is defined
 
-    // Monthly revenue (use local date parsing to avoid timezone bug)
-    const monthlyRevenue = Array(12).fill(0);
-    const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    // Monthly revenue keyed by YYYY-MM so cross-year periods don't merge months
+    const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthlyRevenueMap: Record<string, number> = {};
     revenueLoads.forEach(load => {
-      const date = parseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
-      const month = date.getMonth();
-      if (!isNaN(month)) {
-        monthlyRevenue[month] += getLoadRevenue(load);
-      }
+      const date = tryParseDateOnlyLocal(load.deliveryDate || load.pickupDate || '');
+      if (!date) return;
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      monthlyRevenueMap[key] = (monthlyRevenueMap[key] || 0) + getLoadRevenue(load);
     });
+    const monthlyKeys = Object.keys(monthlyRevenueMap).sort();
+    const monthlyRevenue = {
+      labels: monthlyKeys.map(k => {
+        const [year, mo] = k.split('-');
+        return `${monthShort[Number(mo) - 1]} ${year}`;
+      }),
+      values: monthlyKeys.map(k => monthlyRevenueMap[k]),
+      keys: monthlyKeys,
+    };
 
     // Load status distribution
     const statusCounts = {
@@ -460,9 +526,8 @@ const Reports: React.FC = () => {
 
     // Factoring fees from factored loads and/or factored invoices
     const periodInvoices = invoices.filter(inv => {
-      if (!periodStart) return true;
-      const d = parseDateOnlyLocal(inv.date || inv.createdAt || '');
-      return d >= periodStart && d <= periodEnd;
+      if (!periodStart) return tryParseDateOnlyLocal(inv.date || inv.createdAt || '') !== null;
+      return isInPeriod(inv.date || inv.createdAt || '', periodStart, periodEnd);
     });
     const factoringExpenses = calculateFactoringFees(revenueLoads, periodInvoices, factoringCompanies);
 
@@ -489,7 +554,7 @@ const Reports: React.FC = () => {
       expenseBreakdown,
       netProfit,
       profitMargin,
-      monthlyRevenue: { labels: monthLabels, values: monthlyRevenue },
+      monthlyRevenue,
       loadStatus: { labels: Object.keys(statusCounts), values: Object.values(statusCounts) },
       customers: topCustomers,
       // New reporting fields
@@ -501,6 +566,17 @@ const Reports: React.FC = () => {
       factoringExpenses,
     };
   }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, employees, settlements, loads, invoices, factoringCompanies, periodStart, periodEnd]);
+
+  const revenueChangePct = useMemo(() => {
+    const prev = getPreviousDateRange(reportPeriod);
+    if (!prev) return null;
+    const prevRevenue = loads
+      .filter(l => isRevenueLoadStatus(l.status))
+      .filter(l => isInPeriod(l.deliveryDate || l.pickupDate || '', prev.start, prev.end))
+      .reduce((sum, l) => sum + getLoadRevenue(l), 0);
+    if (prevRevenue <= 0) return null;
+    return ((reportData.revenue - prevRevenue) / prevRevenue) * 100;
+  }, [loads, reportPeriod, reportData.revenue]);
 
   // Format currency
   const formatCurrency = (amount: number): string => {
@@ -669,11 +745,15 @@ const Reports: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center text-sm">
-                <span className="text-emerald-600 flex items-center">
-                  <ArrowUp size={14} className="mr-1" />
-                  +12%
-                </span>
-                <span className="text-slate-500 ml-2">This period</span>
+                {revenueChangePct !== null ? (
+                  <span className={`flex items-center ${revenueChangePct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {revenueChangePct >= 0 ? <ArrowUp size={14} className="mr-1" /> : <ArrowDown size={14} className="mr-1" />}
+                    {revenueChangePct >= 0 ? '+' : ''}{revenueChangePct.toFixed(1)}%
+                  </span>
+                ) : (
+                  <span className="text-slate-400">—</span>
+                )}
+                <span className="text-slate-500 ml-2">vs previous period</span>
               </div>
             </div>
 
@@ -951,19 +1031,21 @@ const Reports: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {reportData.monthlyRevenue.labels.map((label, i) => {
+                  {reportData.monthlyRevenue.keys.map((key, i) => {
                     const revenue = reportData.monthlyRevenue.values[i];
+                    const [y, mo] = key.split('-').map(Number);
                     const monthLoadsList = filteredLoads.filter(l => {
-                      const date = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
-                      return date.getMonth() === i && isRevenueLoadStatus(l.status);
+                      const date = tryParseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+                      if (!date) return false;
+                      return date.getFullYear() === y && date.getMonth() + 1 === mo && isRevenueLoadStatus(l.status);
                     });
                     const monthLoads = monthLoadsList.length;
                     const monthMiles = monthLoadsList.reduce((sum, l) => sum + getLoadMiles(l), 0);
                     const avgRate = monthMiles > 0 ? revenue / monthMiles : 0;
 
                     return (
-                      <tr key={label} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-sm font-medium text-slate-900">{label}</td>
+                      <tr key={key} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-sm font-medium text-slate-900">{reportData.monthlyRevenue.labels[i]}</td>
                         <td className="px-4 py-3 text-sm text-slate-900">{formatCurrency(revenue)}</td>
                         <td className="px-4 py-3 text-sm text-slate-900">{monthLoads}</td>
                         <td className="px-4 py-3 text-sm text-slate-900">{monthMiles.toLocaleString()}</td>
@@ -1016,7 +1098,6 @@ const Reports: React.FC = () => {
               <div className="h-64">
                 <ResponsiveContainer width="100%" height={256}>
                   <AreaChart data={(() => {
-                    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                     const now = new Date();
                     const data: { name: string; value: number }[] = [];
 
@@ -1027,16 +1108,14 @@ const Reports: React.FC = () => {
                       monthEnd.setHours(23, 59, 59, 999);
 
                       const monthExpenses = filteredExpenses.filter(exp => {
-                        // Use local date parsing to avoid timezone bug
-                        const expDate = parseDateOnlyLocal(exp.date || exp.createdAt || '');
+                        const expDate = tryParseDateOnlyLocal(exp.date || exp.createdAt || '');
+                        if (!expDate) return false;
                         return expDate >= monthStart && expDate <= monthEnd;
                       });
 
                       const monthTotal = monthExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-                      data.push({
-                        name: months[date.getMonth()],
-                        value: monthTotal
-                      });
+                      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                      data.push({ name: monthKey, value: monthTotal });
                     }
 
                     return data;

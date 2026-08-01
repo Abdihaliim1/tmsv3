@@ -260,7 +260,7 @@ const Fleet: React.FC = () => {
         return d >= startDate && d <= endDate;
       });
       const truckExpenses = expenses.filter(e => {
-        if (e.status === 'rejected') return false;
+        if (e.status === 'rejected' || e.status === 'pending') return false;
         if (e.truckId !== truck.id && e.truckNumber !== truckNumber && e.truckNumber !== truck.number) {
           return false;
         }

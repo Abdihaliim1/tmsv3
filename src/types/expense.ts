@@ -20,6 +20,8 @@ export interface Expense {
   truckNumber?: string;
   loadId?: string;
   amount: number;
+  /** Fuel quantity in gallons when recorded on the expense */
+  gallons?: number;
   status: 'pending' | 'approved' | 'rejected';
   receipt?: string;
   vendor?: string;

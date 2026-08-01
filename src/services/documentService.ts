@@ -594,7 +594,7 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
     return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
   }
 
-  // Soft warnings: POD/BOL preferred but do not block Create (confirm in UI)
+  // POD + BOL are required before invoicing (hard block)
   const documents = load.documents || [];
   const hasPOD =
     !!load.podNumber ||
@@ -614,8 +614,8 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
   if (!hasBOL) missing.push('BOL');
   if (missing.length > 0) {
     return {
-      canInvoice: true,
-      reason: `Missing paperwork: ${missing.join(' + ')}`,
+      canInvoice: false,
+      reason: `Missing required paperwork: ${missing.join(' + ')}`,
     };
   }
 

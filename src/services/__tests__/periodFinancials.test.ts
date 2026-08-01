@@ -64,6 +64,19 @@ describe('isCompanyRecognizedExpense', () => {
     expect(isCompanyRecognizedExpense(zero)).toBe(false);
   });
 
+  it('excludes pending expenses from company P&L', () => {
+    const pending = {
+      id: 'e3',
+      date: '2026-07-01',
+      type: 'fuel',
+      description: 'Diesel',
+      amount: 100,
+      status: 'pending',
+      paidBy: 'company',
+    } as Expense;
+    expect(isCompanyRecognizedExpense(pending)).toBe(false);
+  });
+
   it('excludes O/O pass-through fuel', () => {
     const oo = makeDriver('d1', 'OwnerOperator');
     const fuel = {

@@ -252,7 +252,7 @@ export function filterRevenueLoadsInPeriod(
 
 /**
  * Company P&L expense recognition:
- * - exclude rejected
+ * - exclude pending and rejected
  * - exclude non-positive amounts
  * - company / tracked_only / unset paidBy only
  * - exclude O/O pass-through (fuel, insurance, toll, maintenance, ELD)
@@ -261,7 +261,7 @@ export function isCompanyRecognizedExpense(
   exp: Expense,
   drivers: Driver[] = []
 ): boolean {
-  if (exp.status === 'rejected') return false;
+  if (exp.status === 'pending' || exp.status === 'rejected') return false;
   const amount = coerceMoney(exp.amount);
   if (amount <= 0) return false;
 
@@ -1019,28 +1019,9 @@ export function calculatePeriodProfit(
     return expenseDate >= periodStart && expenseDate <= periodEnd;
   });
 
-  // Only include company-paid expenses (exclude O/O pass-through)
-  const companyExpenses = periodExpenses.filter(exp => {
-    if (exp.paidBy !== 'company' && exp.paidBy !== 'tracked_only' && exp.paidBy) {
-      return false;
-    }
-    
-    // Exclude O/O pass-through expenses
-    if (exp.driverId) {
-      const driver = drivers.find(d => d.id === exp.driverId);
-      if (driver && driver.type === 'OwnerOperator') {
-        const expenseType = (exp.type || '').toLowerCase();
-        const isPassThrough = 
-          expenseType === 'fuel' || 
-          expenseType === 'insurance' || 
-          expenseType === 'toll' ||
-          expenseType === 'maintenance';
-        if (isPassThrough) return false;
-      }
-    }
-    
-    return true;
-  });
+  const companyExpenses = periodExpenses.filter(exp =>
+    isCompanyRecognizedExpense(exp, drivers)
+  );
 
   const totalExpenses = companyExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 

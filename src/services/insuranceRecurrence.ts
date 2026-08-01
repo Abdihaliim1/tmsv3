@@ -25,8 +25,8 @@ function monthStart(d: Date): Date {
 }
 
 /**
- * Return expense inputs that should be created for the current calendar month
- * (and any missed months from nextGenerationDate → now), without duplicates.
+ * Return expense inputs that should be created for the current calendar month only
+ * (no historical backfill), without duplicates.
  */
 export function buildDueInsuranceExpenses(
   trucks: Truck[],
@@ -54,52 +54,47 @@ export function buildDueInsuranceExpenses(
           : `${truck.insuranceRecurrenceEnd}T12:00:00`))
       : null;
 
-    // Walk from start (or nextGeneration) through asOf month
-    let cursor = truck.insuranceNextGenerationDate
-      ? monthStart(new Date(truck.insuranceNextGenerationDate.includes('T')
+    if (end && asOfMonth > end) continue;
+
+    if (truck.insuranceNextGenerationDate) {
+      const nextGen = monthStart(new Date(truck.insuranceNextGenerationDate.includes('T')
           ? truck.insuranceNextGenerationDate
-          : `${truck.insuranceNextGenerationDate}T12:00:00`))
-      : start;
+          : `${truck.insuranceNextGenerationDate}T12:00:00`));
+      if (nextGen > asOfMonth) continue;
+    }
 
-    if (cursor < start) cursor = start;
+    const cursor = asOfMonth;
+    const key = `${truck.id}|insurance|${ymKey(cursor.getFullYear(), cursor.getMonth())}`;
+    const exists = expenses.some(e => e.recurrenceKey === key) ||
+      expenses.some(e =>
+        e.truckId === truck.id &&
+        e.type === 'insurance' &&
+        (e.date || '').startsWith(ymKey(cursor.getFullYear(), cursor.getMonth()))
+      );
 
-    while (cursor <= asOfMonth) {
-      if (end && cursor > end) break;
+    if (!exists) {
+      const truckNumber = truck.number || truck.truckNumber || 'Unknown';
+      const driverId = truck.assignedDriver || truck.ownerOperatorDriverId || truck.driverId;
+      const driver = driverId ? drivers.find(d => d.id === driverId) : undefined;
+      const monthLabel = cursor.toLocaleString('default', { month: 'long', year: 'numeric' });
+      const dateStr = `${ymKey(cursor.getFullYear(), cursor.getMonth())}-01`;
 
-      const key = `${truck.id}|insurance|${ymKey(cursor.getFullYear(), cursor.getMonth())}`;
-      const exists = expenses.some(e => e.recurrenceKey === key) ||
-        expenses.some(e =>
-          e.truckId === truck.id &&
-          e.type === 'insurance' &&
-          (e.date || '').startsWith(ymKey(cursor.getFullYear(), cursor.getMonth()))
-        );
-
-      if (!exists) {
-        const truckNumber = truck.number || truck.truckNumber || 'Unknown';
-        const driverId = truck.assignedDriver || truck.ownerOperatorDriverId || truck.driverId;
-        const driver = driverId ? drivers.find(d => d.id === driverId) : undefined;
-        const monthLabel = cursor.toLocaleString('default', { month: 'long', year: 'numeric' });
-        const dateStr = `${ymKey(cursor.getFullYear(), cursor.getMonth())}-01`;
-
-        created.push({
-          type: 'insurance',
-          category: 'insurance',
-          amount: cost,
-          description: `Monthly Insurance - Truck ${truckNumber} (${monthLabel})`,
-          driverId: driver?.id,
-          driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
-          truckId: truck.id,
-          truckNumber,
-          vendor: 'Insurance Provider',
-          paidBy: 'company',
-          status: 'approved',
-          date: dateStr,
-          isRecurring: true,
-          recurrenceKey: key,
-        });
-      }
-
-      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      created.push({
+        type: 'insurance',
+        category: 'insurance',
+        amount: cost,
+        description: `Monthly Insurance - Truck ${truckNumber} (${monthLabel})`,
+        driverId: driver?.id,
+        driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
+        truckId: truck.id,
+        truckNumber,
+        vendor: 'Insurance Provider',
+        paidBy: 'company',
+        status: 'approved',
+        date: dateStr,
+        isRecurring: true,
+        recurrenceKey: key,
+      });
     }
   }
 

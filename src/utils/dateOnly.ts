@@ -39,6 +39,15 @@ export function parseDateOnlyLocal(dateStr: string): Date {
   return new Date(y, m - 1, d, 0, 0, 0, 0);
 }
 
+/** Parse date-only string; returns null for blank/invalid (use in filters to exclude, not match today). */
+export function tryParseDateOnlyLocal(dateStr: string | null | undefined): Date | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const cleanDate = dateStr.split('T')[0];
+  const [y, m, d] = cleanDate.split('-').map(Number);
+  if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
 /**
  * Get month key from a date-only string
  * Returns "YYYY-MM" format based on LOCAL time
@@ -191,6 +200,21 @@ export function isDateWithinDays(dateStr: string, days: number): boolean {
   const future = new Date(now);
   future.setDate(future.getDate() + days);
   return date >= now && date <= future;
+}
+
+/**
+ * Validate delivery is on or after pickup (date-only strings).
+ * Returns an error message when invalid; null when ok or either date is missing.
+ */
+export function assertDeliveryOnOrAfterPickup(
+  pickup?: string,
+  delivery?: string
+): string | null {
+  if (!pickup || !delivery) return null;
+  if (compareDateOnly(delivery, pickup) < 0) {
+    return 'Delivery date cannot be before pickup date';
+  }
+  return null;
 }
 
 

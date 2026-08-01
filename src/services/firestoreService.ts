@@ -381,6 +381,19 @@ export const saveEmployee = (tenantId: string, employee: Employee) => saveDocume
 export const saveTruck = (tenantId: string, truck: Truck) => saveDocument(tenantId, 'trucks', truck);
 export const saveTrailer = (tenantId: string, trailer: Trailer) => saveDocument(tenantId, 'trailers', trailer);
 export const saveExpense = (tenantId: string, expense: Expense) => saveDocument(tenantId, 'expenses', expense);
+
+/** Clear optional expense assignment fields (merge cannot remove with undefined). */
+export async function clearExpenseFields(
+  tenantId: string,
+  expenseId: string,
+  fields: Array<'driverId' | 'driverName' | 'truckId' | 'truckNumber'>
+): Promise<void> {
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  fields.forEach(f => {
+    updates[f] = deleteField();
+  });
+  await updateDocument(tenantId, 'expenses', expenseId, updates);
+}
 export const saveFactoringCompany = (tenantId: string, fc: FactoringCompany) => saveDocument(tenantId, 'factoringCompanies', fc);
 export const saveFactoringTransaction = (tenantId: string, tx: FactoringTransaction) => saveDocument(tenantId, 'factoringTransactions', tx);
 export const saveBroker = (tenantId: string, broker: Broker) => saveDocument(tenantId, 'brokers', broker);
@@ -395,6 +408,41 @@ export const saveTask = (tenantId: string, task: Task) => saveDocument(tenantId,
 // =============================================
 
 export const deleteLoad = (tenantId: string, id: string) => deleteDocument(tenantId, 'loads', id);
+
+/**
+ * Atomically unlink a load from invoices/settlements and delete the load document.
+ */
+export async function deleteLoadWithUnlink(params: {
+  tenantId: string;
+  loadId: string;
+  invoices: Invoice[];
+  settlements: Settlement[];
+}): Promise<void> {
+  const { tenantId, loadId, invoices, settlements } = params;
+  const batch = writeBatch(db);
+  const now = new Date().toISOString();
+
+  for (const inv of invoices) {
+    const updates: Record<string, unknown> = { updatedAt: now };
+    if (inv.loadId === loadId) updates.loadId = deleteField();
+    if (inv.loadIds?.includes(loadId)) {
+      const filtered = inv.loadIds.filter(lid => lid !== loadId);
+      updates.loadIds = filtered.length > 0 ? filtered : deleteField();
+    }
+    batch.update(getDocRef(tenantId, 'invoices', inv.id), updates);
+  }
+  for (const sett of settlements) {
+    const updates: Record<string, unknown> = { updatedAt: now };
+    if (sett.loadId === loadId) updates.loadId = deleteField();
+    if (sett.loadIds?.includes(loadId)) {
+      const filtered = sett.loadIds.filter(lid => lid !== loadId);
+      updates.loadIds = filtered.length > 0 ? filtered : deleteField();
+    }
+    batch.update(getDocRef(tenantId, 'settlements', sett.id), updates);
+  }
+  batch.delete(getDocRef(tenantId, 'loads', loadId));
+  await batch.commit();
+}
 export const deleteInvoice = (tenantId: string, id: string) => deleteDocument(tenantId, 'invoices', id);
 export const deleteSettlement = (tenantId: string, id: string) => deleteDocument(tenantId, 'settlements', id);
 export const deleteEmployee = (tenantId: string, id: string) => deleteDocument(tenantId, 'employees', id);
@@ -507,10 +555,14 @@ export async function deleteInvoiceWithUnlink(params: {
   invoiceId: string;
   loadIds: string[];
   restoredStatusByLoadId?: Record<string, string>;
+  factoringTransactionIds?: string[];
 }): Promise<void> {
-  const { tenantId, invoiceId, loadIds, restoredStatusByLoadId = {} } = params;
+  const { tenantId, invoiceId, loadIds, restoredStatusByLoadId = {}, factoringTransactionIds = [] } = params;
   const batch = writeBatch(db);
   batch.delete(getDocRef(tenantId, 'invoices', invoiceId));
+  for (const txId of factoringTransactionIds) {
+    batch.delete(getDocRef(tenantId, 'factoringTransactions', txId));
+  }
   for (const loadId of loadIds) {
     const updates: Record<string, unknown> = {
       updatedAt: new Date().toISOString(),
