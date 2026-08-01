@@ -338,6 +338,352 @@ const UnitRevenueReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
+const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { loads, trucks, expenses, drivers } = useTMS();
+  return (
+    <MonthScopedReportShell
+      title="Unit Operating Income"
+      subtitle="Revenue minus truck expenses by unit"
+      onBack={onBack}
+    >
+      {({ periodStart, periodEnd }) => {
+        const periodLoads = loads.filter(l => {
+          if (!isRevenueLoadStatus(l.status)) return false;
+          const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+          return d >= periodStart && d <= periodEnd;
+        });
+        const periodExpenses = expenses.filter(e => {
+          if (!isCompanyRecognizedExpense(e, drivers)) return false;
+          const d = parseDateOnlyLocal(String(e.date || e.createdAt || ''));
+          return d >= periodStart && d <= periodEnd;
+        });
+        const byUnit: Record<string, { revenue: number; expenses: number; loads: number; miles: number }> = {};
+        const ensure = (key: string) => {
+          if (!byUnit[key]) byUnit[key] = { revenue: 0, expenses: 0, loads: 0, miles: 0 };
+          return byUnit[key];
+        };
+        periodLoads.forEach(l => {
+          const truck = trucks.find(t => t.id === l.truckId);
+          const key = truck?.number || truck?.truckNumber || l.truckNumber || l.truckId || 'Unassigned';
+          const row = ensure(key);
+          row.revenue += getLoadRevenue(l);
+          row.loads += 1;
+          row.miles += getLoadMiles(l);
+        });
+        periodExpenses.forEach(e => {
+          const truck = trucks.find(t => t.id === e.truckId);
+          const key = truck?.number || truck?.truckNumber || e.truckNumber || e.truckId || 'Unassigned';
+          const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
+          ensure(key).expenses += Number.isFinite(amount) ? amount : 0;
+        });
+        const sorted = Object.entries(byUnit).sort((a, b) => (b[1].revenue - b[1].expenses) - (a[1].revenue - a[1].expenses));
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Unit</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Loads</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Revenue</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Expenses</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Op. Income</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No unit activity this month</td></tr>
+                ) : (
+                  sorted.map(([unit, data]) => {
+                    const income = data.revenue - data.expenses;
+                    return (
+                      <tr key={unit}>
+                        <td className="px-6 py-3 text-sm text-slate-900">{unit}</td>
+                        <td className="px-6 py-3 text-sm text-right text-slate-600">{data.loads}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.revenue)}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.expenses)}</td>
+                        <td className={`px-6 py-3 text-sm text-right font-medium ${income >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                          {fmtMoney(income)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
+const UnitMilesReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { loads, trucks } = useTMS();
+  return (
+    <MonthScopedReportShell
+      title="Unit Miles"
+      subtitle="Loaded miles by truck/unit"
+      onBack={onBack}
+    >
+      {({ periodStart, periodEnd }) => {
+        const periodLoads = loads.filter(l => {
+          if (!isRevenueLoadStatus(l.status)) return false;
+          const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+          return d >= periodStart && d <= periodEnd;
+        });
+        const byUnit: Record<string, { miles: number; loads: number }> = {};
+        periodLoads.forEach(l => {
+          const truck = trucks.find(t => t.id === l.truckId);
+          const key = truck?.number || truck?.truckNumber || l.truckNumber || l.truckId || 'Unassigned';
+          if (!byUnit[key]) byUnit[key] = { miles: 0, loads: 0 };
+          byUnit[key].miles += getLoadMiles(l);
+          byUnit[key].loads += 1;
+        });
+        const sorted = Object.entries(byUnit).sort((a, b) => b[1].miles - a[1].miles);
+        const totalMiles = sorted.reduce((s, [, v]) => s + v.miles, 0);
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b flex justify-between">
+              <span className="font-medium text-slate-700">{sorted.length} units</span>
+              <span className="font-bold">{Math.round(totalMiles).toLocaleString()} mi</span>
+            </div>
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Unit</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Loads</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Miles</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={3} className="px-6 py-8 text-center text-slate-500">No unit miles this month</td></tr>
+                ) : (
+                  sorted.map(([unit, data]) => (
+                    <tr key={unit}>
+                      <td className="px-6 py-3 text-sm text-slate-900">{unit}</td>
+                      <td className="px-6 py-3 text-sm text-right text-slate-600">{data.loads}</td>
+                      <td className="px-6 py-3 text-sm text-right font-medium">{Math.round(data.miles).toLocaleString()}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
+const MilesPerGallonReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { loads, trucks, expenses } = useTMS();
+  return (
+    <MonthScopedReportShell
+      title="Miles per Gallon"
+      subtitle="Estimated MPG from loaded miles and fuel expenses"
+      onBack={onBack}
+    >
+      {({ periodStart, periodEnd }) => {
+        const periodLoads = loads.filter(l => {
+          if (!isRevenueLoadStatus(l.status)) return false;
+          const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+          return d >= periodStart && d <= periodEnd;
+        });
+        const fuelExpenses = expenses.filter(e => {
+          if (e.status === 'rejected') return false;
+          const type = (e.type || '').toLowerCase();
+          const desc = (e.description || '').toLowerCase();
+          if (type !== 'fuel' && !desc.includes('fuel')) return false;
+          const d = parseDateOnlyLocal(String(e.date || e.createdAt || ''));
+          return d >= periodStart && d <= periodEnd;
+        });
+        // Assume ~$3.50/gal when gallons not stored — MPG is estimated
+        const EST_PRICE_PER_GAL = 3.5;
+        const byUnit: Record<string, { miles: number; fuelSpend: number }> = {};
+        const ensure = (key: string) => {
+          if (!byUnit[key]) byUnit[key] = { miles: 0, fuelSpend: 0 };
+          return byUnit[key];
+        };
+        periodLoads.forEach(l => {
+          const truck = trucks.find(t => t.id === l.truckId);
+          const key = truck?.number || truck?.truckNumber || l.truckNumber || l.truckId || 'Unassigned';
+          ensure(key).miles += getLoadMiles(l);
+        });
+        fuelExpenses.forEach(e => {
+          const truck = trucks.find(t => t.id === e.truckId);
+          const key = truck?.number || truck?.truckNumber || e.truckNumber || e.truckId || 'Unassigned';
+          const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
+          ensure(key).fuelSpend += Number.isFinite(amount) ? amount : 0;
+        });
+        const sorted = Object.entries(byUnit)
+          .filter(([, v]) => v.miles > 0 || v.fuelSpend > 0)
+          .sort((a, b) => b[1].miles - a[1].miles);
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <p className="px-6 py-3 text-xs text-slate-500 border-b">
+              Gallons estimated at ${EST_PRICE_PER_GAL.toFixed(2)}/gal when quantity is not recorded on the expense.
+            </p>
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Unit</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Miles</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Fuel $</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Est. Gal</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Est. MPG</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No miles/fuel this month</td></tr>
+                ) : (
+                  sorted.map(([unit, data]) => {
+                    const gallons = data.fuelSpend > 0 ? data.fuelSpend / EST_PRICE_PER_GAL : 0;
+                    const mpg = gallons > 0 ? data.miles / gallons : 0;
+                    return (
+                      <tr key={unit}>
+                        <td className="px-6 py-3 text-sm text-slate-900">{unit}</td>
+                        <td className="px-6 py-3 text-sm text-right">{Math.round(data.miles).toLocaleString()}</td>
+                        <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.fuelSpend)}</td>
+                        <td className="px-6 py-3 text-sm text-right text-slate-600">{gallons > 0 ? gallons.toFixed(1) : '—'}</td>
+                        <td className="px-6 py-3 text-sm text-right font-medium">{mpg > 0 ? mpg.toFixed(1) : '—'}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
+const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { settlements } = useTMS();
+  return (
+    <MonthScopedReportShell
+      title="Dispatcher Settlements"
+      subtitle="Dispatcher settlement totals by payee"
+      onBack={onBack}
+    >
+      {({ periodStart, periodEnd }) => {
+        const rows = settlements.filter(s => {
+          if (s.type !== 'dispatcher') return false;
+          const d = parseDateOnlyLocal(String(s.periodEnd || s.periodStart || s.date || s.createdAt || ''));
+          return d >= periodStart && d <= periodEnd;
+        });
+        const byPayee: Record<string, { count: number; gross: number; net: number; paid: number }> = {};
+        rows.forEach(s => {
+          const key = s.driverName || s.payeeName || s.dispatcherId || 'Unknown';
+          if (!byPayee[key]) byPayee[key] = { count: 0, gross: 0, net: 0, paid: 0 };
+          byPayee[key].count += 1;
+          byPayee[key].gross += s.grossPay || 0;
+          byPayee[key].net += s.netPay || 0;
+          if (s.status === 'paid') byPayee[key].paid += s.netPay || 0;
+        });
+        const sorted = Object.entries(byPayee).sort((a, b) => b[1].gross - a[1].gross);
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b">
+              <span className="font-medium text-slate-700">{rows.length} settlements</span>
+            </div>
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Dispatcher</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Count</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Gross</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Net</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Paid</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No dispatcher settlements this month</td></tr>
+                ) : (
+                  sorted.map(([name, data]) => (
+                    <tr key={name}>
+                      <td className="px-6 py-3 text-sm text-slate-900">{name}</td>
+                      <td className="px-6 py-3 text-sm text-right">{data.count}</td>
+                      <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.gross)}</td>
+                      <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.net)}</td>
+                      <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.paid)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
+const DispatcherManagementReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { loads, employees } = useTMS();
+  return (
+    <MonthScopedReportShell
+      title="Dispatcher Management Report"
+      subtitle="Load volume and booked revenue by dispatcher"
+      onBack={onBack}
+    >
+      {({ periodStart, periodEnd }) => {
+        const periodLoads = loads.filter(l => {
+          if (!isRevenueLoadStatus(l.status)) return false;
+          const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+          return d >= periodStart && d <= periodEnd;
+        });
+        const byDisp: Record<string, { loads: number; revenue: number; commission: number }> = {};
+        periodLoads.forEach(l => {
+          const emp = employees.find(e => e.id === l.dispatcherId);
+          const key =
+            (emp ? `${emp.firstName} ${emp.lastName}` : '') ||
+            l.dispatcherName ||
+            l.dispatcherId ||
+            'Unassigned';
+          if (!byDisp[key]) byDisp[key] = { loads: 0, revenue: 0, commission: 0 };
+          byDisp[key].loads += 1;
+          byDisp[key].revenue += getLoadRevenue(l);
+          byDisp[key].commission += Number(l.dispatcherCommissionAmount) || 0;
+        });
+        const sorted = Object.entries(byDisp).sort((a, b) => b[1].revenue - a[1].revenue);
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Dispatcher</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Loads</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Revenue</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Commission</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-500">No dispatcher activity this month</td></tr>
+                ) : (
+                  sorted.map(([name, data]) => (
+                    <tr key={name}>
+                      <td className="px-6 py-3 text-sm text-slate-900">{name}</td>
+                      <td className="px-6 py-3 text-sm text-right">{data.loads}</td>
+                      <td className="px-6 py-3 text-sm text-right">{fmtMoney(data.revenue)}</td>
+                      <td className="px-6 py-3 text-sm text-right font-medium">{fmtMoney(data.commission)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
 /** Month-selectable operating expense report with category drill-down */
 const MonthlyExpensesReport: React.FC<{ filterType: string; title: string }> = ({ filterType, title }) => {
   const { expenses, trucks, drivers } = useTMS();
@@ -355,7 +701,19 @@ const MonthlyExpensesReport: React.FC<{ filterType: string; title: string }> = (
     return expenses.filter(exp => {
       const d = parseDateOnlyLocal(exp.date || exp.createdAt || '');
       if (d < periodStart || d > periodEnd) return false;
-      if (filterType !== 'all' && exp.type !== filterType) return false;
+      if (filterType === 'reefer_fuel') {
+        const type = (exp.type || '').toLowerCase();
+        const desc = (exp.description || '').toLowerCase();
+        const cat = (exp.category || '').toLowerCase();
+        const isReefer =
+          type === 'reefer_fuel' ||
+          type.includes('reefer') ||
+          desc.includes('reefer') ||
+          cat.includes('reefer');
+        if (!isReefer) return false;
+      } else if (filterType !== 'all' && exp.type !== filterType) {
+        return false;
+      }
       if (truckFilter && exp.truckId !== truckFilter) return false;
       if (driverFilter && exp.driverId !== driverFilter) return false;
       return true;
@@ -1437,95 +1795,35 @@ const ReportsCombined: React.FC = () => {
           />
         );
       case 'dispatcherSettlements':
-        return (
-          <PlaceholderReport
-            title="Dispatcher Settlements"
-            description="Dispatcher settlement reports coming soon."
-            icon={<Users className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <DispatcherSettlementsReport onBack={() => setCurrentReport('menu')} />;
       case 'dispatcherManagement':
-        return (
-          <PlaceholderReport
-            title="Dispatcher Management Report"
-            description="Dispatcher performance metrics coming soon."
-            icon={<ClipboardList className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <DispatcherManagementReport onBack={() => setCurrentReport('menu')} />;
       case 'expenses':
         return <MonthlyExpensesReport filterType="all" title="Expenses Report" />;
       case 'fuelExpenses':
         return <MonthlyExpensesReport filterType="fuel" title="Fuel Expenses" />;
       case 'reeferFuelExpenses':
-        return (
-          <PlaceholderReport
-            title="Reefer Fuel Expenses"
-            description="Refrigeration fuel costs coming soon."
-            icon={<Fuel className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <MonthlyExpensesReport filterType="reefer_fuel" title="Reefer Fuel Expenses" />;
       case 'fuelVendor':
         return <FuelVendorReport onBack={() => setCurrentReport('menu')} />;
       case 'irpStateMiles':
-        return (
-          <PlaceholderReport
-            title="IRP - State Miles"
-            description="State mileage tracking coming soon."
-            icon={<MapPin className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
       case 'quarterlyIFTA':
-        return (
-          <PlaceholderReport
-            title="Quarterly IFTA"
-            description="IFTA quarterly reports coming soon."
-            icon={<FileText className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
       case 'iftaAudit':
-        return (
-          <PlaceholderReport
-            title="IFTA Audit"
-            description="IFTA audit preparation coming soon."
-            icon={<ClipboardList className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
       case 'quarterlyMaintenance':
-        return (
-          <PlaceholderReport
-            title="Quarterly Maintenance"
-            description="Maintenance tracking coming soon."
-            icon={<Wrench className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <MonthlyExpensesReport filterType="maintenance" title="Quarterly Maintenance" />;
       case 'customerReport':
         return <CustomerAnalyticsReport onBack={() => setCurrentReport('menu')} />;
       case 'unitRevenue':
         return <UnitRevenueReport onBack={() => setCurrentReport('menu')} />;
       case 'unitOperatingIncome':
-        return (
-          <PlaceholderReport
-            title="Unit Operating Income"
-            description="Operating income analysis coming soon."
-            icon={<TrendingUp className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UnitOperatingIncomeReport onBack={() => setCurrentReport('menu')} />;
       case 'milesPerGallon':
-        return (
-          <PlaceholderReport
-            title="Miles per Gallon"
-            description="Fuel efficiency metrics coming soon."
-            icon={<PieChart className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <MilesPerGallonReport onBack={() => setCurrentReport('menu')} />;
       case 'unitMiles':
-        return (
-          <PlaceholderReport
-            title="Unit Miles"
-            description="Unit mileage tracking coming soon."
-            icon={<MapPin className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
       default:
         return null;
     }

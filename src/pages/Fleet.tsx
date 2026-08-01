@@ -3,11 +3,26 @@ import { Plus, Truck, CheckCircle, Wrench, Search, Edit, Trash2, X, Calculator, 
 import { useTMS } from '../context/TMSContext';
 import { Truck as TruckType, TruckStatus, TruckOwnership, NewTruckInput, Trailer, TrailerStatus, TrailerType, NewTrailerInput } from '../types';
 import { useDebounce } from '../utils/debounce';
+import { getLoadMiles, getLoadRevenue, isRevenueLoadStatus } from '../services/businessLogic';
+import { parseDateOnlyLocal } from '../utils/dateOnly';
 
 type ViewType = 'trucks' | 'trailers';
 
+type TruckProfitRow = {
+  truckId: string;
+  truckNumber: string;
+  loads: number;
+  miles: number;
+  revenue: number;
+  expenses: number;
+  profit: number;
+};
+
+const fmtMoney = (n: number) =>
+  `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 const Fleet: React.FC = () => {
-  const { trucks, trailers, drivers, addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses } = useTMS();
+  const { trucks, trailers, drivers, loads, addTruck, updateTruck, deleteTruck, addTrailer, updateTrailer, deleteTrailer, addExpense, expenses } = useTMS();
   const [activeView, setActiveView] = useState<ViewType>('trucks');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTruck, setEditingTruck] = useState<TruckType | null>(null);
@@ -23,6 +38,7 @@ const Fleet: React.FC = () => {
   const [profitDateTo, setProfitDateTo] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
+  const [truckProfitRows, setTruckProfitRows] = useState<TruckProfitRow[] | null>(null);
 
   // Filter trucks
   const filteredTrucks = useMemo(() => {
@@ -196,8 +212,14 @@ const Fleet: React.FC = () => {
       return;
     }
 
-    const endDate = new Date(profitDateTo);
+    const startDate = parseDateOnlyLocal(profitDateFrom);
+    const endDate = parseDateOnlyLocal(profitDateTo);
     endDate.setHours(23, 59, 59, 999);
+
+    if (startDate > endDate) {
+      alert('Start date must be on or before end date');
+      return;
+    }
 
     // Filter only company-owned, leased, or financed trucks
     const companyTrucks = trucks.filter(t =>
@@ -209,8 +231,51 @@ const Fleet: React.FC = () => {
       return;
     }
 
-    // This would calculate profitability - for now just show alert
-    alert(`Calculating profitability for ${companyTrucks.length} truck(s) from ${profitDateFrom} to ${profitDateTo}`);
+    const rows: TruckProfitRow[] = companyTrucks.map(truck => {
+      const truckNumber = truck.number || truck.truckNumber || truck.id;
+      const truckLoads = loads.filter(l => {
+        if (!isRevenueLoadStatus(l.status)) return false;
+        const matchesTruck =
+          l.truckId === truck.id ||
+          (!!truckNumber && (l.truckNumber === truckNumber || l.truckNumber === truck.number));
+        if (!matchesTruck) return false;
+        const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+        if (Number.isNaN(d.getTime())) return false;
+        return d >= startDate && d <= endDate;
+      });
+      const truckExpenses = expenses.filter(e => {
+        if (e.status === 'rejected') return false;
+        if (e.truckId !== truck.id && e.truckNumber !== truckNumber && e.truckNumber !== truck.number) {
+          return false;
+        }
+        const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
+        if (!Number.isFinite(amount) || amount <= 0) return false;
+        const d = parseDateOnlyLocal(String(e.date || e.createdAt || ''));
+        if (Number.isNaN(d.getTime())) return false;
+        return d >= startDate && d <= endDate;
+      });
+      const revenue = truckLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
+      const expenseTotal = truckExpenses.reduce((sum, e) => {
+        const amount = typeof e.amount === 'number' ? e.amount : parseFloat(String(e.amount ?? ''));
+        return sum + (Number.isFinite(amount) ? amount : 0);
+      }, 0);
+      const miles = truckLoads.reduce((sum, l) => sum + getLoadMiles(l), 0);
+      return {
+        truckId: truck.id,
+        truckNumber,
+        loads: truckLoads.length,
+        miles,
+        revenue,
+        expenses: expenseTotal,
+        profit: revenue - expenseTotal,
+      };
+    });
+
+    setTruckProfitRows(
+      rows
+        .filter(r => r.loads > 0 || r.expenses > 0)
+        .sort((a, b) => b.profit - a.profit)
+    );
   };
 
   return (
@@ -419,9 +484,64 @@ const Fleet: React.FC = () => {
           </div>
         </div>
         <div className="p-6">
-            <div className="text-center text-slate-500 py-8">
-              Select date range and click "Calculate Profit" to see truck profitability
-            </div>
+            {!truckProfitRows ? (
+              <div className="text-center text-slate-500 py-8">
+                Select date range and click &quot;Calculate Profit&quot; to see truck profitability
+              </div>
+            ) : truckProfitRows.length === 0 ? (
+              <div className="text-center text-slate-500 py-8">
+                No loads or expenses found for company trucks in this date range
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-medium text-slate-500">Truck</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Loads</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Miles</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Revenue</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Expenses</th>
+                      <th className="px-4 py-2 text-right font-medium text-slate-500">Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {truckProfitRows.map(row => (
+                      <tr key={row.truckId}>
+                        <td className="px-4 py-2 font-medium text-slate-900">{row.truckNumber}</td>
+                        <td className="px-4 py-2 text-right">{row.loads}</td>
+                        <td className="px-4 py-2 text-right">{row.miles.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.revenue)}</td>
+                        <td className="px-4 py-2 text-right">{fmtMoney(row.expenses)}</td>
+                        <td className={`px-4 py-2 text-right font-semibold ${row.profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                          {fmtMoney(row.profit)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-50 font-semibold">
+                    <tr>
+                      <td className="px-4 py-2">Total</td>
+                      <td className="px-4 py-2 text-right">
+                        {truckProfitRows.reduce((s, r) => s + r.loads, 0)}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {truckProfitRows.reduce((s, r) => s + r.miles, 0).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.revenue, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.expenses, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {fmtMoney(truckProfitRows.reduce((s, r) => s + r.profit, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

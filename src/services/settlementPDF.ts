@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
-import { Settlement, Employee, Load, FactoringCompany, CompanyProfile } from '../types';
+import { Settlement, Employee, Load, CompanyProfile } from '../types';
 import { yearFromDateOnly } from '../utils/dateOnly';
-import { calculateDriverPay } from './businessLogic';
+import { getLoadRevenue } from './businessLogic';
 
 /** =========================
  *  Helpers - Company Profile to PDF Info
@@ -421,29 +421,43 @@ export const generateDriverSettlementPDF = (
   /** ====== LOAD DETAILS TABLE ====== */
   y = ensurePageSpace(doc, y, 2.0, margin);
 
+  const isDispatcher = settlement.type === 'dispatcher';
+
   drawText(doc, 'LOAD DETAILS', margin, y, { size: FONT_SIZES.header, bold: true });
   y += 0.12;
 
-  const loadCols = ['LOAD #', 'DATE', 'ROUTE', 'COMPANY GROSS', 'DRIVER GROSS SHARE'];
+  const payShareLabel = isDispatcher ? 'DISPATCH COMMISSION' : 'DRIVER GROSS SHARE';
+  const loadCols = ['LOAD #', 'DATE', 'ROUTE', 'COMPANY GROSS', payShareLabel];
   const loadW = [1.05, 1.05, 2.75, 1.15, 1.15];
 
   const headH = drawTableHeader(doc, margin, y, loadW, loadCols);
   y += headH;
 
-  // Handle both new format (settlement.loads) and legacy format (settlement.loadIds)
+  // Prefer immutable settlement.loads snapshot; hydrate display-only fields from live loads
   let settlementLoads = settlement.loads || [];
 
-  // Fallback: if loads array is empty but loadIds exists, build loads array from loadIds
   if (settlementLoads.length === 0 && settlement.loadIds && settlement.loadIds.length > 0) {
     settlementLoads = settlement.loadIds.map(loadId => {
       const load = loads.find(l => l.id === loadId);
       return {
         loadId,
-        basePay: (load as any)?.driverBasePay || 0,
-        detention: (load as any)?.driverDetentionPay || 0,
-        tonu: (load as any)?.tonuFee || 0,
-        layover: (load as any)?.driverLayoverPay || 0,
-        dispatchFee: (load as any)?.dispatcherCommissionAmount || 0
+        loadNumber: load?.loadNumber,
+        deliveryDate: load?.deliveryDate,
+        pickupDate: load?.pickupDate,
+        originCity: load?.originCity,
+        originState: load?.originState,
+        destCity: load?.destCity,
+        destState: load?.destState,
+        companyGross: load ? getLoadRevenue(load) : 0,
+        miles: load?.miles || 0,
+        // Legacy settlements without snapshots: use stored driver pay fields only — never recalculate
+        basePay: isDispatcher
+          ? (load?.dispatcherCommissionAmount || 0)
+          : (load?.driverBasePay || load?.driverTotalGross || 0),
+        detention: load?.driverDetentionPay || 0,
+        tonu: load?.tonuFee || 0,
+        layover: load?.driverLayoverPay || 0,
+        dispatchFee: load?.dispatcherCommissionAmount || 0,
       };
     });
   }
@@ -453,21 +467,30 @@ export const generateDriverSettlementPDF = (
 
   settlementLoads.forEach((li, idx) => {
     const load = loads.find((l) => l.id === li.loadId);
-    if (!load) return;
 
-    const loadAmount = load.rate || load.grandTotal || 0;
-    // Calculate driver pay: use basePay from settlement, then driverBasePay from load, then calculate dynamically
-    let grossPay = li.basePay || (load as any).driverBasePay || 0;
-    if (grossPay === 0 && driver) {
-      grossPay = calculateDriverPay(load, driver);
-    }
+    // Money from snapshot only — never recalculate from live employee rates
+    const rowShare = isDispatcher
+      ? (li.basePay || li.dispatchFee || 0)
+      : (li.basePay || 0);
+    const loadAmount =
+      li.companyGross != null && li.companyGross > 0
+        ? li.companyGross
+        : load
+          ? getLoadRevenue(load)
+          : 0;
+
     totalLoadAmount += loadAmount;
-    totalGrossPay += grossPay;
+    totalGrossPay += rowShare;
 
-    const origin = `${load.originCity || ''}${load.originState ? ', ' + load.originState : ''}`.trim();
-    const dest = `${load.destCity || ''}${load.destState ? ', ' + load.destState : ''}`.trim();
-    // Fix font rendering: Use simple dash instead of arrow to avoid encoding issues
+    const originCity = li.originCity || load?.originCity || '';
+    const originState = li.originState || load?.originState || '';
+    const destCity = li.destCity || load?.destCity || '';
+    const destState = li.destState || load?.destState || '';
+    const origin = `${originCity}${originState ? ', ' + originState : ''}`.trim();
+    const dest = `${destCity}${destState ? ', ' + destState : ''}`.trim();
     const route = origin && dest ? `${origin} - ${dest}` : origin || dest || 'N/A';
+    const loadNumber = li.loadNumber || load?.loadNumber || 'N/A';
+    const dateRaw = li.deliveryDate || li.pickupDate || load?.deliveryDate || load?.pickupDate || '';
 
     y = ensurePageSpace(doc, y, 0.25, margin);
 
@@ -477,11 +500,11 @@ export const generateDriverSettlementPDF = (
       y,
       loadW,
       [
-        load.loadNumber || 'N/A',
-        load.deliveryDate ? formatDate(load.deliveryDate) : load.pickupDate ? formatDate(load.pickupDate) : 'N/A',
+        loadNumber,
+        dateRaw ? formatDate(dateRaw) : 'N/A',
         route,
         formatCurrency(loadAmount),
-        formatCurrency(grossPay),
+        formatCurrency(rowShare),
       ],
       { altFill: idx % 2 === 0, rightCols: [3, 4] }
     );
@@ -509,36 +532,27 @@ export const generateDriverSettlementPDF = (
 
   y += 0.28;
 
-  /** ====== DRIVER PAY FORMULA BOX ====== */
-  // Calculate and display driver pay formula AFTER totals are calculated
+  /** ====== PAY FORMULA BOX (from settlement snapshot totals — not live rates) ====== */
   y = ensurePageSpace(doc, y, 0.6, margin);
-  
+
+  const snapshotGross = settlement.grossPay ?? totalGrossPay;
+  const snapshotMiles = settlement.totalMiles || settlementLoads.reduce((sum, sl) => sum + (sl.miles || 0), 0);
   let driverPayFormula = '';
-  if (driver.payment) {
-    if (driver.payment.type === 'percentage' && driver.payment.percentage !== undefined) {
-      const pct = (driver.payment.percentage * 100).toFixed(1);
-      driverPayFormula = `Company Gross: ${formatCurrency(totalLoadAmount)} | Driver Percentage: ${pct}% | Driver Gross Share: ${formatCurrency(totalGrossPay)}`;
-    } else if (driver.payment.type === 'per_mile' && driver.payment.perMileRate !== undefined) {
-      const totalMiles = settlementLoads.reduce((sum, sl) => {
-        const load = loads.find(l => l.id === sl.loadId);
-        return sum + (load?.miles || 0);
-      }, 0);
-      driverPayFormula = `Total Miles: ${totalMiles.toLocaleString()} | Rate per Mile: ${formatCurrency(driver.payment.perMileRate)} | Driver Gross Share: ${formatCurrency(totalGrossPay)}`;
-    } else if (driver.payment.type === 'flat_rate' && driver.payment.flatRate !== undefined) {
-      driverPayFormula = `Flat Rate per Load: ${formatCurrency(driver.payment.flatRate)} | Number of Loads: ${settlementLoads.length} | Driver Gross Share: ${formatCurrency(totalGrossPay)}`;
-    }
+  if (isDispatcher) {
+    driverPayFormula = `Company Gross: ${formatCurrency(totalLoadAmount)} | Dispatcher Commission: ${formatCurrency(snapshotGross)} | Loads: ${settlementLoads.length}`;
+  } else if (settlement.payType === 'per_mile' && settlement.payRateSnapshot != null) {
+    driverPayFormula = `Total Miles: ${snapshotMiles.toLocaleString()} | Rate: $${settlement.payRateSnapshot.toFixed(2)}/mi | Gross Share: ${formatCurrency(snapshotGross)}`;
+  } else if (settlement.payType === 'percentage' && settlement.payRateSnapshot != null) {
+    const pct = settlement.payRateSnapshot > 1 ? settlement.payRateSnapshot : settlement.payRateSnapshot * 100;
+    driverPayFormula = `Company Gross: ${formatCurrency(totalLoadAmount)} | Rate: ${pct.toFixed(1)}% | Gross Share: ${formatCurrency(snapshotGross)}`;
+  } else if (totalLoadAmount > 0 && snapshotGross > 0) {
+    driverPayFormula = `Company Gross: ${formatCurrency(totalLoadAmount)} | Gross Share: ${formatCurrency(snapshotGross)} | Loads: ${settlementLoads.length}`;
   }
-  
-  // If no formula, show basic calculation
-  if (!driverPayFormula && totalLoadAmount > 0 && totalGrossPay > 0) {
-    const impliedPct = ((totalGrossPay / totalLoadAmount) * 100).toFixed(1);
-    driverPayFormula = `Company Gross: ${formatCurrency(totalLoadAmount)} | Driver Gross Share: ${formatCurrency(totalGrossPay)} (${impliedPct}%)`;
-  }
-  
+
   if (driverPayFormula) {
     const formulaBoxH = 0.40;
     drawBox(doc, { x: margin, y, w: contentW, h: formulaBoxH }, COLORS.blueSoft);
-    drawText(doc, 'DRIVER PAY CALCULATION', margin + contentW / 2, y + 0.12, {
+    drawText(doc, isDispatcher ? 'DISPATCHER PAY CALCULATION' : 'DRIVER PAY CALCULATION', margin + contentW / 2, y + 0.12, {
       size: FONT_SIZES.small,
       bold: true,
       align: 'center',
@@ -720,17 +734,17 @@ export const generateDriverSettlementPDF = (
     y += hRow + 0.22;
   }
 
-  /** ====== SUMMARY BOXES ====== */
-  const grossPay = adjustedGrossPay + totalOtherEarnings;
+  /** ====== SUMMARY BOXES — use immutable settlement totals ====== */
+  const grossPay = settlement.grossPay ?? (adjustedGrossPay + totalOtherEarnings);
   const totalDeductions = settlement.totalDeductions || 0;
-  const netPay = grossPay - totalDeductions;
+  const netPay = settlement.netPay != null ? settlement.netPay : Math.max(0, grossPay - totalDeductions);
 
   y = ensurePageSpace(doc, y, 0.9, margin);
 
   // Totals band with corrected terminology
   const bandH = drawTotalsBand(doc, margin, y, contentW, [
     { label: 'TOTAL COMPANY GROSS', value: formatCurrency(totalLoadAmount) },
-    { label: 'DRIVER GROSS SHARE', value: formatCurrency(totalGrossPay) },
+    { label: isDispatcher ? 'DISPATCH COMMISSION' : 'DRIVER GROSS SHARE', value: formatCurrency(totalGrossPay) },
     { label: 'ACCESSORIALS', value: formatCurrency(totalEarnings + totalOtherEarnings) },
     { label: 'GROSS SETTLEMENT', value: formatCurrency(grossPay) },
   ]);
@@ -753,9 +767,14 @@ export const generateDriverSettlementPDF = (
   y += 0.28;
 
   const currentYear = new Date().getFullYear();
-  const ytd = calculateYTD(allSettlements, settlement.driverId || '', currentYear);
+  const ytdPayeeId = settlement.driverId || settlement.dispatcherId || settlement.payeeId || '';
+  const ytd = calculateYTD(allSettlements, ytdPayeeId, currentYear);
 
-  const ytdCols = ['YTD DRIVER GROSS', 'YTD DEDUCTIONS', 'YTD NET SETTLEMENTS PAID'];
+  const ytdCols = [
+    isDispatcher ? 'YTD DISPATCH GROSS' : 'YTD DRIVER GROSS',
+    'YTD DEDUCTIONS',
+    'YTD NET SETTLEMENTS PAID',
+  ];
   const ytdW = contentW / 3;
   const ytdH = 0.30;
 
@@ -826,8 +845,6 @@ export const generateDriverSettlementPDF = (
   doc.save(filename);
 };
 
-// Generate Dispatcher Settlement PDF (similar improvements)
-// NOTE: Temporarily using driver function - dispatcher function needs to be updated with new constants
 export const generateDispatcherSettlementPDF = (
   settlement: Settlement,
   dispatcher: Employee,
@@ -835,9 +852,14 @@ export const generateDispatcherSettlementPDF = (
   allSettlements: Settlement[],
   companyProfile: CompanyProfile
 ): void => {
-  // For now, use driver function with dispatcher data
-  // TODO: Create dedicated dispatcher template using new drawing primitives
-  generateDriverSettlementPDF(settlement, dispatcher, loads, allSettlements, companyProfile);
+  // Same layout; settlement.type === 'dispatcher' switches labels/columns to commission
+  generateDriverSettlementPDF(
+    { ...settlement, type: 'dispatcher' },
+    dispatcher,
+    loads,
+    allSettlements,
+    companyProfile
+  );
 };
 
 export const generateSettlementPDF = (
@@ -847,11 +869,8 @@ export const generateSettlementPDF = (
   allSettlements: Settlement[],
   companyProfile: CompanyProfile
 ): void => {
-  if ((payee as any).employeeType === 'dispatcher') {
-    // TODO: Apply same template helpers to dispatcher output (same look, different table columns)
-    // For now you can keep your current dispatcher version, or ask me and I'll convert it fully.
-    // Temporarily route to driver function to avoid errors
-    generateDriverSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
+  if (settlement.type === 'dispatcher' || (payee as any).employeeType === 'dispatcher') {
+    generateDispatcherSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
   } else {
     generateDriverSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
   }

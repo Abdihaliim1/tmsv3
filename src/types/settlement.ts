@@ -30,13 +30,26 @@ export interface Settlement {
   // Loads
   loadId?: string;
   loadIds?: string[];
+  /** Immutable per-load snapshot used by PDF/detail (do not recalculate from live loads). */
   loads?: Array<{
     loadId: string;
+    loadNumber?: string;
+    deliveryDate?: string;
+    pickupDate?: string;
+    originCity?: string;
+    originState?: string;
+    destCity?: string;
+    destState?: string;
+    companyGross?: number;
+    miles?: number;
     basePay?: number;
     detention?: number;
     layover?: number;
     tonu?: number;
+    dispatchFee?: number;
   }>;
+  /** Pay rate captured at generation time (per-mile $, percent as stored, or flat). */
+  payRateSnapshot?: number;
   
   // Expenses
   expenseIds?: string[];

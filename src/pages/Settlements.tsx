@@ -10,6 +10,7 @@ import {
   formatDriverPayRate,
   resolveDriverPayment,
   getLoadMiles,
+  getLoadRevenue,
   resolveDispatcherCommission,
 } from '../services/businessLogic';
 import {
@@ -301,6 +302,18 @@ const Settlements: React.FC = () => {
     const settlementLoads: NonNullable<Settlement['loads']> = [];
     let totalMiles = 0;
 
+    const snapshotMeta = (load: typeof selectedLoadsData[number]) => ({
+      loadNumber: load.loadNumber,
+      deliveryDate: load.deliveryDate,
+      pickupDate: load.pickupDate,
+      originCity: load.originCity,
+      originState: load.originState,
+      destCity: load.destCity,
+      destState: load.destState,
+      companyGross: getLoadRevenue(load),
+      miles: getLoadMiles(load),
+    });
+
     if (settlementType === 'dispatcher') {
       const dispatcher = employees.find(e => e.id === selectedDispatcherId);
       selectedLoadsData.forEach(load => {
@@ -308,12 +321,13 @@ const Settlements: React.FC = () => {
         loadPays.push({ basePay: commission });
         settlementLoads.push({
           loadId: load.id,
-          basePay: 0,
+          ...snapshotMeta(load),
+          basePay: commission,
           detention: 0,
           tonu: 0,
           layover: 0,
           dispatchFee: commission,
-        } as any);
+        });
       });
       return { loadPays, totalMiles: 0, settlementLoads };
     }
@@ -346,12 +360,13 @@ const Settlements: React.FC = () => {
       loadPays.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
       settlementLoads.push({
         loadId: load.id,
+        ...snapshotMeta(load),
         basePay,
         detention: detentionPay,
         layover: layoverPay,
         tonu: tonuPay,
         dispatchFee: load.dispatcherCommissionAmount || 0,
-      } as any);
+      });
       totalMiles += getLoadMiles(load);
     });
 
@@ -629,6 +644,17 @@ const Settlements: React.FC = () => {
       const loadPaysLocal: SettlementLoadPay[] = [];
       const settlementLoadsLocal: NonNullable<Settlement['loads']> = [];
       let miles = 0;
+      const snapshotMeta = (load: typeof selectedLoadsData[number]) => ({
+        loadNumber: load.loadNumber,
+        deliveryDate: load.deliveryDate,
+        pickupDate: load.pickupDate,
+        originCity: load.originCity,
+        originState: load.originState,
+        destCity: load.destCity,
+        destState: load.destState,
+        companyGross: getLoadRevenue(load),
+        miles: getLoadMiles(load),
+      });
       if (settlementType === 'dispatcher') {
         const dispatcher = employees.find(e => e.id === selectedDispatcherId);
         selectedLoadsData.forEach(load => {
@@ -636,10 +662,12 @@ const Settlements: React.FC = () => {
           loadPaysLocal.push({ basePay: commission });
           settlementLoadsLocal.push({
             loadId: load.id,
-            basePay: 0,
+            ...snapshotMeta(load),
+            basePay: commission,
             detention: 0,
             tonu: 0,
             layover: 0,
+            dispatchFee: commission,
           });
         });
       } else {
@@ -668,10 +696,12 @@ const Settlements: React.FC = () => {
           loadPaysLocal.push({ basePay, detention: detentionPay, layover: layoverPay, tonu: tonuPay });
           settlementLoadsLocal.push({
             loadId: load.id,
+            ...snapshotMeta(load),
             basePay,
             detention: detentionPay,
             layover: layoverPay,
             tonu: tonuPay,
+            dispatchFee: load.dispatcherCommissionAmount || 0,
           });
           miles += getLoadMiles(load);
         });
@@ -738,12 +768,34 @@ const Settlements: React.FC = () => {
       otherEarnings.push({ type: 'detention', description: 'Detention (manual)', amount: payResult.manualDetention });
     }
 
+    let payType: Settlement['payType'];
+    let payRateSnapshot: number | undefined;
+    if (settlementType === 'driver') {
+      const driver = drivers.find(d => d.id === selectedDriverId);
+      if (driver) {
+        const resolved = resolveDriverPayment(driver);
+        payType = resolved.type;
+        if (resolved.type === 'per_mile') payRateSnapshot = resolved.perMileRate;
+        else if (resolved.type === 'percentage') payRateSnapshot = resolved.percentageDisplay;
+        else if (resolved.type === 'flat_rate') payRateSnapshot = resolved.flatRate;
+      }
+    } else {
+      const dispatcher = employees.find(e => e.id === selectedDispatcherId);
+      const rate = (dispatcher as any)?.commissionRate ?? (dispatcher as any)?.payment?.percentage;
+      if (rate != null && Number.isFinite(Number(rate))) {
+        payType = 'percentage';
+        payRateSnapshot = Number(rate);
+      }
+    }
+
     const newSettlement: Omit<Settlement, 'id'> = {
       settlementNumber,
       type: settlementType,
       driverId: settlementType === 'driver' ? selectedDriverId : undefined,
       dispatcherId: settlementType === 'dispatcher' ? selectedDispatcherId : undefined,
       driverName: `${payee.firstName} ${payee.lastName}`,
+      payType,
+      payRateSnapshot,
       loadIds: loadsToSettle,
       loads: settlementLoads,
       expenseIds: [],

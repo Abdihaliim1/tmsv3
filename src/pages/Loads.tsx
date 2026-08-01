@@ -207,7 +207,7 @@ const ViewLoadModal: React.FC<ViewLoadModalProps> = ({ isOpen, onClose, load, on
           </div>
 
           {/* Accessorials */}
-          {(load.hasFSC || load.hasDetention || load.hasLumper || load.totalAccessorials) && (
+          {!!(load.hasFSC || load.hasDetention || load.hasLumper || (load.totalAccessorials ?? 0) > 0) && (
             <div className="border border-slate-200 rounded-lg p-4">
               <h3 className="text-sm font-semibold text-slate-700 mb-3">Accessorials</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">

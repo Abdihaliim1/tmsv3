@@ -2457,7 +2457,8 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
   /**
    * Link or unlink a load to/from a trip.
-   * When linking, copies trip data (driver, equipment, dates) to the load.
+   * When linking, only fills empty assignment fields from the trip (never overwrites
+   * an existing driver, truck, trailer, dates, or dispatcher).
    * When unlinking (tripId = null), clears the trip reference from the load.
    */
   const linkLoadToTrip = (loadId: string, tripId: string | null) => {
@@ -2483,24 +2484,34 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         return;
       }
 
-      // Copy all relevant trip data to the load
-      const dispatcher = trip.dispatcherId
-        ? employees.find(e => e.id === trip.dispatcherId)
-        : null;
+      // Always set trip link; fill missing fields only from trip
       loadUpdates = {
         ...loadUpdates,
         tripId: trip.id,
         tripNumber: trip.tripNumber,
-        driverId: trip.driverId,
-        driverName: trip.driverName,
-        truckId: trip.truckId,
-        truckNumber: trip.truckNumber,
-        trailerId: trip.trailerId,
-        trailerNumber: trip.trailerNumber,
-        pickupDate: trip.pickupDate,
-        deliveryDate: trip.deliveryDate,
-        ...withDispatcherCommission({}, dispatcher),
       };
+      if (!load.driverId && trip.driverId) {
+        loadUpdates.driverId = trip.driverId;
+        loadUpdates.driverName = trip.driverName;
+      }
+      if (!load.truckId && trip.truckId) {
+        loadUpdates.truckId = trip.truckId;
+        loadUpdates.truckNumber = trip.truckNumber;
+      }
+      if (!load.trailerId && trip.trailerId) {
+        loadUpdates.trailerId = trip.trailerId;
+        loadUpdates.trailerNumber = trip.trailerNumber;
+      }
+      if (!load.pickupDate && trip.pickupDate) {
+        loadUpdates.pickupDate = trip.pickupDate;
+      }
+      if (!load.deliveryDate && trip.deliveryDate) {
+        loadUpdates.deliveryDate = trip.deliveryDate;
+      }
+      if (!load.dispatcherId && trip.dispatcherId) {
+        const dispatcher = employees.find(e => e.id === trip.dispatcherId);
+        Object.assign(loadUpdates, withDispatcherCommission({}, dispatcher));
+      }
 
       logger.info('[TMSContext] Load linked to trip', {
         loadId,
