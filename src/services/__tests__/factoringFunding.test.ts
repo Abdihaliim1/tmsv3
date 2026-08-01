@@ -5,6 +5,7 @@ import {
   getLoadAllocatedFee,
   getLoadExpectedNet,
   getLoadFactoredAmount,
+  getLoadFactoringStatus,
   isLoadFunded,
   summarizeFactoredLoads,
 } from '../factoringFunding';
@@ -90,6 +91,19 @@ describe('factoring fee allocation (Test A)', () => {
     // Per-load fee is share of invoice fee (~$53.63), never $3,217.50
     expect(getLoadAllocatedFee(loads[0], invoice)).toBeCloseTo(53.63, 1);
     expect(getLoadAllocatedFee(loads[0], invoice)).toBeLessThan(100);
+  });
+});
+
+describe('factoring status defaults', () => {
+  it('Available factored load is not_submitted (not Submitted)', () => {
+    const load = makeLoad({
+      id: 'AVAIL',
+      status: LoadStatus.Available,
+      isFactored: true,
+      factoringCompanyId: 'fc1',
+      factoredAmount: 1800,
+    });
+    expect(getLoadFactoringStatus(load)).toBe('not_submitted');
   });
 });
 

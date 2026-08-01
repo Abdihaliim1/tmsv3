@@ -137,6 +137,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     }
 
     try {
+      setUploadProgress(5);
       const document = await uploadEntityDocument({
         tenantId: tenantId || 'default',
         entityType,
@@ -146,7 +147,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         actorUid: user?.uid || 'anonymous',
         expiresAt: showExpirationDate && expirationDate ? expirationDate : undefined,
         tags: [],
-        onProgress: (pct) => setUploadProgress(pct),
+        onProgress: (pct) => setUploadProgress(Math.max(5, pct)),
       });
 
       setUploadProgress(100);

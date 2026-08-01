@@ -111,7 +111,12 @@ export function isLoadHeld(load: Load): boolean {
 export function getLoadFactoringStatus(load: Load): LoadFactoringStatus {
   if (load.factoringStatus) return load.factoringStatus;
   if (load.paymentReceived) return 'funded';
-  if (load.isFactored || load.factoredDate || load.factoringCompanyId) return 'submitted';
+  // isFactored / company alone does NOT mean submitted — only explicit submit signals
+  if (load.factoringInvoiceId || load.factoringPaymentReference) return 'submitted';
+  if (load.factoredDate && (load.invoiceId || load.status === 'invoiced' || load.status === 'paid')) {
+    return 'submitted';
+  }
+  if (load.isFactored || load.factoringCompanyId) return 'not_submitted';
   return 'not_submitted';
 }
 

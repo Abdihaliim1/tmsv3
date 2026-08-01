@@ -285,14 +285,8 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         // factoredAmount = GROSS submitted to factor (fee base). Net = gross − fee.
         const factoredAmount = formData.grandTotal > 0 ? formData.grandTotal : 0;
 
-        // Auto-set factored date to day after delivery if not set
-        let factoredDate = formData.factoredDate;
-        if (!factoredDate && formData.deliveryDate) {
-          const deliveryPlusOne = new Date(formData.deliveryDate);
-          deliveryPlusOne.setDate(deliveryPlusOne.getDate() + 1);
-          factoredDate = deliveryPlusOne.toISOString().split('T')[0];
-        }
-
+        // Do NOT auto-set factoredDate / factoringStatus on create — that marked
+        // Available loads as "Submitted" before paperwork/invoice submission.
         setFormData(prev => ({
           ...prev,
           factoringCompanyId: selectedCompany.id,
@@ -301,7 +295,6 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
           factoringFee: fee,
           factoredAmount,
           expectedNet: factoredAmount > 0 ? factoredAmount - fee : 0,
-          factoredDate: factoredDate || prev.factoredDate,
         }));
       } else if (formData.grandTotal > 0) {
         // No factoring company but has grandTotal - just clear

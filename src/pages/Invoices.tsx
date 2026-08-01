@@ -263,6 +263,8 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
     return date.toISOString().split('T')[0];
   });
   const [remitTo, setRemitTo] = useState('');
+  const [remitSearch, setRemitSearch] = useState('');
+  const [showRemitSuggestions, setShowRemitSuggestions] = useState(false);
   const [note, setNote] = useState('');
   const [selectedLoadIds, setSelectedLoadIds] = useState<string[]>(preSelectedLoadIds);
   const [showShippers, setShowShippers] = useState(false);
@@ -273,6 +275,39 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const [selectedFactoringCompany, setSelectedFactoringCompany] = useState<FactoringCompany | null>(null);
   const [factoringFeePercent, setFactoringFeePercent] = useState(2.5);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const remitOptions = useMemo(() => {
+    const fromFactor = factoringCompanies.map(fc => ({
+      id: fc.id,
+      label: fc.name,
+      detail: [fc.address, fc.city, fc.state, fc.zipCode].filter(Boolean).join(', '),
+      source: 'factoring' as const,
+    }));
+    const fromLoads = Array.from(
+      new Set(
+        loads
+          .map(l => (l.customerName || l.brokerName || '').trim())
+          .filter(Boolean)
+      )
+    ).map((name, idx) => ({
+      id: `cust-${idx}-${name}`,
+      label: name,
+      detail: 'Customer / broker',
+      source: 'customer' as const,
+    }));
+    return [...fromFactor, ...fromLoads];
+  }, [factoringCompanies, loads]);
+
+  const filteredRemitOptions = useMemo(() => {
+    const q = (remitSearch || remitTo).trim().toLowerCase();
+    if (!q) return remitOptions.slice(0, 8);
+    return remitOptions
+      .filter(o =>
+        o.label.toLowerCase().includes(q)
+        || o.detail.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [remitOptions, remitSearch, remitTo]);
 
   // Get uninvoiced loads for this customer
   const customerLoads = useMemo(() => {
@@ -493,7 +528,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
               className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div>
+          <div className="relative">
             <label className="block text-sm font-medium text-slate-700 mb-1">
               Remit To
             </label>
@@ -501,14 +536,56 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
               <input
                 type="text"
                 value={remitTo}
-                onChange={(e) => setRemitTo(e.target.value)}
-                placeholder="Search for name, address..."
+                onChange={(e) => {
+                  setRemitTo(e.target.value);
+                  setRemitSearch(e.target.value);
+                  setShowRemitSuggestions(true);
+                }}
+                onFocus={() => setShowRemitSuggestions(true)}
+                placeholder="Search factoring company or customer..."
                 className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
-              <button className="px-3 py-2 text-blue-600 hover:bg-blue-50 rounded-lg text-sm whitespace-nowrap">
+              <button
+                type="button"
+                onClick={() => {
+                  const name = window.prompt('Remit-to name (factoring company or payee):');
+                  if (!name?.trim()) return;
+                  const address = window.prompt('Address (optional):') || '';
+                  setRemitTo(address.trim() ? `${name.trim()} — ${address.trim()}` : name.trim());
+                  setRemitSearch('');
+                  setShowRemitSuggestions(false);
+                }}
+                className="px-3 py-2 text-blue-600 hover:bg-blue-50 rounded-lg text-sm whitespace-nowrap"
+              >
                 + Create Remit To
               </button>
             </div>
+            {showRemitSuggestions && filteredRemitOptions.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-auto">
+                {filteredRemitOptions.map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-0"
+                    onClick={() => {
+                      setRemitTo(opt.detail ? `${opt.label} — ${opt.detail}` : opt.label);
+                      if (opt.source === 'factoring') {
+                        const company = factoringCompanies.find(fc => fc.id === opt.id);
+                        if (company) {
+                          setIsFactored(true);
+                          setSelectedFactoringCompany(company);
+                          setFactoringFeePercent(company.feePercentage || 2.5);
+                        }
+                      }
+                      setShowRemitSuggestions(false);
+                    }}
+                  >
+                    <div className="text-sm font-medium text-slate-900">{opt.label}</div>
+                    <div className="text-xs text-slate-500">{opt.detail || opt.source}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="md:col-span-2 lg:col-span-1">
             <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -1591,10 +1668,17 @@ const FactoredLoadsTab: React.FC = () => {
     }
   };
 
-  const handleMarkAllFunded = async (invoiceId: string) => {
-    const invoice = invoices.find(inv => inv.id === invoiceId);
-    if (!invoice) return;
-    const siblings = factoredData.filter(d => d.invoice?.id === invoiceId);
+  const handleMarkAllFunded = async (groupKey: { invoiceId?: string; companyId?: string }) => {
+    const siblings = factoredData.filter(d => {
+      if (groupKey.invoiceId) return d.invoice?.id === groupKey.invoiceId;
+      if (groupKey.companyId) {
+        return (d.load.factoringCompanyId || d.invoice?.factoringCompanyId) === groupKey.companyId;
+      }
+      return false;
+    });
+    const invoice = groupKey.invoiceId
+      ? invoices.find(inv => inv.id === groupKey.invoiceId)
+      : undefined;
     const held = siblings.filter(d => isLoadHeld(d.load));
     if (held.length > 0) {
       alert(
@@ -1604,7 +1688,7 @@ const FactoredLoadsTab: React.FC = () => {
     }
     const pending = siblings.filter(d => !isLoadFunded(d.load));
     if (pending.length === 0) {
-      alert('All loads on this invoice are already funded.');
+      alert('All selected loads are already funded.');
       return;
     }
     const totalExpected = pending.reduce(
@@ -1612,9 +1696,12 @@ const FactoredLoadsTab: React.FC = () => {
         s + getLoadExpectedNet(d.load, d.invoice, d.factoringCompany?.feePercentage),
       0
     );
+    const label = invoice?.invoiceNumber
+      || pending[0]?.factoringCompany?.name
+      || 'factored loads';
     if (
       !window.confirm(
-        `Mark all ${pending.length} pending load(s) on ${invoice.invoiceNumber} as funded?\n\n` +
+        `Mark all ${pending.length} pending load(s) (${label}) as funded?\n\n` +
           `Expected net for these loads: ${formatCurrency(totalExpected)}\n\n` +
           `This only funds unfunded loads. Confirm paperwork is complete and payment matches.`
       )
@@ -1629,12 +1716,19 @@ const FactoredLoadsTab: React.FC = () => {
           item.load,
           item.invoice,
           item.factoringCompany?.feePercentage,
-          `Factored-All-${invoice.invoiceNumber}`
+          `Factored-All-${label}`
         );
         await updateLoad(item.load.id, patch, 'Factoring: Mark All Funded');
         nextLoads = nextLoads.map(l => (l.id === item.load.id ? { ...l, ...patch } : l));
       }
-      syncInvoiceFromLoads(invoiceId, nextLoads);
+      if (groupKey.invoiceId) {
+        syncInvoiceFromLoads(groupKey.invoiceId, nextLoads);
+      } else {
+        const invoiceIds = Array.from(new Set(pending.map(p => p.invoice?.id).filter(Boolean))) as string[];
+        for (const invId of invoiceIds) {
+          syncInvoiceFromLoads(invId, nextLoads);
+        }
+      }
     } catch (error) {
       console.error('Mark All Funded failed:', error);
       alert(error instanceof Error ? error.message : 'Failed to mark all funded.');
@@ -1797,13 +1891,30 @@ const FactoredLoadsTab: React.FC = () => {
                   const actualReceived = funded
                     ? (Number(load.actualReceived ?? load.paymentAmount) || expectedNet)
                     : 0;
+                  const companyId = load.factoringCompanyId || invoice?.factoringCompanyId || '';
+                  const invoicePending = invoice
+                    ? filteredFactoredData.filter(
+                        d => d.invoice?.id === invoice.id && !isLoadFunded(d.load) && !isLoadHeld(d.load)
+                      )
+                    : [];
+                  const companyPending = companyId
+                    ? filteredFactoredData.filter(
+                        d =>
+                          (d.load.factoringCompanyId || d.invoice?.factoringCompanyId) === companyId
+                          && !isLoadFunded(d.load)
+                          && !isLoadHeld(d.load)
+                      )
+                    : [];
                   const showMarkAll =
-                    !!invoice &&
-                    filteredFactoredData.some(
-                      d => d.invoice?.id === invoice.id && d.load.id === load.id
-                    ) &&
-                    load.id ===
-                      filteredFactoredData.find(d => d.invoice?.id === invoice.id)?.load.id;
+                    !funded
+                    && !held
+                    && (
+                      (invoicePending.length >= 2
+                        && load.id === invoicePending[0]?.load.id)
+                      || (!invoice
+                        && companyPending.length >= 2
+                        && load.id === companyPending[0]?.load.id)
+                    );
 
                   return (
                     <tr key={load.id} className="hover:bg-slate-50">
@@ -1856,9 +1967,15 @@ const FactoredLoadsTab: React.FC = () => {
                               Hold (paperwork)
                             </button>
                           )}
-                          {showMarkAll && invoice && (
+                          {showMarkAll && (
                             <button
-                              onClick={() => handleMarkAllFunded(invoice.id)}
+                              onClick={() =>
+                                handleMarkAllFunded(
+                                  invoice
+                                    ? { invoiceId: invoice.id }
+                                    : { companyId }
+                                )
+                              }
                               className="text-xs text-slate-600 hover:text-slate-900 underline"
                               title="Requires confirmation; skips held/rejected loads"
                             >

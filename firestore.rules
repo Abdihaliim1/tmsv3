@@ -227,7 +227,7 @@ service cloud.firestore {
         (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
       allow delete: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
     }
     
     // Audit Logs (read-only, no updates/deletes)
@@ -272,7 +272,55 @@ service cloud.firestore {
       allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
       allow write: if request.auth != null && 
         canAccessTenant(tenantId, request.auth.uid) &&
-        (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+    }
+
+    // Factoring Transactions
+    match /tenants/{tenantId}/factoringTransactions/{txId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'accountant');
+    }
+
+    // Planned Loads (Load Planner staging)
+    match /tenants/{tenantId}/plannedLoads/{plannedLoadId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create, update: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow delete: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid));
+    }
+
+    // Trips
+    match /tenants/{tenantId}/trips/{tripId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow create, update: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+      allow delete: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid));
+    }
+
+    // Customers / shippers / consignees (Addresses)
+    match /tenants/{tenantId}/customers/{customerId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'dispatcher');
+    }
+
+    // Remit-to addresses for invoices
+    match /tenants/{tenantId}/remitAddresses/{remitId} {
+      allow read: if request.auth != null && canAccessTenant(tenantId, request.auth.uid);
+      allow write: if request.auth != null &&
+        canAccessTenant(tenantId, request.auth.uid) &&
+        (isAdmin(request.auth.uid) || isPlatformAdmin(request.auth.uid) ||
+         getUserRole(request.auth.uid) == 'dispatcher' ||
+         getUserRole(request.auth.uid) == 'accountant');
     }
   }
 }

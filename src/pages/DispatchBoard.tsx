@@ -476,7 +476,22 @@ const DispatchBoard: React.FC = () => {
     }
   };
 
-  const handleDocumentUploadComplete = (document: TmsDocument) => {
+  const handleDocumentUploadComplete = async (document: TmsDocument) => {
+    if (docUploadLoadId) {
+      const load = loads.find(l => l.id === docUploadLoadId);
+      const patch: Partial<typeof loads[number]> = {
+        documents: [...(load?.documents || []), document],
+      };
+      if (document.type === 'RATE_CON') {
+        patch.rateConUrl = document.url;
+        patch.rateConfirmationUrl = document.url;
+      }
+      try {
+        await updateLoad(docUploadLoadId, patch, 'Document uploaded');
+      } catch (err) {
+        console.error('Failed to sync uploaded document onto load:', err);
+      }
+    }
     toast.success('Document Uploaded', `${document.type.replace('_', ' ')} uploaded successfully`);
     setIsDocUploadModalOpen(false);
     setDocUploadLoadId(null);

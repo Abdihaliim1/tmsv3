@@ -602,6 +602,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       id: newLoadId,
       status: requestedStatus,
       loadNumber,
+      // Factored-at-create stays not_submitted until invoice/factor submission
+      factoringStatus: sanitizedInput.isFactored
+        ? (sanitizedInput.factoringStatus || 'not_submitted')
+        : sanitizedInput.factoringStatus,
+      factoredDate: sanitizedInput.isFactored ? undefined : sanitizedInput.factoredDate,
       createdAt: new Date().toISOString(),
       createdBy: authUser?.uid || 'system',
     } as Load);
@@ -2777,27 +2782,36 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
 
     for (const pl of loadsToDispatch) {
-      const plRec = pl as PlannedLoad & {
-        documents?: Array<{ type?: string }>;
+      // Prefer fresh Firestore copy — local attach can race with save failures
+      let plRec = pl as PlannedLoad & {
+        documents?: Array<{ type?: string; url?: string }>;
         rateConfirmationUrl?: string;
         rateConUrl?: string;
         rateConNumber?: string;
         customer?: { rateConAttached?: boolean };
       };
+      try {
+        const { loadPlannedLoads } = await import('../services/firestoreService');
+        const all = await loadPlannedLoads(tenantId || 'default');
+        const fresh = all.find(p => p.id === pl.id);
+        if (fresh) plRec = { ...plRec, ...fresh };
+      } catch {
+        /* use in-memory copy */
+      }
       const docs = plRec.documents || [];
       const hasRateCon = docs.some(d => {
         const t = String(d.type || '').toUpperCase().replace(/[\s-]/g, '_');
-        return t === 'RATE_CON' || t === 'RATECON';
-      });
-      if (
-        !hasRateCon
-        && !plRec.rateConfirmationUrl
-        && !plRec.rateConUrl
-        && !plRec.rateConNumber
-        && !plRec.customer?.rateConAttached
-      ) {
+        return t === 'RATE_CON' || t === 'RATECON' || t.includes('RATE');
+      }) || Boolean(
+        plRec.rateConfirmationUrl
+        || plRec.rateConUrl
+        || plRec.rateConNumber
+        || plRec.customer?.rateConAttached
+        || docs.some(d => !!d.url && String(d.name || '').toLowerCase().includes('rate'))
+      );
+      if (!hasRateCon) {
         throw new Error(
-          `Rate Confirmation required before dispatching ${pl.systemLoadNumber}`
+          `Rate Confirmation required before dispatching ${pl.systemLoadNumber}. Attach Rate Con on the planned load, wait for “Rate Con Attached”, then try again.`
         );
       }
     }

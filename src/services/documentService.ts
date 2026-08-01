@@ -11,7 +11,7 @@
  * - Missing documents checklist
  */
 
-import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { storage, db } from "../lib/firebase";
 import { TmsDocument, DocumentType, Load, LoadStatus } from "../types";
@@ -119,39 +119,64 @@ export async function uploadEntityDocument(params: {
   const storageRef = ref(storage, storagePath);
 
   const UPLOAD_TIMEOUT_MS = 45_000;
+  const STALL_AT_ZERO_MS = 8_000;
 
   try {
-    // Resumable upload with progress + hard timeout (prevents UI stuck at 90%)
-    const url = await new Promise<string>((resolve, reject) => {
-      const task = uploadBytesResumable(storageRef, params.file);
-      const timer = setTimeout(() => {
-        try { task.cancel(); } catch { /* ignore */ }
-        reject(new Error(
-          'Upload timed out after 45s. Check Firebase Storage bucket/rules (CORS) and try again.'
-        ));
-      }, UPLOAD_TIMEOUT_MS);
+    // Resumable upload; if stuck at 0% (rules/CORS), fall back to uploadBytes
+    let url: string;
+    try {
+      url = await new Promise<string>((resolve, reject) => {
+        const task = uploadBytesResumable(storageRef, params.file);
+        let gotProgress = false;
+        const timer = setTimeout(() => {
+          try { task.cancel(); } catch { /* ignore */ }
+          reject(new Error(
+            'Upload timed out after 45s. Check Firebase Storage bucket/rules (CORS) and try again.'
+          ));
+        }, UPLOAD_TIMEOUT_MS);
+        const stallTimer = setTimeout(() => {
+          if (!gotProgress) {
+            try { task.cancel(); } catch { /* ignore */ }
+            clearTimeout(timer);
+            reject(new Error('UPLOAD_STALLED_AT_ZERO'));
+          }
+        }, STALL_AT_ZERO_MS);
 
-      task.on(
-        'state_changed',
-        (snapShot) => {
-          if (snapShot.totalBytes > 0 && params.onProgress) {
-            params.onProgress(Math.min(95, Math.round((snapShot.bytesTransferred / snapShot.totalBytes) * 100)));
-          }
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-        async () => {
-          clearTimeout(timer);
-          try {
-            resolve(await getDownloadURL(task.snapshot.ref));
-          } catch (e) {
-            reject(e);
-          }
-        },
-      );
-    });
+        task.on(
+          'state_changed',
+          (snapShot) => {
+            if (snapShot.bytesTransferred > 0) gotProgress = true;
+            if (snapShot.totalBytes > 0 && params.onProgress) {
+              params.onProgress(Math.min(95, Math.round((snapShot.bytesTransferred / snapShot.totalBytes) * 100)));
+            }
+          },
+          (err) => {
+            clearTimeout(timer);
+            clearTimeout(stallTimer);
+            reject(err);
+          },
+          async () => {
+            clearTimeout(timer);
+            clearTimeout(stallTimer);
+            try {
+              resolve(await getDownloadURL(task.snapshot.ref));
+            } catch (e) {
+              reject(e);
+            }
+          },
+        );
+      });
+    } catch (resumableErr) {
+      const msg = resumableErr instanceof Error ? resumableErr.message : '';
+      if (msg !== 'UPLOAD_STALLED_AT_ZERO' && !String(msg).includes('storage/unauthorized')) {
+        throw resumableErr;
+      }
+      // Fallback: simple uploadBytes (still needs Storage rules allow)
+      params.onProgress?.(10);
+      const snap = await uploadBytes(storageRef, params.file);
+      params.onProgress?.(90);
+      url = await getDownloadURL(snap.ref);
+    }
 
     // Create document metadata
     const docMeta: TmsDocument = {
@@ -174,18 +199,24 @@ export async function uploadEntityDocument(params: {
 
     // Update entity with new document in Firestore
     const extraFields: Record<string, unknown> = {};
-    if (params.entityType === 'plannedLoad') {
-      if (params.type === 'RATE_CON') {
-        extraFields.rateConUrl = url;
-        extraFields.rateConfirmationUrl = url;
+    if (params.type === 'RATE_CON') {
+      extraFields.rateConUrl = url;
+      extraFields.rateConfirmationUrl = url;
+      if (params.entityType === 'plannedLoad') {
         extraFields.customer = {
           ...(snap.data().customer || {}),
           rateConAttached: true,
         };
       }
-      if (params.type === 'BOL') {
-        extraFields.bolUrl = url;
+    }
+    if (params.type === 'BOL') {
+      extraFields.bolUrl = url;
+      if (params.entityType === 'load' || params.entityType === 'plannedLoad') {
+        extraFields.bolNumber = snap.data().bolNumber || params.file.name;
       }
+    }
+    if (params.type === 'POD' && (params.entityType === 'load')) {
+      extraFields.podNumber = snap.data().podNumber || params.file.name;
     }
     await updateDoc(entityRef, {
       documents: arrayUnion(docMeta),
@@ -206,6 +237,9 @@ export async function uploadEntityDocument(params: {
             loads[loadIndex] = {
               ...loads[loadIndex],
               documents: [...(loads[loadIndex].documents || []), docMeta],
+              ...(params.type === 'RATE_CON'
+                ? { rateConUrl: url, rateConfirmationUrl: url }
+                : {}),
             };
             localStorage.setItem(storageKey, JSON.stringify(loads));
           }

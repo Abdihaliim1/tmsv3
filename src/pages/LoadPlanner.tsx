@@ -1382,22 +1382,20 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
         type: (docType === 'RATE_CON' ? 'rate_con' : 'bol') as 'rate_con' | 'bol',
         uploadedAt: uploaded.uploadedAt,
       };
+      const existingDocs = (load.documents || []).filter(d => d.id !== plannedDoc.id);
       const patch: Partial<PlannedLoad> = {
-        documents: [...(load.documents || []), plannedDoc],
+        documents: [...existingDocs, plannedDoc],
+        rateConUrl: docType === 'RATE_CON' ? uploaded.url : load.rateConUrl,
+        bolUrl: docType === 'BOL' ? uploaded.url : load.bolUrl,
       };
-      if (docType === 'RATE_CON') {
-        patch.rateConUrl = uploaded.url;
-        if (load.customer) {
-          patch.customer = {
-            ...load.customer,
-            rateConAttached: true,
-          } as PlannedLoad['customer'];
-        }
-      } else {
-        patch.bolUrl = uploaded.url;
+      if (docType === 'RATE_CON' && load.customer) {
+        patch.customer = {
+          ...load.customer,
+          rateConAttached: true,
+        };
       }
       updatePlannedLoad(load.id, patch);
-      alert(`${docType === 'RATE_CON' ? 'Rate Confirmation' : 'BOL'} attached successfully.`);
+      alert(`${docType === 'RATE_CON' ? 'Rate Confirmation' : 'BOL'} attached successfully. You can now Add Trip.`);
     } catch (error) {
       console.error('Attach failed:', error);
       alert(error instanceof Error ? error.message : 'Failed to attach document.');

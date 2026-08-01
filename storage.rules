@@ -1,0 +1,30 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isPlatformAdmin() {
+      return isSignedIn()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isPlatformAdmin == true;
+    }
+
+    function isTenantMember(tenantId) {
+      let path = /databases/(default)/documents/users/$(request.auth.uid)/memberships/$(tenantId);
+      return firestore.exists(path)
+        && firestore.get(path).data.active != false;
+    }
+
+    function canAccessTenant(tenantId) {
+      return isSignedIn() && (isPlatformAdmin() || isTenantMember(tenantId));
+    }
+
+    // Tenant document uploads (Rate Con, BOL, POD, receipts, etc.)
+    match /tenants/{tenantId}/{allPaths=**} {
+      allow read: if canAccessTenant(tenantId);
+      allow write: if canAccessTenant(tenantId)
+        && request.resource.size < 25 * 1024 * 1024;
+    }
+  }
+}
