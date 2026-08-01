@@ -44,6 +44,10 @@ import {
   getDispatcherAssignmentFields,
 } from '../services/businessLogic';
 
+/** In-flight guards against double-click / concurrent creates (client-side). */
+const inFlightInvoiceKeys = new Set<string>();
+const inFlightPlannedDispatchIds = new Set<string>();
+
 interface TMSContextType {
   loads: Load[];
   employees: Employee[]; // New: unified employees
@@ -1434,6 +1438,28 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     // DUPLICATE PREVENTION: Check if any of the loads already have an invoice
     const loadIdsToInvoice = input.loadIds || (input.loadId ? [input.loadId] : []);
+    const invoiceFlightKey = proposedNumber
+      ? `inv:${proposedNumber.toLowerCase()}`
+      : `loads:${[...loadIdsToInvoice].sort().join(',')}`;
+    if (inFlightInvoiceKeys.has(invoiceFlightKey)) {
+      throw new Error('Invoice creation already in progress. Please wait.');
+    }
+    for (const loadId of loadIdsToInvoice) {
+      if (inFlightInvoiceKeys.has(`load:${loadId}`)) {
+        throw new Error('One or more selected loads are already being invoiced.');
+      }
+    }
+    inFlightInvoiceKeys.add(invoiceFlightKey);
+    loadIdsToInvoice.forEach(id => inFlightInvoiceKeys.add(`load:${id}`));
+    try {
+      return await addInvoiceInner(input, loadIdsToInvoice);
+    } finally {
+      inFlightInvoiceKeys.delete(invoiceFlightKey);
+      loadIdsToInvoice.forEach(id => inFlightInvoiceKeys.delete(`load:${id}`));
+    }
+  };
+
+  const addInvoiceInner = async (input: Omit<Invoice, 'id'>, loadIdsToInvoice: string[]) => {
 
     if (loadIdsToInvoice.length > 0) {
       // Check if any load is already invoiced
@@ -1794,6 +1820,15 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const addFactoringCompany = (input: NewFactoringCompanyInput) => {
+    const nameKey = (input.name || '').trim().toLowerCase();
+    if (!nameKey) {
+      throw new Error('Factoring company name is required.');
+    }
+    const dup = factoringCompanies.find(c => (c.name || '').trim().toLowerCase() === nameKey);
+    if (dup) {
+      throw new Error(`Factoring company "${input.name.trim()}" already exists. Use a unique name.`);
+    }
+
     const aliases = (input as any).aliases || [];
     const searchKey = generateSearchKey(input.name, aliases);
     const prefixes = generatePrefixes(searchKey);
@@ -1811,6 +1846,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   };
 
   const updateFactoringCompany = (id: string, updates: Partial<FactoringCompany>) => {
+    if (updates.name != null) {
+      const nameKey = updates.name.trim().toLowerCase();
+      const dup = factoringCompanies.find(
+        c => c.id !== id && (c.name || '').trim().toLowerCase() === nameKey
+      );
+      if (dup) {
+        throw new Error(`Factoring company "${updates.name.trim()}" already exists. Use a unique name.`);
+      }
+    }
+
     const company = factoringCompanies.find(c => c.id === id);
     const updatedCompany = company ? { ...company, ...updates, updatedAt: new Date().toISOString() } : null;
 
@@ -2285,6 +2330,24 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       throw new Error(`Cannot dispatch loads that are not in "planned" status: ${nonPlannedLoads.map(pl => pl.systemLoadNumber).join(', ')}`);
     }
 
+    // Claim planned loads before creating live loads (blocks double-dispatch races)
+    for (const pl of loadsToDispatch) {
+      if (inFlightPlannedDispatchIds.has(pl.id)) {
+        throw new Error(`Planned load ${pl.systemLoadNumber} is already being dispatched.`);
+      }
+      const loadNum = pl.customLoadNumber || pl.systemLoadNumber;
+      const alreadyLive = loads.some(
+        l =>
+          l.loadNumber === loadNum &&
+          (l.notes?.includes(pl.systemLoadNumber) || l.notes?.includes(`Planned Load ${pl.systemLoadNumber}`))
+      );
+      if (alreadyLive) {
+        throw new Error(`Live load already exists for planned load ${pl.systemLoadNumber}.`);
+      }
+    }
+    loadsToDispatch.forEach(pl => inFlightPlannedDispatchIds.add(pl.id));
+
+    try {
     // Create the trip
     const tripId = addTrip({
       ...tripData,
@@ -2293,27 +2356,42 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     const tripNumber = trips.find(t => t.id === tripId)?.tripNumber || tripData.tripNumber || '';
 
-    // Update each planned load and create Load entries
+    // Mark all planned loads dispatched in one state update before creating Loads
     const now = new Date().toISOString();
+    setPlannedLoads(prev =>
+      prev.map(pl => {
+        if (!plannedLoadIds.includes(pl.id) || pl.status !== 'planned') return pl;
+        const dispatcher =
+          (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
+          (pl.dispatcherId && employees.find(e => e.id === pl.dispatcherId)) ||
+          null;
+        const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
+        const updated: PlannedLoad = {
+          ...pl,
+          status: 'dispatched',
+          currentStep: 2,
+          tripId,
+          tripNumber,
+          driverId: tripData.driverId,
+          driverName: tripData.driverName,
+          dispatcherId: dispatcherFields.dispatcherId || tripData.dispatcherId || pl.dispatcherId,
+          dispatcherName: dispatcherFields.dispatcherName || tripData.dispatcherName || pl.dispatcherName,
+          updatedAt: now,
+        };
+        savePlannedLoad(tenantId || 'default', updated).catch(e =>
+          console.error('Failed to save planned load after dispatch claim:', e)
+        );
+        return updated;
+      })
+    );
+
+    // Update each planned load and create Load entries
     for (const plannedLoad of loadsToDispatch) {
-      // Update the PlannedLoad status
       const dispatcher =
         (tripData.dispatcherId && employees.find(e => e.id === tripData.dispatcherId)) ||
         (plannedLoad.dispatcherId && employees.find(e => e.id === plannedLoad.dispatcherId)) ||
         null;
       const dispatcherFields = getDispatcherAssignmentFields(dispatcher);
-
-      updatePlannedLoad(plannedLoad.id, {
-        status: 'dispatched',
-        currentStep: 2,
-        tripId,
-        tripNumber,
-        driverId: tripData.driverId,
-        driverName: tripData.driverName,
-        dispatcherId: dispatcherFields.dispatcherId || tripData.dispatcherId || plannedLoad.dispatcherId,
-        dispatcherName: dispatcherFields.dispatcherName || tripData.dispatcherName || plannedLoad.dispatcherName,
-        updatedAt: now,
-      });
 
       // Create a Load entry for the Loads page and Dispatch Board
       // Extract first pickup and delivery info
@@ -2453,6 +2531,9 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     });
 
     return tripId;
+    } finally {
+      loadsToDispatch.forEach(pl => inFlightPlannedDispatchIds.delete(pl.id));
+    }
   };
 
   /**

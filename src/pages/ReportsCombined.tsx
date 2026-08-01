@@ -561,23 +561,27 @@ const MilesPerGallonReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
-const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { settlements } = useTMS();
+const SettlementPayeeReport: React.FC<{
+  onBack: () => void;
+  title: string;
+  subtitle: string;
+  payeeColumn: string;
+  emptyLabel: string;
+  filterSettlements: (s: import('../types').Settlement, drivers: import('../types').Driver[]) => boolean;
+  payeeKey: (s: import('../types').Settlement) => string;
+}> = ({ onBack, title, subtitle, payeeColumn, emptyLabel, filterSettlements, payeeKey }) => {
+  const { settlements, drivers } = useTMS();
   return (
-    <MonthScopedReportShell
-      title="Dispatcher Settlements"
-      subtitle="Dispatcher settlement totals by payee"
-      onBack={onBack}
-    >
+    <MonthScopedReportShell title={title} subtitle={subtitle} onBack={onBack}>
       {({ periodStart, periodEnd }) => {
         const rows = settlements.filter(s => {
-          if (s.type !== 'dispatcher') return false;
+          if (!filterSettlements(s, drivers)) return false;
           const d = parseDateOnlyLocal(String(s.periodEnd || s.periodStart || s.date || s.createdAt || ''));
           return d >= periodStart && d <= periodEnd;
         });
         const byPayee: Record<string, { count: number; gross: number; net: number; paid: number }> = {};
         rows.forEach(s => {
-          const key = s.driverName || s.payeeName || s.dispatcherId || 'Unknown';
+          const key = payeeKey(s);
           if (!byPayee[key]) byPayee[key] = { count: 0, gross: 0, net: 0, paid: 0 };
           byPayee[key].count += 1;
           byPayee[key].gross += s.grossPay || 0;
@@ -593,7 +597,7 @@ const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack 
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Dispatcher</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{payeeColumn}</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Count</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Gross</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Net</th>
@@ -602,7 +606,7 @@ const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack 
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {sorted.length === 0 ? (
-                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">No dispatcher settlements this month</td></tr>
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">{emptyLabel}</td></tr>
                 ) : (
                   sorted.map(([name, data]) => (
                     <tr key={name}>
@@ -622,6 +626,62 @@ const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack 
     </MonthScopedReportShell>
   );
 };
+
+const DispatcherSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <SettlementPayeeReport
+    onBack={onBack}
+    title="Dispatcher Settlements"
+    subtitle="Dispatcher settlement totals by payee"
+    payeeColumn="Dispatcher"
+    emptyLabel="No dispatcher settlements this month"
+    filterSettlements={s => s.type === 'dispatcher'}
+    payeeKey={s => s.driverName || s.payeeName || s.dispatcherId || 'Unknown'}
+  />
+);
+
+const UserSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <SettlementPayeeReport
+    onBack={onBack}
+    title="User Settlements"
+    subtitle="All settlement totals by payee"
+    payeeColumn="Payee"
+    emptyLabel="No settlements this month"
+    filterSettlements={() => true}
+    payeeKey={s => s.driverName || s.payeeName || s.dispatcherId || s.driverId || 'Unknown'}
+  />
+);
+
+const CarrierSettlementsReport: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <SettlementPayeeReport
+    onBack={onBack}
+    title="Carrier Settlements"
+    subtitle="Owner-operator settlement totals"
+    payeeColumn="Carrier / O-O"
+    emptyLabel="No owner-operator settlements this month"
+    filterSettlements={(s, drivers) => {
+      if (s.type !== 'driver') return false;
+      const driver = drivers.find(d => d.id === s.driverId);
+      return driver?.type === 'OwnerOperator';
+    }}
+    payeeKey={s => s.driverName || s.payeeName || s.driverId || 'Unknown'}
+  />
+);
+
+const CarrierPayReport: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <SettlementPayeeReport
+    onBack={onBack}
+    title="Carrier Pay"
+    subtitle="Owner-operator paid and unpaid settlement summary"
+    payeeColumn="Carrier / O-O"
+    emptyLabel="No owner-operator pay this month"
+    filterSettlements={(s, drivers) => {
+      if (s.type !== 'driver') return false;
+      const driver = drivers.find(d => d.id === s.driverId);
+      return driver?.type === 'OwnerOperator';
+    }}
+    payeeKey={s => s.driverName || s.payeeName || s.driverId || 'Unknown'}
+  />
+);
 
 const DispatcherManagementReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { loads, employees } = useTMS();
@@ -1771,29 +1831,11 @@ const ReportsCombined: React.FC = () => {
       case 'profitLoss':
         return <ProfitLossReport onCancel={() => setCurrentReport('menu')} />;
       case 'userSettlements':
-        return (
-          <PlaceholderReport
-            title="User Settlements"
-            description="User settlement reports coming soon."
-            icon={<Users className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <UserSettlementsReport onBack={() => setCurrentReport('menu')} />;
       case 'carrierSettlements':
-        return (
-          <PlaceholderReport
-            title="Carrier Settlements"
-            description="Carrier settlement reports coming soon."
-            icon={<Truck className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <CarrierSettlementsReport onBack={() => setCurrentReport('menu')} />;
       case 'carrierPay':
-        return (
-          <PlaceholderReport
-            title="Carrier Pay"
-            description="Carrier payment summary coming soon."
-            icon={<DollarSign className="w-8 h-8 text-blue-600" />}
-          />
-        );
+        return <CarrierPayReport onBack={() => setCurrentReport('menu')} />;
       case 'dispatcherSettlements':
         return <DispatcherSettlementsReport onBack={() => setCurrentReport('menu')} />;
       case 'dispatcherManagement':

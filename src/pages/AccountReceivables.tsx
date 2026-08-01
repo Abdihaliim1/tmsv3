@@ -483,15 +483,19 @@ const AccountReceivables: React.FC = () => {
       ...companyData,
       name: selectedCompanyName || companyData.name,
     };
-    
-    if (editingCompany) {
-      updateFactoringCompany(editingCompany.id, finalData);
-    } else {
-      addFactoringCompany(finalData);
+
+    try {
+      if (editingCompany) {
+        updateFactoringCompany(editingCompany.id, finalData);
+      } else {
+        addFactoringCompany(finalData);
+      }
+      setIsModalOpen(false);
+      setEditingCompany(null);
+      setSelectedCompanyName('');
+    } catch (error: any) {
+      alert(error?.message || 'Failed to save factoring company');
     }
-    setIsModalOpen(false);
-    setEditingCompany(null);
-    setSelectedCompanyName('');
   };
 
   const formatAddress = (company: FactoringCompany) => {

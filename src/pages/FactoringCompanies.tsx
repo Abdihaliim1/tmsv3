@@ -57,13 +57,17 @@ const FactoringCompanies: React.FC = () => {
   };
 
   const handleSave = (companyData: NewFactoringCompanyInput) => {
-    if (editingCompany) {
-      updateFactoringCompany(editingCompany.id, companyData);
-    } else {
-      addFactoringCompany(companyData);
+    try {
+      if (editingCompany) {
+        updateFactoringCompany(editingCompany.id, companyData);
+      } else {
+        addFactoringCompany(companyData);
+      }
+      setIsModalOpen(false);
+      setEditingCompany(null);
+    } catch (error: any) {
+      alert(error?.message || 'Failed to save factoring company');
     }
-    setIsModalOpen(false);
-    setEditingCompany(null);
   };
 
   const formatAddress = (company: FactoringCompany) => {

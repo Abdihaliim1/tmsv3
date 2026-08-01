@@ -274,6 +274,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const [isFactored, setIsFactored] = useState(false);
   const [selectedFactoringCompany, setSelectedFactoringCompany] = useState<FactoringCompany | null>(null);
   const [factoringFeePercent, setFactoringFeePercent] = useState(2.5);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Get uninvoiced loads for this customer
   const customerLoads = useMemo(() => {
@@ -312,7 +313,8 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const factoringFee = isFactored ? totalAmount * (factoringFeePercent / 100) : 0;
   const netAmount = totalAmount - factoringFee;
 
-  const handleCreateInvoice = () => {
+  const handleCreateInvoice = async () => {
+    if (isSubmitting) return;
     if (selectedLoadIds.length === 0) {
       alert('Please select at least one load to invoice');
       return;
@@ -366,33 +368,39 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       fundingStatus: isFactored ? 'submitted' : undefined,
     };
 
-    addInvoice(newInvoice);
+    setIsSubmitting(true);
+    try {
+      await addInvoice(newInvoice);
 
-    // Mark loads as invoiced, locked, and factored if applicable
-    // TruckingOffice: Once a load has been invoiced, you can no longer edit that dispatch
-    const invoicedAt = new Date().toISOString();
-    selectedLoadIds.forEach(loadId => {
-      const updateData: Partial<Load> = {
-        invoiceId: 'pending',
-        invoiceNumber: finalInvoiceNumber,
-        invoicedAt: invoicedAt,
-        isLocked: true,  // Lock the load to prevent edits (TruckingOffice style)
-        lockedAt: invoicedAt
-      };
-      if (isFactored) {
-        updateData.isFactored = true;
-        updateData.factoringFeePercent = factoringFeePercent;
-        updateData.factoringFee = (selectedLoads.find(l => l.id === loadId)?.grandTotal || 0) * (factoringFeePercent / 100);
-        updateData.factoredDate = new Date().toISOString().split('T')[0];
-        if (selectedFactoringCompany) {
-          updateData.factoringCompanyId = selectedFactoringCompany.id;
-          updateData.factoringCompanyName = selectedFactoringCompany.name;
+      // Mark loads as invoiced, locked, and factored if applicable
+      const invoicedAt = new Date().toISOString();
+      for (const loadId of selectedLoadIds) {
+        const updateData: Partial<Load> = {
+          invoiceId: 'pending',
+          invoiceNumber: finalInvoiceNumber,
+          invoicedAt: invoicedAt,
+          isLocked: true,
+          lockedAt: invoicedAt
+        };
+        if (isFactored) {
+          updateData.isFactored = true;
+          updateData.factoringFeePercent = factoringFeePercent;
+          updateData.factoringFee = (selectedLoads.find(l => l.id === loadId)?.grandTotal || 0) * (factoringFeePercent / 100);
+          updateData.factoredDate = new Date().toISOString().split('T')[0];
+          if (selectedFactoringCompany) {
+            updateData.factoringCompanyId = selectedFactoringCompany.id;
+            updateData.factoringCompanyName = selectedFactoringCompany.name;
+          }
         }
+        await updateLoad(loadId, updateData);
       }
-      updateLoad(loadId, updateData);
-    });
 
-    onSave();
+      onSave();
+    } catch (error: any) {
+      alert(error?.message || 'Failed to create invoice');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -708,10 +716,10 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       <div className="flex items-center gap-4">
         <button
           onClick={handleCreateInvoice}
-          disabled={selectedLoadIds.length === 0}
+          disabled={selectedLoadIds.length === 0 || isSubmitting}
           className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed font-medium"
         >
-          Create Invoice
+          {isSubmitting ? 'Creating…' : 'Create Invoice'}
         </button>
         <button
           onClick={onCancel}
@@ -1903,14 +1911,18 @@ const FactoringCompaniesTab: React.FC = () => {
       name: selectedCompanyName || companyData.name,
     };
 
-    if (editingCompany) {
-      updateFactoringCompany(editingCompany.id, finalData);
-    } else {
-      addFactoringCompany(finalData);
+    try {
+      if (editingCompany) {
+        updateFactoringCompany(editingCompany.id, finalData);
+      } else {
+        addFactoringCompany(finalData);
+      }
+      setIsModalOpen(false);
+      setEditingCompany(null);
+      setSelectedCompanyName('');
+    } catch (error: any) {
+      alert(error?.message || 'Failed to save factoring company');
     }
-    setIsModalOpen(false);
-    setEditingCompany(null);
-    setSelectedCompanyName('');
   };
 
   const formatAddress = (company: FactoringCompany) => {
