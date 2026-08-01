@@ -11,10 +11,16 @@ import { PageType } from '../App';
 interface HeaderProps {
   toggleSidebar: () => void;
   isMobile?: boolean;
+  isSidebarOpen?: boolean;
   onNavigate?: (page: PageType) => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ toggleSidebar, isMobile = false, onNavigate }) => {
+const Header: React.FC<HeaderProps> = ({
+  toggleSidebar,
+  isMobile = false,
+  isSidebarOpen = true,
+  onNavigate,
+}) => {
   const { searchTerm, setSearchTerm, employees, trucks, trailers } = useTMS();
   const { user, logout } = useAuth();
   const { companyProfile, theme } = useCompany();
@@ -102,7 +108,7 @@ const Header: React.FC<HeaderProps> = ({ toggleSidebar, isMobile = false, onNavi
 
   return (
     <header className={`h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 fixed top-0 right-0 left-0 z-30 transition-all duration-300 ${
-      isMobile ? 'ml-0' : 'lg:ml-64'
+      isMobile ? 'ml-0' : isSidebarOpen ? 'lg:ml-64' : 'lg:ml-20'
     }`}>
       <div className="flex items-center gap-4">
         <button 

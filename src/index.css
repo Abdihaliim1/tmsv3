@@ -54,6 +54,39 @@ body {
   color: #0f172a;
 }
 
+/*
+ * App shell scroll lock (Layout mounts .app-shell-lock on <html>):
+ * Prevent document-level rubber-band / overscroll that displaces fixed
+ * sidebar + header and leaves a blank viewport-sized gap above the UI.
+ */
+html.app-shell-lock,
+html.app-shell-lock body {
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior-y: none;
+  overscroll-behavior: none;
+}
+
+html.app-shell-lock #root {
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-shell {
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-shell-main {
+  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  overflow-anchor: none;
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;

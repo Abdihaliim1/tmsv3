@@ -1564,7 +1564,7 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
 
   // Report Generated - Show Results (TruckingOffice Style)
   return (
-    <div className="bg-slate-900 min-h-screen -m-6 p-6">
+    <div className="bg-slate-900 min-h-full -m-6 p-6">
       {/* Action Buttons */}
       <div className="flex items-center gap-3 mb-6">
         <button

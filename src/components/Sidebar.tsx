@@ -42,7 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, currentPage, onNavigate, isMo
 
   return (
     <div
-      className={`fixed left-0 top-0 h-full bg-slate-900 text-white transition-all duration-300 z-40 flex flex-col ${
+      className={`fixed left-0 top-0 h-dvh max-h-dvh bg-slate-900 text-white transition-all duration-300 z-40 flex flex-col overscroll-contain ${
         isMobile
           ? `${isOpen ? 'w-64' : '-translate-x-full'} lg:translate-x-0`
           : isOpen
