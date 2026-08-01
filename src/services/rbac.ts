@@ -25,6 +25,7 @@ const PERMISSIONS: Record<UserRole, RolePermissions> = {
     permissions: [
       { resource: 'loads', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'drivers', actions: ['create', 'read', 'update', 'delete'] },
+      { resource: 'employees', actions: ['create', 'read', 'update', 'delete', 'configure_pay', 'manage_roles'] },
       { resource: 'invoices', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'settlements', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'expenses', actions: ['create', 'read', 'update', 'delete'] },
@@ -40,6 +41,7 @@ const PERMISSIONS: Record<UserRole, RolePermissions> = {
     permissions: [
       { resource: 'loads', actions: ['create', 'read', 'update'] },
       { resource: 'drivers', actions: ['read'] },
+      { resource: 'employees', actions: ['read'] },
       { resource: 'invoices', actions: ['read'] },
       { resource: 'settlements', actions: ['read'] },
       { resource: 'expenses', actions: ['read'] },
@@ -60,6 +62,7 @@ const PERMISSIONS: Record<UserRole, RolePermissions> = {
     role: 'accountant',
     permissions: [
       { resource: 'loads', actions: ['read'] },
+      { resource: 'employees', actions: ['read', 'configure_pay'] },
       { resource: 'invoices', actions: ['create', 'read', 'update'] },
       { resource: 'settlements', actions: ['create', 'read', 'update'] },
       { resource: 'expenses', actions: ['create', 'read', 'update'] },
@@ -72,6 +75,7 @@ const PERMISSIONS: Record<UserRole, RolePermissions> = {
     permissions: [
       { resource: 'loads', actions: ['read'] },
       { resource: 'drivers', actions: ['read'] },
+      { resource: 'employees', actions: ['read'] },
       { resource: 'invoices', actions: ['read'] },
       { resource: 'settlements', actions: ['read'] },
       { resource: 'expenses', actions: ['read'] },

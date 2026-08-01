@@ -1,8 +1,11 @@
 import React, { useState, Suspense, lazy } from 'react';
 import {
   Settings, Users, Truck, MapPin, FileDown, Upload, HelpCircle, MessageSquare,
-  Headphones, User, ClipboardList, ChevronRight, Wrench, UserCircle
+  Headphones, User, ClipboardList, ChevronRight, Wrench, UserCircle, Radio
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useCompany } from '../context/CompanyContext';
+import ExportMenu from '../components/ExportMenu';
 
 // Lazy load existing pages
 const SettingsPage = lazy(() => import('./Settings'));
@@ -42,6 +45,7 @@ type SubPage =
   | 'menu'
   | 'employees'
   | 'drivers'
+  | 'dispatchers'
   | 'fleet'
   | 'units'
   | 'maintenances'
@@ -65,21 +69,30 @@ interface MenuItem {
 
 const SettingsMore: React.FC = () => {
   const [currentSubPage, setCurrentSubPage] = useState<SubPage>('menu');
+  const { user } = useAuth();
+  const { companyProfile } = useCompany();
 
   const menuItems: MenuItem[] = [
     // Team Management
     {
       id: 'employees',
       label: 'Employees',
-      description: 'Manage employee accounts and permissions',
+      description: 'All employees, roles, and permissions',
       icon: <Users className="w-5 h-5" />,
       category: 'Team Management',
     },
     {
       id: 'drivers',
       label: 'Drivers',
-      description: 'Manage driver profiles and assignments',
+      description: 'Drivers and owner-operators only',
       icon: <UserCircle className="w-5 h-5" />,
+      category: 'Team Management',
+    },
+    {
+      id: 'dispatchers',
+      label: 'Dispatchers',
+      description: 'Dispatcher profiles and commissions',
+      icon: <Radio className="w-5 h-5" />,
       category: 'Team Management',
     },
 
@@ -180,17 +193,38 @@ const SettingsMore: React.FC = () => {
 
   const renderSubPage = () => {
     switch (currentSubPage) {
+      case 'employees':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <DriversPage mode="all" />
+          </Suspense>
+        );
       case 'drivers':
         return (
           <Suspense fallback={<PageLoader />}>
-            <DriversPage />
+            <DriversPage mode="drivers" />
+          </Suspense>
+        );
+      case 'dispatchers':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <DriversPage mode="dispatchers" />
           </Suspense>
         );
       case 'fleet':
+      case 'units':
         return (
           <Suspense fallback={<PageLoader />}>
             <FleetPage />
           </Suspense>
+        );
+      case 'maintenances':
+        return (
+          <PlaceholderPage
+            title="Maintenances"
+            description="Track maintenance expenses under Expenses (type: maintenance) and Fleet truck status. Full scheduling calendar is planned next."
+            icon={<Wrench className="w-8 h-8 text-blue-600" />}
+          />
         );
       case 'import':
         return (
@@ -210,51 +244,27 @@ const SettingsMore: React.FC = () => {
             <SettingsPage />
           </Suspense>
         );
-      case 'employees':
+      case 'dataExport':
         return (
-          <PlaceholderPage
-            title="Employees"
-            description="Employee management coming soon. Manage user accounts, roles, and permissions."
-            icon={<Users className="w-8 h-8 text-blue-600" />}
-          />
-        );
-      case 'units':
-        return (
-          <PlaceholderPage
-            title="Units"
-            description="Unit management coming soon. View and manage all fleet units in one place."
-            icon={<Truck className="w-8 h-8 text-blue-600" />}
-          />
-        );
-      case 'maintenances':
-        return (
-          <PlaceholderPage
-            title="Maintenances"
-            description="Maintenance tracking coming soon. Schedule and track maintenance for your fleet."
-            icon={<Wrench className="w-8 h-8 text-blue-600" />}
-          />
+          <div className="bg-white rounded-lg border border-slate-200 p-8 space-y-4">
+            <h2 className="text-2xl font-bold text-slate-900">Data Export</h2>
+            <p className="text-slate-600">Download a tenant snapshot or use the export menu for CSV/JSON backups.</p>
+            <ExportMenu />
+          </div>
         );
       case 'addresses':
         return (
           <PlaceholderPage
             title="Addresses"
-            description="Address management coming soon. Save and organize frequently used addresses."
+            description="Saved address book is planned. Pickup/delivery addresses are currently stored on each load and trip."
             icon={<MapPin className="w-8 h-8 text-blue-600" />}
-          />
-        );
-      case 'dataExport':
-        return (
-          <PlaceholderPage
-            title="Data Export"
-            description="Data export coming soon. Export your data in CSV, Excel, or PDF formats."
-            icon={<FileDown className="w-8 h-8 text-blue-600" />}
           />
         );
       case 'userGuide':
         return (
           <PlaceholderPage
             title="User Guide"
-            description="User guide coming soon. Learn how to use all features of TMS Pro."
+            description="In-app guide coming soon. For now use Support to contact the team."
             icon={<HelpCircle className="w-8 h-8 text-blue-600" />}
           />
         );
@@ -262,25 +272,42 @@ const SettingsMore: React.FC = () => {
         return (
           <PlaceholderPage
             title="FAQ"
-            description="FAQ coming soon. Find answers to common questions."
+            description="FAQ content coming soon."
             icon={<MessageSquare className="w-8 h-8 text-blue-600" />}
           />
         );
       case 'support':
         return (
-          <PlaceholderPage
-            title="Support"
-            description="Support page coming soon. Contact our team for assistance."
-            icon={<Headphones className="w-8 h-8 text-blue-600" />}
-          />
+          <div className="bg-white rounded-lg border border-slate-200 p-8 space-y-3">
+            <h2 className="text-2xl font-bold text-slate-900">Support</h2>
+            <p className="text-slate-600">Need help with SomTMS?</p>
+            <p className="text-sm text-slate-700">Email: <a className="text-blue-600 hover:underline" href="mailto:support@somtms.com">support@somtms.com</a></p>
+            <p className="text-sm text-slate-500">Include your company name and a short description of the issue.</p>
+          </div>
         );
       case 'profile':
         return (
-          <PlaceholderPage
-            title="Profile"
-            description="Profile settings coming soon. View and edit your account details."
-            icon={<User className="w-8 h-8 text-blue-600" />}
-          />
+          <div className="bg-white rounded-lg border border-slate-200 p-8 space-y-4 max-w-xl">
+            <h2 className="text-2xl font-bold text-slate-900">Profile</h2>
+            <dl className="space-y-3 text-sm">
+              <div className="flex justify-between border-b pb-2">
+                <dt className="text-slate-500">Name</dt>
+                <dd className="font-medium text-slate-900">{user?.displayName || '—'}</dd>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <dt className="text-slate-500">Email</dt>
+                <dd className="font-medium text-slate-900">{user?.email || '—'}</dd>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <dt className="text-slate-500">App Role</dt>
+                <dd className="font-medium text-slate-900">{user?.role || '—'}</dd>
+              </div>
+              <div className="flex justify-between border-b pb-2">
+                <dt className="text-slate-500">Company</dt>
+                <dd className="font-medium text-slate-900">{companyProfile?.companyName || '—'}</dd>
+              </div>
+            </dl>
+          </div>
         );
       default:
         return null;
@@ -290,7 +317,6 @@ const SettingsMore: React.FC = () => {
   if (currentSubPage !== 'menu') {
     return (
       <div className="space-y-6">
-        {/* Back Button */}
         <button
           onClick={() => setCurrentSubPage('menu')}
           className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4"
@@ -305,38 +331,37 @@ const SettingsMore: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Settings & More</h1>
         <p className="text-gray-600 mt-1">Manage your account, team, fleet, and system settings</p>
       </div>
 
-      {/* Menu Categories */}
       <div className="space-y-6">
         {categories.map((category) => {
           const categoryItems = menuItems.filter((item) => item.category === category);
           if (categoryItems.length === 0) return null;
 
           return (
-            <div key={category} className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
-                <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">{category}</h2>
-              </div>
-              <div className="divide-y divide-slate-100">
+            <div key={category}>
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">{category}</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {categoryItems.map((item) => (
                   <button
                     key={item.id}
+                    type="button"
                     onClick={() => setCurrentSubPage(item.id)}
-                    className="w-full px-4 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
+                    className="flex items-start gap-3 p-4 bg-white border border-slate-200 rounded-lg hover:border-blue-300 hover:shadow-sm text-left transition-all"
                   >
-                    <div className="flex items-center gap-4">
-                      <div className="p-2 bg-blue-100 rounded-lg text-blue-600">{item.icon}</div>
-                      <div className="text-left">
-                        <p className="font-medium text-slate-900">{item.label}</p>
-                        <p className="text-sm text-slate-500">{item.description}</p>
-                      </div>
+                    <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center flex-shrink-0">
+                      {item.icon}
                     </div>
-                    <ChevronRight className="w-5 h-5 text-slate-400" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-900">{item.label}</span>
+                        <ChevronRight className="w-4 h-4 text-slate-400" />
+                      </div>
+                      <p className="text-sm text-slate-500 mt-0.5">{item.description}</p>
+                    </div>
                   </button>
                 ))}
               </div>

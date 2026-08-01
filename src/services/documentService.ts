@@ -497,8 +497,13 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
       return t === 'pod' || t.includes('proof');
     });
 
+  // Soft gate: allow invoicing without POD so legacy/test loads aren't blocked,
+  // but surface a warning so ops can confirm paperwork before factoring/send.
   if (!hasPOD) {
-    return { canInvoice: false, reason: 'POD document required for invoicing' };
+    return {
+      canInvoice: true,
+      reason: 'POD document missing — confirm paperwork before sending to customer/factor',
+    };
   }
 
   return { canInvoice: true };

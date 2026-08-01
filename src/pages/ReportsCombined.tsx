@@ -417,6 +417,76 @@ const UnitOperatingIncomeReport: React.FC<{ onBack: () => void }> = ({ onBack })
   );
 };
 
+const StateMilesReport: React.FC<{ onBack: () => void; title?: string; subtitle?: string }> = ({
+  onBack,
+  title = 'IRP / IFTA State Miles',
+  subtitle = 'Miles allocated by origin and destination state (proxy until GPS state segments are recorded)',
+}) => {
+  const { loads } = useTMS();
+  return (
+    <MonthScopedReportShell title={title} subtitle={subtitle} onBack={onBack}>
+      {({ periodStart, periodEnd }) => {
+        const periodLoads = loads.filter(l => {
+          if (!isRevenueLoadStatus(l.status)) return false;
+          const d = parseDateOnlyLocal(l.deliveryDate || l.pickupDate || '');
+          return d >= periodStart && d <= periodEnd;
+        });
+        const byState: Record<string, { miles: number; loads: number }> = {};
+        periodLoads.forEach(l => {
+          const miles = getLoadMiles(l);
+          const origin = (l.originState || '??').toUpperCase();
+          const dest = (l.destState || '??').toUpperCase();
+          // Split loaded miles 50/50 across origin/dest when different; full miles if same
+          if (origin === dest) {
+            if (!byState[origin]) byState[origin] = { miles: 0, loads: 0 };
+            byState[origin].miles += miles;
+            byState[origin].loads += 1;
+          } else {
+            if (!byState[origin]) byState[origin] = { miles: 0, loads: 0 };
+            if (!byState[dest]) byState[dest] = { miles: 0, loads: 0 };
+            byState[origin].miles += miles / 2;
+            byState[dest].miles += miles / 2;
+            byState[origin].loads += 1;
+            byState[dest].loads += 1;
+          }
+        });
+        const sorted = Object.entries(byState).sort((a, b) => b[1].miles - a[1].miles);
+        const total = sorted.reduce((s, [, v]) => s + v.miles, 0);
+        return (
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <div className="px-6 py-3 border-b text-xs text-slate-500">
+              Temporary allocation: 50% origin / 50% destination until per-state GPS miles are stored on loads.
+              Total loaded miles this period: {Math.round(total).toLocaleString()}
+            </div>
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">State</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Load touches</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Allocated Miles</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sorted.length === 0 ? (
+                  <tr><td colSpan={3} className="px-6 py-8 text-center text-slate-500">No state miles this period</td></tr>
+                ) : (
+                  sorted.map(([state, data]) => (
+                    <tr key={state}>
+                      <td className="px-6 py-3 text-sm font-medium text-slate-900">{state}</td>
+                      <td className="px-6 py-3 text-sm text-right text-slate-600">{data.loads}</td>
+                      <td className="px-6 py-3 text-sm text-right font-medium">{Math.round(data.miles).toLocaleString()}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      }}
+    </MonthScopedReportShell>
+  );
+};
+
 const UnitMilesReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { loads, trucks } = useTMS();
   return (
@@ -561,6 +631,20 @@ const MilesPerGallonReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
+/** Include settlements whose period overlaps the report window (not createdAt-only). */
+function settlementOverlapsPeriod(
+  s: import('../types').Settlement,
+  periodStart: Date,
+  periodEnd: Date
+): boolean {
+  const startRaw = s.periodStart || (typeof s.period === 'object' ? s.period?.start : '') || s.date || s.createdAt || '';
+  const endRaw = s.periodEnd || (typeof s.period === 'object' ? s.period?.end : '') || s.periodStart || s.date || s.createdAt || '';
+  const start = parseDateOnlyLocal(String(startRaw));
+  const end = parseDateOnlyLocal(String(endRaw));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+  return start <= periodEnd && end >= periodStart;
+}
+
 const SettlementPayeeReport: React.FC<{
   onBack: () => void;
   title: string;
@@ -576,8 +660,7 @@ const SettlementPayeeReport: React.FC<{
       {({ periodStart, periodEnd }) => {
         const rows = settlements.filter(s => {
           if (!filterSettlements(s, drivers)) return false;
-          const d = parseDateOnlyLocal(String(s.periodEnd || s.periodStart || s.date || s.createdAt || ''));
-          return d >= periodStart && d <= periodEnd;
+          return settlementOverlapsPeriod(s, periodStart, periodEnd);
         });
         const byPayee: Record<string, { count: number; gross: number; net: number; paid: number }> = {};
         rows.forEach(s => {
@@ -1849,11 +1932,23 @@ const ReportsCombined: React.FC = () => {
       case 'fuelVendor':
         return <FuelVendorReport onBack={() => setCurrentReport('menu')} />;
       case 'irpStateMiles':
-        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
+        return <StateMilesReport onBack={() => setCurrentReport('menu')} title="IRP - State Miles" />;
       case 'quarterlyIFTA':
-        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
+        return (
+          <StateMilesReport
+            onBack={() => setCurrentReport('menu')}
+            title="Quarterly IFTA"
+            subtitle="State-allocated miles for the selected month (use month picker for each quarter month)"
+          />
+        );
       case 'iftaAudit':
-        return <UnitMilesReport onBack={() => setCurrentReport('menu')} />;
+        return (
+          <StateMilesReport
+            onBack={() => setCurrentReport('menu')}
+            title="IFTA Audit"
+            subtitle="State mile allocation worksheet for audit support"
+          />
+        );
       case 'quarterlyMaintenance':
         return <MonthlyExpensesReport filterType="maintenance" title="Quarterly Maintenance" />;
       case 'customerReport':

@@ -320,9 +320,8 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       return;
     }
 
-    const blocked = selectedLoads
-      .map(load => ({ load, check: canInvoiceLoad(load) }))
-      .filter(x => !x.check.canInvoice);
+    const checks = selectedLoads.map(load => ({ load, check: canInvoiceLoad(load) }));
+    const blocked = checks.filter(x => !x.check.canInvoice);
     if (blocked.length > 0) {
       alert(
         `Cannot invoice — missing requirements:\n` +
@@ -333,6 +332,19 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
           (blocked.length > 8 ? `\n…and ${blocked.length - 8} more` : '')
       );
       return;
+    }
+    const warnings = checks.filter(x => x.check.canInvoice && x.check.reason);
+    if (warnings.length > 0) {
+      const ok = window.confirm(
+        `Warning — paperwork incomplete:\n` +
+          warnings
+            .slice(0, 8)
+            .map(x => `• ${x.load.loadNumber}: ${x.check.reason}`)
+            .join('\n') +
+          (warnings.length > 8 ? `\n…and ${warnings.length - 8} more` : '') +
+          `\n\nCreate invoice anyway?`
+      );
+      if (!ok) return;
     }
 
     const finalInvoiceNumber = (customInvoiceNumber || invoiceNumber).trim();

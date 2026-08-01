@@ -43,10 +43,12 @@ import {
   calculateDriverPay,
   getDispatcherAssignmentFields,
 } from '../services/businessLogic';
+import { appendEmployeeHistory } from '../services/employeeHistory';
 
 /** In-flight guards against double-click / concurrent creates (client-side). */
 const inFlightInvoiceKeys = new Set<string>();
 const inFlightPlannedDispatchIds = new Set<string>();
+const inFlightLoadNumbers = new Set<string>();
 
 interface TMSContextType {
   loads: Load[];
@@ -509,9 +511,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     const loadNumber =
       sanitizedInput.loadNumber || `LD-2025-${(loads.length + 301).toString()}`;
-    if (isDuplicateLoadNumber(loadNumber)) {
+    const loadKey = loadNumber.trim().toLowerCase();
+    if (isDuplicateLoadNumber(loadNumber) || inFlightLoadNumbers.has(loadKey)) {
       throw new Error(`Load number "${loadNumber}" already exists. Use a unique load number.`);
     }
+    inFlightLoadNumbers.add(loadKey);
 
     const newLoadId = generateShortId();
     const newLoad: Load = {
@@ -526,6 +530,8 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     // Optimistic Update - add to state immediately
     setLoads(prev => [newLoad, ...prev]);
+    // Release in-flight claim after paint; keep briefly to absorb double-clicks
+    setTimeout(() => inFlightLoadNumbers.delete(loadKey), 2000);
 
     try {
       // Save to Firestore
@@ -1230,49 +1236,65 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
   const updateEmployee = (id: string, updates: Partial<Employee>) => {
     const employee = employees.find(e => e.id === id);
-    const updatedEmployee = employee ? {
+    if (!employee) return;
+
+    const history = appendEmployeeHistory(employee, updates, authUser?.email || authUser?.uid);
+    const statusPatch: Partial<Employee> = {};
+    if (updates.status && updates.status !== 'active' && employee.status === 'active') {
+      statusPatch.deactivatedAt = new Date().toISOString();
+    }
+    if (updates.status === 'active' && employee.status !== 'active') {
+      statusPatch.deactivatedAt = undefined;
+    }
+
+    const updatedEmployee: Employee = {
       ...employee,
       ...updates,
+      ...statusPatch,
+      history,
       driverNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
       employeeNumber: updates.employeeNumber || employee.employeeNumber || employee.driverNumber,
-      type: updates.type || (updates.employeeType === 'owner' ? 'OwnerOperator' : 'Company') || employee.type,
-      updatedAt: new Date().toISOString()
-    } : null;
+      type: updates.type || (updates.employeeType === 'owner_operator' || updates.employeeType === 'owner'
+        ? 'OwnerOperator'
+        : employee.type) || 'Company',
+      updatedAt: new Date().toISOString(),
+    };
 
-    setEmployees(prev => prev.map(emp => emp.id === id ? updatedEmployee! : emp));
-    if (updatedEmployee) {
-      saveEmployee(tenantId || 'default', updatedEmployee).catch(e => console.error('Failed to save employee:', e));
-    }
+    setEmployees(prev => prev.map(emp => emp.id === id ? updatedEmployee : emp));
+    saveEmployee(tenantId || 'default', updatedEmployee).catch(e => console.error('Failed to save employee:', e));
   };
 
   const deleteEmployee = (id: string) => {
     const employee = employees.find(e => e.id === id);
     if (!employee) return;
 
-    // Check for linked loads
-    const linkedLoads = loads.filter(load => load.driverId === id);
+    const linkedLoads = loads.filter(load => load.driverId === id || load.dispatcherId === id);
+    const linkedTrips = trips.filter(t => t.driverId === id || t.dispatcherId === id);
+    const linkedSettlements = settlements.filter(
+      s => s.driverId === id || s.dispatcherId === id || s.payeeId === id
+    );
+    const linkedExpenses = expenses.filter(e => e.driverId === id);
+    const totalLinks =
+      linkedLoads.length + linkedTrips.length + linkedSettlements.length + linkedExpenses.length;
 
-    if (linkedLoads.length > 0) {
-      const loadList = linkedLoads.map(l => l.loadNumber).slice(0, 5).join(', ');
-      const more = linkedLoads.length > 5 ? ` and ${linkedLoads.length - 5} more` : '';
+    if (totalLinks > 0) {
       const employeeName = `${employee.firstName} ${employee.lastName}`.trim() || 'This employee';
-      const message =
-        `${employeeName} is assigned to ${linkedLoads.length} load(s):\n` +
-        `${loadList}${more}\n\n` +
-        'Deleting this employee will unassign them from these loads.\n' +
-        'Are you sure you want to delete?';
-
-      if (!window.confirm(message)) {
-        return;
-      }
-
-      // Unlink from loads
-      setLoads(prev => prev.map(load =>
-        load.driverId === id ? { ...load, driverId: undefined, driverName: undefined } : load
-      ));
+      alert(
+        `${employeeName} is linked to historical records:\n` +
+          `• ${linkedLoads.length} load(s)\n` +
+          `• ${linkedTrips.length} trip(s)\n` +
+          `• ${linkedSettlements.length} settlement(s)\n` +
+          `• ${linkedExpenses.length} expense(s)\n\n` +
+          'Deletion is blocked to preserve history. Use Deactivate instead.'
+      );
+      return;
     }
 
-    setEmployees(prev => prev.filter(employee => employee.id !== id));
+    if (!window.confirm(`Permanently delete ${employee.firstName} ${employee.lastName}? This cannot be undone.`)) {
+      return;
+    }
+
+    setEmployees(prev => prev.filter(emp => emp.id !== id));
     firestoreDeleteEmployee(tenantId || 'default', id).catch(e => console.error('Failed to delete employee:', e));
   };
 

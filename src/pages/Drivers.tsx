@@ -1,13 +1,30 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Download } from 'lucide-react';
+import { Plus, UserCheck, Clock, Route, Shield, Search, Edit, Trash2, Eye, X, Download, UserX } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
-import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType } from '../types';
+import { useAuth } from '../context/AuthContext';
+import { Driver, Employee, EmployeeStatus, PaymentType, DriverType, NewDriverInput, EmployeeType, AppRole } from '../types';
 import { useDebounce } from '../utils/debounce';
 import { formatDriverPayRate } from '../services/businessLogic';
 import { hydrateDriverPaymentForm, buildNormalizedPaymentSave } from '../services/driverPaymentNormalize';
+import { canPerformAction, UserRole } from '../services/rbac';
 
-const Drivers: React.FC = () => {
+export type EmployeeViewMode = 'all' | 'drivers' | 'dispatchers';
+
+interface DriversProps {
+  /** all = Employees hub; drivers = driver/OO only; dispatchers = dispatcher only */
+  mode?: EmployeeViewMode;
+}
+
+const Drivers: React.FC<DriversProps> = ({ mode = 'all' }) => {
   const { employees, loads, trucks, addEmployee, updateEmployee, deleteEmployee } = useTMS();
+  const { user } = useAuth();
+  const role = (user?.role || 'admin') as UserRole;
+  const canCreate = canPerformAction(role, 'employees', 'create') || canPerformAction(role, 'drivers', 'create');
+  const canUpdate = canPerformAction(role, 'employees', 'update') || canPerformAction(role, 'drivers', 'update');
+  const canDelete = canPerformAction(role, 'employees', 'delete') || canPerformAction(role, 'drivers', 'delete');
+  const canConfigurePay = canPerformAction(role, 'employees', 'configure_pay') || canPerformAction(role, 'employees', 'update') || role === 'admin';
+  const canManageRoles = canPerformAction(role, 'employees', 'manage_roles') || role === 'admin';
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -19,9 +36,32 @@ const Drivers: React.FC = () => {
 
   const [employeeTypeFilter, setEmployeeTypeFilter] = useState<string>('');
 
-  // Filter employees (showing all types, not just drivers)
+  const pageTitle =
+    mode === 'drivers' ? 'Drivers' : mode === 'dispatchers' ? 'Dispatchers' : 'Employee Management';
+  const pageSubtitle =
+    mode === 'drivers'
+      ? 'Company drivers and owner-operators'
+      : mode === 'dispatchers'
+        ? 'Dispatcher profiles and commission rates'
+        : 'Manage employees, roles, permissions, and compensation';
+  const addButtonLabel =
+    mode === 'drivers' ? 'Add Driver' : mode === 'dispatchers' ? 'Add Dispatcher' : 'Add New Employee';
+  const defaultEmployeeType: EmployeeType =
+    mode === 'dispatchers' ? 'dispatcher' : mode === 'drivers' ? 'driver' : 'driver';
+
+  const scopedEmployees = useMemo(() => {
+    if (mode === 'drivers') {
+      return employees.filter(e => e.employeeType === 'driver' || e.employeeType === 'owner_operator');
+    }
+    if (mode === 'dispatchers') {
+      return employees.filter(e => e.employeeType === 'dispatcher');
+    }
+    return employees;
+  }, [employees, mode]);
+
+  // Filter employees within the page scope
   const filteredEmployees = useMemo(() => {
-    return employees.filter(employee => {
+    return scopedEmployees.filter(employee => {
       const matchesStatus = !statusFilter || employee.status === statusFilter;
       const matchesType = !employeeTypeFilter || employee.employeeType === employeeTypeFilter;
       const matchesPayment = !paymentFilter || employee.payment?.type === paymentFilter;
@@ -32,7 +72,7 @@ const Drivers: React.FC = () => {
         (employee.license?.number || '').toLowerCase().includes(debouncedSearchTerm.toLowerCase());
       return matchesStatus && matchesType && matchesPayment && matchesSearch;
     });
-  }, [employees, statusFilter, employeeTypeFilter, paymentFilter, debouncedSearchTerm]);
+  }, [scopedEmployees, statusFilter, employeeTypeFilter, paymentFilter, debouncedSearchTerm]);
 
   // Pagination
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
@@ -41,28 +81,23 @@ const Drivers: React.FC = () => {
     return filteredEmployees.slice(start, start + itemsPerPage);
   }, [filteredEmployees, currentPage]);
 
-  // Calculate stats
+  // Calculate stats (scoped to this view)
   const stats = useMemo(() => {
-    const activeEmployees = employees.filter(e => e.status === 'active').length;
-    const activeDrivers = employees.filter(e => e.status === 'active' && (e.employeeType === 'driver' || e.employeeType === 'owner_operator')).length;
-    const activeDispatchers = employees.filter(e => e.status === 'active' && e.employeeType === 'dispatcher').length;
-    
+    const activeEmployees = scopedEmployees.filter(e => e.status === 'active').length;
+    const activeDrivers = scopedEmployees.filter(e => e.status === 'active' && (e.employeeType === 'driver' || e.employeeType === 'owner_operator')).length;
+    const activeDispatchers = scopedEmployees.filter(e => e.status === 'active' && e.employeeType === 'dispatcher').length;
+    const inactiveCount = scopedEmployees.filter(e => e.status !== 'active').length;
+
     const deliveredLoads = loads.filter(l => l.status === 'delivered' || l.status === 'completed');
-    const onTimeLoads = deliveredLoads.filter(() => {
-      // Simplified on-time calculation
-      return true; // Would need actual delivery dates
-    });
-    const onTimePercentage = deliveredLoads.length > 0
-      ? Math.round((onTimeLoads.length / deliveredLoads.length) * 100)
-      : 0;
+    const onTimePercentage = deliveredLoads.length > 0 ? 100 : 0;
 
     const totalMiles = loads.reduce((sum, l) => sum + (l.miles || 0), 0);
     const avgMiles = activeDrivers > 0 ? Math.round(totalMiles / activeDrivers) : 0;
 
     const safetyScore = deliveredLoads.length > 0 ? 98.5 : 0;
 
-    return { activeEmployees, activeDrivers, activeDispatchers, onTimePercentage, avgMiles, safetyScore };
-  }, [employees, loads]);
+    return { activeEmployees, activeDrivers, activeDispatchers, inactiveCount, onTimePercentage, avgMiles, safetyScore };
+  }, [scopedEmployees, loads]);
 
   // Memoized helper functions
   const getStatusColor = useCallback((status: EmployeeStatus) => {
@@ -99,12 +134,27 @@ const Drivers: React.FC = () => {
     setIsModalOpen(true);
   }, []);
 
-  // Delete handler - memoized
+  // Delete handler — context blocks when linked; prefer deactivate
   const handleDelete = useCallback((employeeId: string) => {
-    if (window.confirm('Are you sure you want to delete this employee?')) {
-      deleteEmployee(employeeId);
-    }
+    deleteEmployee(employeeId);
   }, [deleteEmployee]);
+
+  const handleDeactivate = useCallback((employee: Employee) => {
+    if (!canUpdate) {
+      alert('You do not have permission to deactivate employees.');
+      return;
+    }
+    const name = `${employee.firstName} ${employee.lastName}`;
+    if (employee.status === 'active') {
+      if (!window.confirm(`Deactivate ${name}? They will be hidden from new assignments; historical loads and settlements are kept.`)) {
+        return;
+      }
+      updateEmployee(employee.id, { status: 'inactive' });
+    } else {
+      if (!window.confirm(`Reactivate ${name}?`)) return;
+      updateEmployee(employee.id, { status: 'active' });
+    }
+  }, [canUpdate, updateEmployee]);
 
   const getEmployeeTypeLabel = useCallback((type: EmployeeType) => {
     const labels: Record<EmployeeType, string> = {
@@ -150,22 +200,24 @@ const Drivers: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Employee Management</h1>
-          <p className="text-slate-600 mt-2">Manage employees, drivers, dispatchers, and performance</p>
+          <h1 className="text-3xl font-bold text-slate-900">{pageTitle}</h1>
+          <p className="text-slate-600 mt-2">{pageSubtitle}</p>
         </div>
-        <button
-          onClick={() => {
-            setEditingDriver(null);
-            setIsModalOpen(true);
-          }}
-          className="btn-primary px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
-        >
-          <Plus size={20} />
-          Add New Employee
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => {
+              setEditingDriver(null);
+              setIsModalOpen(true);
+            }}
+            className="btn-primary px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
+          >
+            <Plus size={20} />
+            {addButtonLabel}
+          </button>
+        )}
       </div>
 
-      {/* Driver Stats */}
+      {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
           <div className="flex items-center">
@@ -173,7 +225,9 @@ const Drivers: React.FC = () => {
               <UserCheck size={20} className="text-green-600" />
             </div>
             <div className="ml-5">
-              <dt className="text-sm font-medium text-slate-500">Active Employees</dt>
+              <dt className="text-sm font-medium text-slate-500">
+                {mode === 'drivers' ? 'Active Drivers' : mode === 'dispatchers' ? 'Active Dispatchers' : 'Active Employees'}
+              </dt>
               <dd className="text-2xl font-semibold text-slate-900">{stats.activeEmployees}</dd>
             </div>
           </div>
@@ -185,8 +239,8 @@ const Drivers: React.FC = () => {
               <Clock size={20} className="text-yellow-600" />
             </div>
             <div className="ml-5">
-              <dt className="text-sm font-medium text-slate-500">On Time Delivery</dt>
-              <dd className="text-2xl font-semibold text-slate-900">{stats.onTimePercentage}%</dd>
+              <dt className="text-sm font-medium text-slate-500">Inactive / Leave</dt>
+              <dd className="text-2xl font-semibold text-slate-900">{stats.inactiveCount}</dd>
             </div>
           </div>
         </div>
@@ -197,8 +251,12 @@ const Drivers: React.FC = () => {
               <Route size={20} className="text-blue-600" />
             </div>
             <div className="ml-5">
-              <dt className="text-sm font-medium text-slate-500">Avg Miles/Driver</dt>
-              <dd className="text-2xl font-semibold text-slate-900">{stats.avgMiles.toLocaleString()}</dd>
+              <dt className="text-sm font-medium text-slate-500">
+                {mode === 'dispatchers' ? 'Dispatchers' : 'Avg Miles/Driver'}
+              </dt>
+              <dd className="text-2xl font-semibold text-slate-900">
+                {mode === 'dispatchers' ? stats.activeDispatchers : stats.avgMiles.toLocaleString()}
+              </dd>
             </div>
           </div>
         </div>
@@ -209,8 +267,12 @@ const Drivers: React.FC = () => {
               <Shield size={20} className="text-purple-600" />
             </div>
             <div className="ml-5">
-              <dt className="text-sm font-medium text-slate-500">Safety Score</dt>
-              <dd className="text-2xl font-semibold text-slate-900">{stats.safetyScore.toFixed(1)}</dd>
+              <dt className="text-sm font-medium text-slate-500">
+                {mode === 'all' ? 'Active Drivers' : 'Records'}
+              </dt>
+              <dd className="text-2xl font-semibold text-slate-900">
+                {mode === 'all' ? stats.activeDrivers : scopedEmployees.length}
+              </dd>
             </div>
           </div>
         </div>
@@ -219,6 +281,7 @@ const Drivers: React.FC = () => {
       {/* Filters */}
       <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {mode === 'all' && (
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Employee Type</label>
             <select
@@ -240,6 +303,24 @@ const Drivers: React.FC = () => {
               <option value="other">Other</option>
             </select>
           </div>
+          )}
+          {mode === 'drivers' && (
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Driver Type</label>
+            <select
+              value={employeeTypeFilter}
+              onChange={(e) => {
+                setEmployeeTypeFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Drivers & Owner Operators</option>
+              <option value="driver">Company Driver</option>
+              <option value="owner_operator">Owner Operator</option>
+            </select>
+          </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Status</label>
             <select
@@ -303,7 +384,9 @@ const Drivers: React.FC = () => {
       {/* Drivers Table */}
       <div className="bg-white rounded-lg border border-slate-200 shadow-sm">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-          <h3 className="text-lg font-semibold text-slate-900">All Employees</h3>
+          <h3 className="text-lg font-semibold text-slate-900">
+            {mode === 'drivers' ? 'Drivers' : mode === 'dispatchers' ? 'Dispatchers' : 'All Employees'}
+          </h3>
         </div>
 
         <div className="overflow-x-auto">
@@ -406,29 +489,51 @@ const Drivers: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleEdit(employee)}
-                            className="text-blue-600 hover:text-blue-900"
-                            title="Edit"
-                          >
-                            <Edit size={18} />
-                          </button>
+                          {canUpdate && (
+                            <button
+                              onClick={() => handleEdit(employee)}
+                              className="text-blue-600 hover:text-blue-900"
+                              title="Edit"
+                            >
+                              <Edit size={18} />
+                            </button>
+                          )}
                           <button
                             onClick={() => {
-                              alert(`Employee: ${employee.firstName} ${employee.lastName}\nType: ${getEmployeeTypeLabel(employee.employeeType)}\nStatus: ${employee.status}`);
+                              const hist = (employee.history || []).slice(-5).map(h =>
+                                `${h.at.slice(0, 10)}: ${h.fields.join(', ')}`
+                              ).join('\n') || 'No history';
+                              alert(
+                                `Employee: ${employee.firstName} ${employee.lastName}\n` +
+                                `Type: ${getEmployeeTypeLabel(employee.employeeType)}\n` +
+                                `App Role: ${employee.appRole || '—'}\n` +
+                                `Status: ${employee.status}\n\n` +
+                                `Recent changes:\n${hist}`
+                              );
                             }}
                             className="text-green-600 hover:text-green-900"
                             title="View"
                           >
                             <Eye size={18} />
                           </button>
-                          <button
-                            onClick={() => handleDelete(employee.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Delete"
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                          {canUpdate && (
+                            <button
+                              onClick={() => handleDeactivate(employee)}
+                              className="text-amber-600 hover:text-amber-900"
+                              title={employee.status === 'active' ? 'Deactivate' : 'Reactivate'}
+                            >
+                              <UserX size={18} />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => handleDelete(employee.id)}
+                              className="text-red-600 hover:text-red-900"
+                              title="Delete (blocked if linked)"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -486,12 +591,23 @@ const Drivers: React.FC = () => {
       {isModalOpen && (
         <DriverModal
           driver={editingDriver}
+          defaultEmployeeType={defaultEmployeeType}
+          lockEmployeeType={mode !== 'all'}
+          canConfigurePay={canConfigurePay}
+          canManageRoles={canManageRoles}
           onClose={() => {
             setIsModalOpen(false);
             setEditingDriver(null);
           }}
           onSave={(employeeData) => {
-            // Use addEmployee/updateEmployee for all employee types (not just drivers)
+            if (!editingDriver && !canCreate) {
+              alert('You do not have permission to add employees.');
+              return;
+            }
+            if (editingDriver && !canUpdate) {
+              alert('You do not have permission to edit employees.');
+              return;
+            }
             if (editingDriver) {
               updateEmployee(editingDriver.id, employeeData);
             } else {
@@ -509,11 +625,23 @@ const Drivers: React.FC = () => {
 // Employee Modal Component
 interface DriverModalProps {
   driver: Driver | null;
+  defaultEmployeeType?: EmployeeType;
+  lockEmployeeType?: boolean;
+  canConfigurePay?: boolean;
+  canManageRoles?: boolean;
   onClose: () => void;
   onSave: (driver: NewDriverInput) => void;
 }
 
-const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) => {
+const DriverModal: React.FC<DriverModalProps> = ({
+  driver,
+  defaultEmployeeType = 'driver',
+  lockEmployeeType = false,
+  canConfigurePay = true,
+  canManageRoles = true,
+  onClose,
+  onSave,
+}) => {
   const { trucks } = useTMS();
   const [formData, setFormData] = useState<Partial<NewDriverInput>>({
     employeeNumber: driver?.employeeNumber || driver?.driverNumber || '',
@@ -521,7 +649,8 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
     firstName: driver?.firstName || '',
     lastName: driver?.lastName || '',
     status: driver?.status || 'active',
-    employeeType: driver?.employeeType || 'driver',
+    employeeType: driver?.employeeType || defaultEmployeeType,
+    appRole: driver?.appRole || (defaultEmployeeType === 'dispatcher' ? 'dispatcher' : defaultEmployeeType === 'driver' || defaultEmployeeType === 'owner_operator' ? 'driver' : 'viewer'),
     type: driver?.type || 'Company',
     email: driver?.email || '',
     phone: driver?.phone || '',
@@ -582,8 +711,9 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
     hydrateDriverPaymentForm(driver || null).type
   );
   const [driverType, setDriverType] = useState<DriverType>(formData.type || 'Company');
-  const [employeeType, setEmployeeType] = useState<EmployeeType>(formData.employeeType || 'driver');
-  
+  const [employeeType, setEmployeeType] = useState<EmployeeType>(formData.employeeType || defaultEmployeeType);
+  const [appRole, setAppRole] = useState<AppRole>(formData.appRole || 'viewer');
+
   const isDriverOrOwnerOperator = employeeType === 'driver' || employeeType === 'owner_operator';
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -645,8 +775,9 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
     e.preventDefault();
 
     formData.employeeType = employeeType;
+    formData.appRole = appRole;
 
-    if (isDriverOrOwnerOperator) {
+    if (isDriverOrOwnerOperator && canConfigurePay) {
       const percentageInput = paymentType === 'percentage'
         ? parseFloat((document.getElementById('percentageRate') as HTMLInputElement)?.value || '0')
         : undefined;
@@ -751,6 +882,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                   <select
                     name="employeeType"
                     value={employeeType}
+                    disabled={lockEmployeeType}
                     onChange={(e) => {
                       const newType = e.target.value as EmployeeType;
                       setEmployeeType(newType);
@@ -765,7 +897,7 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                       }
                     }}
                     required
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
                   >
                     <option value="driver">Driver</option>
                     <option value="dispatcher">Dispatcher</option>
@@ -776,6 +908,29 @@ const DriverModal: React.FC<DriverModalProps> = ({ driver, onClose, onSave }) =>
                     <option value="admin">Admin</option>
                     <option value="other">Other</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">App Role (permissions)</label>
+                  <select
+                    name="appRole"
+                    value={appRole}
+                    disabled={!canManageRoles}
+                    onChange={(e) => {
+                      const role = e.target.value as AppRole;
+                      setAppRole(role);
+                      setFormData(prev => ({ ...prev, appRole: role }));
+                    }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
+                  >
+                    <option value="admin">Admin — full access</option>
+                    <option value="dispatcher">Dispatcher — loads/ops</option>
+                    <option value="accountant">Accountant — AR/pay</option>
+                    <option value="driver">Driver — limited</option>
+                    <option value="viewer">Viewer — read only</option>
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Controls application permissions. Separate from employee type (one person = one employee record).
+                  </p>
                 </div>
                 {isDriverOrOwnerOperator && (
                   <>

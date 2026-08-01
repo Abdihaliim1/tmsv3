@@ -12,7 +12,19 @@ import { PaymentType } from './shared';
 
 export type DriverType = 'Company' | 'OwnerOperator';
 export type EmployeeType = 'driver' | 'dispatcher' | 'admin' | 'owner' | 'owner_operator' | 'manager' | 'safety' | 'other';
-export type EmployeeStatus = 'active' | 'inactive' | 'terminated';
+export type EmployeeStatus = 'active' | 'inactive' | 'on_leave' | 'terminated';
+
+/** Application login / RBAC role (separate from operational employeeType). */
+export type AppRole = 'admin' | 'dispatcher' | 'driver' | 'accountant' | 'viewer';
+
+export interface EmployeeHistoryEntry {
+  at: string;
+  changedBy?: string;
+  /** Fields that changed */
+  fields: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
 
 // ============================================================================
 // Employee Interface
@@ -27,6 +39,8 @@ export interface Employee {
   employeeId?: string;
   employeeType: EmployeeType;
   status: EmployeeStatus;
+  /** App RBAC role — controls who can manage employees/pay/etc. */
+  appRole?: AppRole;
   
   // Legacy fields
   employeeNumber?: string;
@@ -119,6 +133,9 @@ export interface Employee {
   createdAt?: string;
   updatedAt?: string;
   notes?: string;
+  deactivatedAt?: string;
+  /** Immutable history of rate / role / status changes */
+  history?: EmployeeHistoryEntry[];
 }
 
 export type NewEmployeeInput = Omit<Employee, 'id' | 'createdAt' | 'updatedAt'>;
