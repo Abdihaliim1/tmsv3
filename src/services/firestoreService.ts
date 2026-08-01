@@ -275,6 +275,47 @@ export async function batchSave<T extends { id: string }>(
   }
 }
 
+/**
+ * Atomically patch multiple load documents (funding fields only).
+ * Avoids parallel full-doc updateLoad races that left sibling loads unfunded.
+ */
+export async function batchPatchLoads(
+  tenantId: string,
+  patches: Array<{ id: string; updates: Record<string, unknown> }>
+): Promise<void> {
+  if (patches.length === 0) return;
+
+  try {
+    // Firestore batches are limited to 500 ops
+    for (let i = 0; i < patches.length; i += 450) {
+      const chunk = patches.slice(i, i + 450);
+      const batch = writeBatch(db);
+      chunk.forEach(({ id, updates }) => {
+        const docRef = getDocRef(tenantId, 'loads', id);
+        batch.update(
+          docRef,
+          removeUndefinedValues({
+            ...updates,
+            updatedAt: new Date().toISOString(),
+          }) as Record<string, unknown>
+        );
+      });
+      await batch.commit();
+    }
+    logger.debug(`Batch patched ${patches.length} loads`, { tenantId, count: patches.length });
+  } catch (error) {
+    errorHandler.handle(
+      error,
+      {
+        operation: 'batch patch loads',
+        tenantId,
+        metadata: { count: patches.length },
+      },
+      { severity: ErrorSeverity.HIGH, rethrow: true }
+    );
+  }
+}
+
 // =============================================
 // Type-specific loaders
 // =============================================

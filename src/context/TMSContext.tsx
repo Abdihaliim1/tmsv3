@@ -48,7 +48,7 @@ import {
   deleteFactoringTransaction as firestoreDeleteFactoringTransaction,
   deleteBroker as firestoreDeleteBroker, deleteCustomer as firestoreDeleteCustomer,
   deletePlannedLoad as firestoreDeletePlannedLoad, deleteTrip as firestoreDeleteTrip,
-  getPlannedLoad, updateDocument as firestoreUpdateDocument,
+  getPlannedLoad, updateDocument as firestoreUpdateDocument, batchPatchLoads,
   batchSave
 } from '../services/firestoreService';
 import { buildDueInsuranceExpenses } from '../services/insuranceRecurrence';
@@ -113,7 +113,11 @@ interface TMSContextType {
   addTrailer: (trailer: NewTrailerInput) => string; // Returns trailer ID
   updateTrailer: (id: string, trailer: Partial<Trailer>) => void;
   deleteTrailer: (id: string) => void;
-  addInvoice: (invoice: Omit<Invoice, 'id'>) => void;
+  addInvoice: (invoice: Omit<Invoice, 'id'>) => Promise<Invoice>;
+  /** Atomically mark multiple factored loads funded (Mark All Funded). */
+  markLoadsFunded: (
+    items: Array<{ loadId: string; patch: Partial<Load> }>
+  ) => Promise<{ fundedIds: string[]; failed: Array<{ loadId: string; error: string }> }>;
   updateInvoice: (id: string, invoice: Partial<Invoice>) => void;
   deleteInvoice: (id: string, force?: boolean) => void;
   recordInvoicePayment: (
@@ -216,7 +220,10 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addTrailer: () => '',
         updateTrailer: () => { },
         deleteTrailer: () => { },
-        addInvoice: () => { },
+        addInvoice: async () => {
+          throw new Error('TMS not ready');
+        },
+        markLoadsFunded: async () => ({ fundedIds: [], failed: [] }),
         updateInvoice: () => { },
         deleteInvoice: () => { },
         recordInvoicePayment: async () => {
@@ -278,6 +285,8 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
   // Initialize state with empty arrays (will be loaded from Firestore)
   const [loads, setLoads] = useState<Load[]>([]);
+  const loadsRef = React.useRef<Load[]>([]);
+  loadsRef.current = loads;
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
@@ -1662,8 +1671,13 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         // Filter out already invoiced loads
         const filteredLoadIds = loadIdsToInvoice.filter(id => !alreadyInvoicedLoadIds.includes(id));
         if (filteredLoadIds.length === 0) {
-          console.warn('[INVOICE] All loads already have invoices. Skipping invoice creation.');
-          return; // Don't create duplicate invoice
+          const nums = alreadyInvoicedLoadIds
+            .map(id => loads.find(l => l.id === id)?.loadNumber || id)
+            .join(', ');
+          throw new Error(
+            `Cannot create invoice — selected load(s) are already invoiced (${nums}). ` +
+              `Delete or unlink the existing invoice first, or pick different loads.`
+          );
         }
         // Update input to only include non-invoiced loads
         input = { ...input, loadIds: filteredLoadIds };
@@ -1825,6 +1839,69 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       console.error('Error triggering workflow for invoice creation:', error);
     }
     syncTasks(nextLoads, [newInvoice, ...invoices]);
+    return newInvoice;
+  };
+
+  const markLoadsFunded = async (
+    items: Array<{ loadId: string; patch: Partial<Load> }>
+  ): Promise<{ fundedIds: string[]; failed: Array<{ loadId: string; error: string }> }> => {
+    const fundedIds: string[] = [];
+    const failed: Array<{ loadId: string; error: string }> = [];
+    if (items.length === 0) return { fundedIds, failed };
+
+    const current = loadsRef.current;
+    const patches: Array<{ id: string; updates: Record<string, unknown> }> = [];
+    const applied: Array<{ id: string; patch: Partial<Load> }> = [];
+
+    for (const item of items) {
+      const load = current.find(l => l.id === item.loadId);
+      if (!load) {
+        failed.push({ loadId: item.loadId, error: 'Load not found' });
+        continue;
+      }
+      if (load.factoringStatus === 'funded' || load.paymentReceived === true) {
+        fundedIds.push(item.loadId); // already funded — treat as success
+        continue;
+      }
+      if (load.factoringStatus === 'held' || load.factoringStatus === 'rejected') {
+        failed.push({ loadId: item.loadId, error: 'Load is held/rejected' });
+        continue;
+      }
+      patches.push({ id: item.loadId, updates: item.patch as Record<string, unknown> });
+      applied.push({ id: item.loadId, patch: item.patch });
+    }
+
+    if (patches.length > 0) {
+      try {
+        await batchPatchLoads(tenantId || 'default', patches);
+        setLoads(prev =>
+          prev.map(l => {
+            const hit = applied.find(a => a.id === l.id);
+            return hit ? { ...l, ...hit.patch } : l;
+          })
+        );
+        fundedIds.push(...applied.map(a => a.id));
+      } catch (err) {
+        // Fall back to per-load patches so one bad doc doesn't block the rest
+        for (const p of patches) {
+          try {
+            await firestoreUpdateDocument(tenantId || 'default', 'loads', p.id, p.updates);
+            const hit = applied.find(a => a.id === p.id);
+            if (hit) {
+              setLoads(prev => prev.map(l => (l.id === p.id ? { ...l, ...hit.patch } : l)));
+              fundedIds.push(p.id);
+            }
+          } catch (e2) {
+            failed.push({
+              loadId: p.id,
+              error: e2 instanceof Error ? e2.message : 'Failed to fund load',
+            });
+          }
+        }
+      }
+    }
+
+    return { fundedIds: Array.from(new Set(fundedIds)), failed };
   };
 
   const updateInvoice = (id: string, updates: Partial<Invoice>) => {
@@ -3309,6 +3386,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
       updateTrailer,
       deleteTrailer,
       addInvoice,
+      markLoadsFunded,
       updateInvoice,
       recordInvoicePayment,
       deleteInvoice,
@@ -3406,7 +3484,10 @@ export const useTMS = () => {
         addTrailer: () => '',
         updateTrailer: () => { },
         deleteTrailer: () => { },
-        addInvoice: () => { },
+        addInvoice: async () => {
+          throw new Error('TMS not ready');
+        },
+        markLoadsFunded: async () => ({ fundedIds: [], failed: [] }),
         updateInvoice: () => { },
         deleteInvoice: () => { },
         recordInvoicePayment: async () => {

@@ -594,7 +594,7 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
     return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
   }
 
-  // Hard gate: POD and BOL required before invoicing
+  // Soft warnings: POD/BOL preferred but do not block Create (confirm in UI)
   const documents = load.documents || [];
   const hasPOD =
     !!load.podNumber ||
@@ -609,11 +609,14 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
       return t === 'bol' || t.includes('bill of lading');
     });
 
-  if (!hasPOD) {
-    return { canInvoice: false, reason: 'POD document required before invoicing' };
-  }
-  if (!hasBOL) {
-    return { canInvoice: false, reason: 'BOL document required before invoicing' };
+  const missing: string[] = [];
+  if (!hasPOD) missing.push('POD');
+  if (!hasBOL) missing.push('BOL');
+  if (missing.length > 0) {
+    return {
+      canInvoice: true,
+      reason: `Missing paperwork: ${missing.join(' + ')}`,
+    };
   }
 
   return { canInvoice: true };

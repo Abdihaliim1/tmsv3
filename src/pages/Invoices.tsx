@@ -83,7 +83,10 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
   const uninvoicedLoads = useMemo(() => {
     return loads.filter(load => {
       // Must be delivered or completed
-      const isDelivered = load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed;
+      const isDelivered =
+        load.status === LoadStatus.Delivered
+        || load.status === LoadStatus.Completed
+        || load.status === LoadStatus.DeliveredWithBOL;
       if (!isDelivered) return false;
 
       // Check if already invoiced via load's invoiceId
@@ -309,7 +312,12 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
     }));
     // Prefer address-book customers; dedupe by lowercase name
     const seen = new Set<string>();
-    const merged: typeof fromFactor = [];
+    const merged: Array<{
+      id: string;
+      label: string;
+      detail: string;
+      source: 'factoring' | 'customer';
+    }> = [];
     for (const opt of [...fromFactor, ...fromCustomers, ...fromLoads]) {
       const key = opt.label.toLowerCase();
       if (seen.has(key)) continue;
@@ -330,11 +338,25 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       .slice(0, 12);
   }, [remitOptions, remitSearch, remitTo]);
 
-  const applyRemitSelection = (label: string, detail?: string) => {
+  const applyRemitSelection = (
+    label: string,
+    detail?: string,
+    source?: 'factoring' | 'customer',
+    optionId?: string
+  ) => {
     setRemitTo(detail ? `${label} — ${detail}` : label);
     setRemitSearch('');
     setShowRemitSuggestions(false);
     setShowCreateRemit(false);
+    // Selecting a factoring company as Remit To should factor the invoice
+    if (source === 'factoring' && optionId) {
+      const company = factoringCompanies.find(fc => fc.id === optionId);
+      if (company) {
+        setIsFactored(true);
+        setSelectedFactoringCompany(company);
+        if (company.feePercentage) setFactoringFeePercent(company.feePercentage);
+      }
+    }
   };
 
   const handleCreateRemitTo = () => {
@@ -364,7 +386,10 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   // Get uninvoiced loads for this customer
   const customerLoads = useMemo(() => {
     return loads.filter(load => {
-      const isDelivered = load.status === LoadStatus.Delivered || load.status === LoadStatus.Completed;
+      const isDelivered =
+        load.status === LoadStatus.Delivered
+        || load.status === LoadStatus.Completed
+        || load.status === LoadStatus.DeliveredWithBOL;
       if (!isDelivered) return false;
       if (load.invoiceId) return false;
       const hasInvoice = invoices.some(inv => inv.loadId === load.id || inv.loadIds?.includes(load.id));
@@ -478,6 +503,11 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       return;
     }
 
+    if (isFactored && !selectedFactoringCompany) {
+      alert('Select a factoring company (or pick one from Remit To) before creating a factored invoice.');
+      return;
+    }
+
     const customerName = selectedLoads[0]?.customerName || selectedLoads[0]?.brokerName || initialCustomerName || 'Unknown';
 
     // Create the invoice
@@ -507,7 +537,10 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
     try {
       // addInvoice atomically creates the invoice and links real invoiceId on loads.
       // Do NOT overwrite invoiceId with "pending" afterward — that corrupts the link.
-      await addInvoice(newInvoice);
+      const created = await addInvoice(newInvoice);
+      if (!created?.id) {
+        throw new Error('Invoice was not created. Check whether the load is already invoiced.');
+      }
       onSave();
     } catch (error: any) {
       alert(error?.message || 'Failed to create invoice');
@@ -654,17 +687,14 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
                     key={opt.id}
                     type="button"
                     className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                    onClick={() => {
-                      applyRemitSelection(opt.label, opt.detail || undefined);
-                      if (opt.source === 'factoring') {
-                        const company = factoringCompanies.find(fc => fc.id === opt.id);
-                        if (company) {
-                          setIsFactored(true);
-                          setSelectedFactoringCompany(company);
-                          setFactoringFeePercent(company.feePercentage || 2.5);
-                        }
-                      }
-                    }}
+                    onClick={() =>
+                      applyRemitSelection(
+                        opt.label,
+                        opt.detail || undefined,
+                        opt.source,
+                        opt.id
+                      )
+                    }
                   >
                     <div className="text-sm font-medium text-slate-900">{opt.label}</div>
                     <div className="text-xs text-slate-500">{opt.detail || opt.source}</div>
@@ -1595,10 +1625,19 @@ const factoringStatusBadge = (status: string) => {
 };
 
 const FactoredLoadsTab: React.FC = () => {
-  const { loads, invoices, factoringCompanies, factoringTransactions, updateInvoice, updateLoad } = useTMS();
+  const {
+    loads,
+    invoices,
+    factoringCompanies,
+    factoringTransactions,
+    updateInvoice,
+    updateLoad,
+    markLoadsFunded,
+  } = useTMS();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
+  const [isMarkingAll, setIsMarkingAll] = useState(false);
 
   const factoredData = useMemo(() => {
     const fromHelper = getFactoredLoads(loads, invoices).map(item => ({
@@ -1754,42 +1793,26 @@ const FactoredLoadsTab: React.FC = () => {
     }
   };
 
-  const handleMarkAllFunded = async (opts: {
-    loadIds: string[];
-    invoiceId?: string;
-    companyId?: string;
-  }) => {
-    // Fund every pending (non-held) load in the current filtered view when IDs
-    // were captured at click time — do not re-narrow by company/invoice.
-    const idSet = new Set(opts.loadIds.filter(Boolean));
-    // Resolve against live `loads` so enriched factoredData copies cannot drift.
-    const pending = loads
-      .filter(l => idSet.has(l.id) && !isLoadFunded(l) && !isLoadHeld(l))
-      .map(load => {
-        const item = factoredData.find(d => d.load.id === load.id);
-        return {
-          load,
-          invoice: item?.invoice,
-          factoringCompany: item?.factoringCompany,
-        };
-      });
+  const handleMarkAllFunded = async (opts?: { loadIds?: string[] }) => {
+    if (isMarkingAll) return;
+    // Prefer explicit IDs (row Mark All) else every pending load in the filtered view
+    const scope = opts?.loadIds?.length
+      ? filteredFactoredData.filter(d => opts.loadIds!.includes(d.load.id))
+      : filteredFactoredData;
+    const pending = scope.filter(
+      d => !isLoadFunded(d.load) && !isLoadHeld(d.load)
+    );
     if (pending.length === 0) {
       alert('All selected loads are already funded.');
       return;
     }
-    if (pending.length < idSet.size) {
-      // Some IDs were already funded/held — continue with remaining
-    }
-    const invoice = opts.invoiceId
-      ? invoices.find(inv => inv.id === opts.invoiceId)
-      : undefined;
     const totalExpected = pending.reduce(
       (s, d) =>
         s + getLoadExpectedNet(d.load, d.invoice, d.factoringCompany?.feePercentage),
       0
     );
-    const label = invoice?.invoiceNumber
-      || pending[0]?.factoringCompany?.name
+    const label =
+      pending[0]?.factoringCompany?.name
       || pending[0]?.load.factoringCompanyName
       || 'factored loads';
     if (
@@ -1802,58 +1825,47 @@ const FactoredLoadsTab: React.FC = () => {
       return;
     }
 
+    setIsMarkingAll(true);
     try {
-      let nextLoads = [...loads];
-      const failures: string[] = [];
-      // Parallel updates — sequential loops were leaving the 2nd load unfunded when
-      // the first update's snapshot/re-render raced the second call.
-      const results = await Promise.allSettled(
-        pending.map(async item => {
-          const patch = buildMarkLoadFundedPatch(
-            item.load,
-            item.invoice,
-            item.factoringCompany?.feePercentage,
-            `Factored-All-${label}`
-          );
-          await updateLoad(item.load.id, patch, 'Factoring: Mark All Funded');
-          return { id: item.load.id, patch, loadNumber: item.load.loadNumber };
-        })
-      );
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        const item = pending[i];
-        if (result.status === 'fulfilled') {
-          nextLoads = nextLoads.map(l =>
-            l.id === result.value.id ? { ...l, ...result.value.patch } : l
-          );
-        } else {
-          failures.push(
-            `${item.load.loadNumber}: ${
-              result.reason instanceof Error ? result.reason.message : 'update failed'
-            }`
-          );
-        }
-      }
+      const items = pending.map(item => ({
+        loadId: item.load.id,
+        patch: buildMarkLoadFundedPatch(
+          item.load,
+          item.invoice,
+          item.factoringCompany?.feePercentage,
+          `Factored-All-${label}`
+        ),
+      }));
+      const { fundedIds, failed } = await markLoadsFunded(items);
+
+      // Rebuild local snapshot for invoice sync
+      const nextLoads = loads.map(l => {
+        const item = items.find(i => i.loadId === l.id && fundedIds.includes(l.id));
+        return item ? { ...l, ...item.patch } : l;
+      });
       const invoiceIds = Array.from(
-        new Set(
-          [
-            opts.invoiceId,
-            ...pending.map(p => p.invoice?.id),
-          ].filter(Boolean) as string[]
-        )
+        new Set(pending.map(p => p.invoice?.id).filter(Boolean) as string[])
       );
       for (const invId of invoiceIds) {
         syncInvoiceFromLoads(invId, nextLoads);
       }
-      if (failures.length > 0) {
-        alert(
-          `Funded ${pending.length - failures.length} of ${pending.length} loads.\n\n` +
-            failures.slice(0, 6).join('\n')
-        );
-      }
+
+      const failMsg = failed.length
+        ? `\n\nFailed (${failed.length}):\n` +
+          failed
+            .slice(0, 6)
+            .map(f => {
+              const num = loads.find(l => l.id === f.loadId)?.loadNumber || f.loadId;
+              return `• ${num}: ${f.error}`;
+            })
+            .join('\n')
+        : '';
+      alert(`Funded ${fundedIds.length} of ${pending.length} load(s).${failMsg}`);
     } catch (error) {
       console.error('Mark All Funded failed:', error);
       alert(error instanceof Error ? error.message : 'Failed to mark all funded.');
+    } finally {
+      setIsMarkingAll(false);
     }
   };
 
@@ -1885,6 +1897,16 @@ const FactoredLoadsTab: React.FC = () => {
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Pending Loads</p>
           <p className="text-xl font-bold text-yellow-700 mt-1">{factoringStats.pendingLoads}</p>
+          {factoringStats.pendingLoads >= 2 && (
+            <button
+              type="button"
+              disabled={isMarkingAll}
+              onClick={() => void handleMarkAllFunded()}
+              className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-800 underline disabled:opacity-50"
+            >
+              {isMarkingAll ? 'Funding…' : 'Mark All Pending Funded'}
+            </button>
+          )}
         </div>
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
           <p className="text-sm font-medium text-slate-500">Held Loads</p>
@@ -2077,16 +2099,18 @@ const FactoredLoadsTab: React.FC = () => {
                           )}
                           {showMarkAll && (
                             <button
-                              onClick={() =>
-                                handleMarkAllFunded({
+                              type="button"
+                              disabled={isMarkingAll}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleMarkAllFunded({
                                   loadIds: markAllPending.map(d => d.load.id),
-                                  invoiceId: invoice?.id,
-                                })
-                              }
-                              className="text-xs text-slate-600 hover:text-slate-900 underline"
-                              title="Requires confirmation; skips held/rejected loads"
+                                });
+                              }}
+                              className="text-xs text-slate-600 hover:text-slate-900 underline disabled:opacity-50"
+                              title="Requires confirmation; funds every pending load in this view"
                             >
-                              Mark All Funded
+                              {isMarkingAll ? 'Funding…' : 'Mark All Funded'}
                             </button>
                           )}
                         </div>
