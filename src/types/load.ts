@@ -27,6 +27,17 @@ export enum LoadStatus {
   TONU = 'tonu'                     // Truck Ordered Not Used
 }
 
+/** Per-load factoring lifecycle (independent of customer invoice.status). */
+export type LoadFactoringStatus =
+  | 'not_submitted'
+  | 'awaiting_paperwork'
+  | 'submitted'
+  | 'approved'
+  | 'funded'
+  | 'held'
+  | 'rejected'
+  | 'repurchased';
+
 // ============================================================================
 // Load Interface
 // ============================================================================
@@ -146,9 +157,20 @@ export interface Load {
   factoringCompanyId?: string;
   factoringCompanyName?: string;
   factoringFeePercent?: number;
+  /** Allocated per-load fee only — never the full invoice fee */
   factoringFee?: number;
   factoredAmount?: number;
   factoredDate?: string;
+  /**
+   * Per-load factoring lifecycle. Never derive solely from invoice.status —
+   * sibling loads on one invoice can be funded / held independently.
+   */
+  factoringStatus?: LoadFactoringStatus;
+  expectedNet?: number;
+  actualReceived?: number;
+  fundedAt?: string;
+  factoringPaymentReference?: string;
+  factoringInvoiceId?: string;
   
   // Payment Information
   paymentReceived?: boolean;

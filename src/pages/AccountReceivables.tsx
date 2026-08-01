@@ -9,6 +9,17 @@ import { Invoice, InvoiceStatus, LoadStatus, FactoringCompany, NewFactoringCompa
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
 import { addPaymentToInvoice, validatePayment, calculateAging, calculateARAgingSummary, calculateInvoiceStatus, calculateTotalPaid, calculateOutstandingBalance, getDaysOutstanding, allocatePaymentAcrossLoads } from '../services/paymentService';
 import { getLoadRevenue } from '../services/businessLogic';
+import {
+  buildMarkLoadFundedPatch,
+  deriveInvoiceFundingFromLoads,
+  getLoadAllocatedFee,
+  getLoadExpectedNet,
+  getLoadFactoredAmount,
+  getLoadFactoringStatus,
+  getLoadFeePercent,
+  isLoadFunded,
+  summarizeFactoredLoads,
+} from '../services/factoringFunding';
 import { canInvoiceLoad } from '../services/documentService';
 import { useTenant } from '../context/TenantContext';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
@@ -326,38 +337,29 @@ const AccountReceivables: React.FC = () => {
   }, [factoredData, debouncedFactoredSearchTerm]);
 
   const factoringStats = useMemo(() => {
-    const totalFactored = factoredData.length;
-    const totalFactoredAmount = factoredData.reduce((sum, item) => {
-      return sum + (item.load.grandTotal || item.load.rate || 0);
-    }, 0);
-    
-    const paidByFactoring = factoredData.filter(item => {
-      return item.invoice?.status === 'paid' && item.invoice?.isFactored;
-    }).length;
-    
-    const pendingPayment = totalFactored - paidByFactoring;
-    
-    const totalFees = factoredData.reduce((sum, item) => {
-      if (item.load.factoringFee && item.load.factoringFee > 0) {
-        return sum + item.load.factoringFee;
-      } else {
-        const company = item.factoringCompany;
-        const feeRate = item.load.factoringFeePercent || company?.feePercentage || 2.5;
-        const factoredAmount = item.load.grandTotal || item.load.rate || 0;
-        return sum + (factoredAmount * (feeRate / 100));
-      }
-    }, 0);
-    
-    const totalNetReceived = totalFactoredAmount - totalFees;
-    
-    return { totalFactored, totalFactoredAmount, paidByFactoring, pendingPayment, totalFees, totalNetReceived };
+    const summary = summarizeFactoredLoads(
+      factoredData.map(item => ({
+        load: item.load,
+        invoice: item.invoice,
+        feePercent: item.factoringCompany?.feePercentage,
+      }))
+    );
+    return {
+      totalFactored: summary.totalLoads,
+      totalFactoredAmount: summary.totalFactoredAmount,
+      paidByFactoring: summary.fundedLoads,
+      pendingPayment: summary.pendingLoads,
+      totalFees: summary.expectedFees,
+      totalNetReceived: summary.expectedNet,
+      actualNetReceived: summary.actualNetReceived,
+    };
   }, [factoredData]);
 
   // Chart data for factored loads
   const donutChartData = useMemo(() => {
     return [
-      { name: 'Net Received', value: factoringStats.totalNetReceived, color: '#10B981' },
-      { name: 'Factoring Fees', value: factoringStats.totalFees, color: '#F59E0B' }
+      { name: 'Expected Net', value: factoringStats.totalNetReceived, color: '#10B981' },
+      { name: 'Expected Fees', value: factoringStats.totalFees, color: '#F59E0B' }
     ];
   }, [factoringStats]);
 
@@ -380,10 +382,12 @@ const AccountReceivables: React.FC = () => {
       const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
       
       if (months[monthKey]) {
-        const amount = item.load.grandTotal || item.load.rate || 0;
-        const fee = item.load.factoringFee || (amount * ((item.load.factoringFeePercent || item.factoringCompany?.feePercentage || 2.5) / 100));
-        months[monthKey].factored += amount;
-        months[monthKey].fees += fee;
+        months[monthKey].factored += getLoadFactoredAmount(item.load);
+        months[monthKey].fees += getLoadAllocatedFee(
+          item.load,
+          item.invoice,
+          item.factoringCompany?.feePercentage
+        );
       }
     });
     
@@ -394,14 +398,30 @@ const AccountReceivables: React.FC = () => {
     }));
   }, [factoredData]);
 
-  const handleMarkFactoredInvoicePaid = (invoiceId: string, netReceived: number) => {
-    updateInvoiceFunc(invoiceId, {
-      status: 'paid',
-      paidAt: new Date().toISOString(),
-      paidAmount: netReceived,
-      paymentMethod: 'Factoring',
-      paymentReference: 'Factored'
-    });
+  const handleMarkLoadFunded = async (loadId: string) => {
+    const item = factoredData.find(d => d.load.id === loadId);
+    if (!item) return;
+    const patch = buildMarkLoadFundedPatch(
+      item.load,
+      item.invoice,
+      item.factoringCompany?.feePercentage,
+      `Factored-${item.load.loadNumber}`
+    );
+    await updateLoad(loadId, patch);
+    if (item.invoice) {
+      const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
+      const derived = deriveInvoiceFundingFromLoads(item.invoice, nextLoads);
+      updateInvoiceFunc(item.invoice.id, {
+        status: derived.status,
+        fundingStatus: derived.fundingStatus,
+        paidAmount: derived.paidAmount,
+        factorFundedDate: derived.factorFundedDate,
+        paidAt: derived.paidAt,
+        paymentMethod: derived.paymentMethod,
+        paymentReference: derived.paymentReference,
+        netFundedAmount: derived.paidAmount,
+      });
+    }
   };
 
   // ================================
@@ -821,7 +841,7 @@ const AccountReceivables: React.FC = () => {
                       <CheckCircle className="text-green-600" size={24} />
                     </div>
                     <div className="ml-4">
-                      <p className="text-sm font-medium text-slate-500">Paid by Factoring</p>
+                      <p className="text-sm font-medium text-slate-500">Funded Loads</p>
                       <p className="text-2xl font-bold text-slate-900">{factoringStats.paidByFactoring}</p>
                     </div>
                   </div>
@@ -867,7 +887,8 @@ const AccountReceivables: React.FC = () => {
                   </div>
                   <div className="mt-4 text-center">
                     <p className="text-sm text-slate-600">Total Factored: {formatCurrency(factoringStats.totalFactoredAmount)}</p>
-                    <p className="text-sm text-slate-600">Net Received: {formatCurrency(factoringStats.totalNetReceived)}</p>
+                    <p className="text-sm text-slate-600">Expected Net: {formatCurrency(factoringStats.totalNetReceived)}</p>
+                    <p className="text-sm text-slate-600">Actual Net Received: {formatCurrency(factoringStats.actualNetReceived)}</p>
                     <p className="text-sm text-slate-600">Total Fees: {formatCurrency(factoringStats.totalFees)}</p>
                   </div>
                 </div>
@@ -950,11 +971,12 @@ const AccountReceivables: React.FC = () => {
                         const load = item.load;
                         const invoice = item.invoice;
                         const company = item.factoringCompany;
-                        const factoredAmount = load.grandTotal || load.rate || 0;
-                        const feeRate = company?.feePercentage || load.factoringFeePercent || 2.5;
-                        const fee = load.factoringFee || (factoredAmount * (feeRate / 100));
-                        const netReceived = factoredAmount - fee;
-                        const isPaid = invoice?.status === 'paid';
+                        const factoredAmount = getLoadFactoredAmount(load);
+                        const feeRate = getLoadFeePercent(load, invoice, company?.feePercentage);
+                        const fee = getLoadAllocatedFee(load, invoice, company?.feePercentage);
+                        const expectedNet = getLoadExpectedNet(load, invoice, company?.feePercentage);
+                        const funded = isLoadFunded(load);
+                        const status = getLoadFactoringStatus(load);
                         
                         return (
                           <React.Fragment key={load.id}>
@@ -975,26 +997,24 @@ const AccountReceivables: React.FC = () => {
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                                 {formatCurrency(fee)} ({feeRate}%)
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">{formatCurrency(netReceived)}</td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">{formatCurrency(expectedNet)}</td>
                               <td className="px-6 py-4 whitespace-nowrap">
-                                {isPaid ? (
-                                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                                    ✓ PAID
-                                  </span>
-                                ) : (
-                                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-200">
-                                    PENDING
-                                  </span>
-                                )}
+                                <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
+                                  funded
+                                    ? 'bg-green-100 text-green-800 border-green-200'
+                                    : 'bg-yellow-100 text-yellow-800 border-yellow-200'
+                                }`}>
+                                  {status.replace(/_/g, ' ').toUpperCase()}
+                                </span>
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                {!isPaid && invoice && (
+                                {!funded && (
                                   <button
-                                    onClick={() => handleMarkFactoredInvoicePaid(invoice.id, netReceived)}
+                                    onClick={() => handleMarkLoadFunded(load.id)}
                                     className="text-blue-600 hover:text-blue-900 flex items-center gap-1"
-                                    title="Mark as Paid"
+                                    title="Fund this load only"
                                   >
-                                    <CheckCircle size={16} /> Mark Paid
+                                    <CheckCircle size={16} /> Mark Load Funded
                                   </button>
                                 )}
                               </td>

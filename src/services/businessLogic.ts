@@ -362,23 +362,12 @@ export function resolveLoadFactoringFee(
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
 
+  // Always compute from amount × %. Never trust stored fees — corrupt data often
+  // stamps the full invoice fee onto every load (e.g. $3,217.50 × 60).
   const computed = roundMoney(revenue * (pct / 100));
   const stored = Number(load.factoringFee) || 0;
-  if (stored <= 0) return computed;
-
-  const invIds = invoice ? invoiceLoadIds(invoice) : [];
-  const invoiceFee = Number(invoice?.factoringFee) || 0;
-  // Corrupt: multi-load invoice fee stamped on every load
-  if (invoiceFee > 0 && invIds.length > 1 && Math.abs(stored - invoiceFee) < 0.02) {
-    if (invoice?.amount && invoice.amount > 0) {
-      return roundMoney(invoiceFee * (revenue / invoice.amount));
-    }
-    return computed;
-  }
-  // Corrupt: fee larger than load revenue (impossible for normal %)
-  if (stored > revenue + 0.01) return computed;
-
-  return roundMoney(stored);
+  if (stored > 0 && Math.abs(stored - computed) < 0.02) return stored;
+  return computed;
 }
 
 /**

@@ -9,7 +9,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  FileText, DollarSign, Plus, Search, ChevronLeft, ChevronRight,
+  FileText, Plus, Search, ChevronLeft, ChevronRight,
   Check, X, Download, Edit, Trash2, MoreHorizontal,
   Building2, Package, Clock, CheckCircle,
   AlertTriangle, TrendingUp
@@ -23,7 +23,7 @@ import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
 import { formatDateOnly, parseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
-import { getFactoredLoads, resolveLoadFactoringFee, getLoadRevenue } from '../services/businessLogic';
+import { getFactoredLoads, getLoadRevenue } from '../services/businessLogic';
 import {
   addPaymentToInvoice,
   calculateTotalPaid,
@@ -31,6 +31,19 @@ import {
   validatePayment,
   allocatePaymentAcrossLoads,
 } from '../services/paymentService';
+import {
+  buildMarkLoadFundedPatch,
+  buildMarkLoadHeldPatch,
+  deriveInvoiceFundingFromLoads,
+  getLoadAllocatedFee,
+  getLoadExpectedNet,
+  getLoadFactoredAmount,
+  getLoadFactoringStatus,
+  getLoadFeePercent,
+  isLoadFunded,
+  isLoadHeld,
+  summarizeFactoredLoads,
+} from '../services/factoringFunding';
 import type { FactoringFundingStatus } from '../types';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -1365,8 +1378,27 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
 // Factored Loads Tab
 // ============================================================================
 
+const factoringStatusBadge = (status: string) => {
+  const styles: Record<string, string> = {
+    funded: 'bg-green-100 text-green-800 border-green-200',
+    held: 'bg-red-100 text-red-800 border-red-200',
+    rejected: 'bg-red-100 text-red-800 border-red-200',
+    approved: 'bg-blue-100 text-blue-800 border-blue-200',
+    submitted: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+    awaiting_paperwork: 'bg-orange-100 text-orange-800 border-orange-200',
+    not_submitted: 'bg-slate-100 text-slate-700 border-slate-200',
+    repurchased: 'bg-purple-100 text-purple-800 border-purple-200',
+  };
+  const label = status.replace(/_/g, ' ').toUpperCase();
+  return (
+    <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${styles[status] || styles.submitted}`}>
+      {label}
+    </span>
+  );
+};
+
 const FactoredLoadsTab: React.FC = () => {
-  const { loads, invoices, factoringCompanies, factoringTransactions, updateInvoice } = useTMS();
+  const { loads, invoices, factoringCompanies, factoringTransactions, updateInvoice, updateLoad } = useTMS();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
@@ -1379,37 +1411,35 @@ const FactoredLoadsTab: React.FC = () => {
       ),
     }));
 
-    // Prefer transaction ledger for % / dates only — never stamp full tx.feeAmount on each load
     const withTx = fromHelper.map(item => {
       const tx = factoringTransactions.find(t => t.invoiceId === item.invoice?.id);
-      const pct = item.load.factoringFeePercent || tx?.feePercentage || item.factoringCompany?.feePercentage;
+      const companyPct = item.factoringCompany?.feePercentage;
+      const pct = getLoadFeePercent(item.load, item.invoice, tx?.feePercentage || companyPct);
       const enriched = {
         ...item.load,
-        factoringFeePercent: pct || item.load.factoringFeePercent,
+        factoringFeePercent: pct,
         factoredDate: item.load.factoredDate || tx?.submittedDate,
+        factoringFee: getLoadAllocatedFee(
+          { ...item.load, factoringFeePercent: pct },
+          item.invoice,
+          companyPct
+        ),
       };
-      return {
-        ...item,
-        load: {
-          ...enriched,
-          factoringFee: resolveLoadFactoringFee(enriched, item.invoice, factoringCompanies),
-        },
-      };
+      return { ...item, load: enriched };
     });
 
-    if (selectedCompanyId) {
-      return withTx.filter(item =>
-        (item.load.factoringCompanyId || item.invoice?.factoringCompanyId) === selectedCompanyId
-      );
-    }
+    const filtered = selectedCompanyId
+      ? withTx.filter(item =>
+          (item.load.factoringCompanyId || item.invoice?.factoringCompanyId) === selectedCompanyId
+        )
+      : withTx;
 
-    return withTx.sort((a, b) => {
+    return filtered.sort((a, b) => {
       const dateA = parseDateOnlyLocal(a.load.factoredDate || a.load.deliveryDate || '').getTime();
       const dateB = parseDateOnlyLocal(b.load.factoredDate || b.load.deliveryDate || '').getTime();
       return dateB - dateA;
     });
   }, [loads, invoices, factoringCompanies, factoringTransactions, selectedCompanyId]);
-  // factoringCompanies used via resolveLoadFactoringFee inside
 
   const filteredFactoredData = useMemo(() => {
     return factoredData.filter(item => {
@@ -1423,31 +1453,19 @@ const FactoredLoadsTab: React.FC = () => {
   }, [factoredData, debouncedSearchTerm]);
 
   const factoringStats = useMemo(() => {
-    const totalFactored = factoredData.length;
-    const totalFactoredAmount = factoredData.reduce((sum, item) => {
-      return sum + (item.load.grandTotal || item.load.rate || 0);
-    }, 0);
-
-    const paidByFactoring = factoredData.filter(item => {
-      return item.invoice?.status === 'paid' && item.invoice?.isFactored;
-    }).length;
-
-    const pendingPayment = totalFactored - paidByFactoring;
-
-    const totalFees = factoredData.reduce((sum, item) => {
-      return sum + resolveLoadFactoringFee(item.load, item.invoice, factoringCompanies);
-    }, 0);
-
-    const totalNetReceived = totalFactoredAmount - totalFees;
-
-    return { totalFactored, totalFactoredAmount, paidByFactoring, pendingPayment, totalFees, totalNetReceived };
+    return summarizeFactoredLoads(
+      factoredData.map(item => ({
+        load: item.load,
+        invoice: item.invoice,
+        feePercent: item.factoringCompany?.feePercentage,
+      }))
+    );
   }, [factoredData]);
 
-  // Chart data
   const donutChartData = useMemo(() => {
     return [
-      { name: 'Net Received', value: factoringStats.totalNetReceived, color: '#10B981' },
-      { name: 'Factoring Fees', value: factoringStats.totalFees, color: '#F59E0B' }
+      { name: 'Expected Net', value: Math.max(0, factoringStats.expectedNet), color: '#10B981' },
+      { name: 'Expected Fees', value: Math.max(0, factoringStats.expectedFees), color: '#F59E0B' },
     ];
   }, [factoringStats]);
 
@@ -1464,90 +1482,155 @@ const FactoredLoadsTab: React.FC = () => {
     factoredData.forEach(item => {
       const factoredDate = item.load.factoredDate || item.load.deliveryDate;
       if (!factoredDate) return;
-
-      const date = new Date(factoredDate);
+      const date = parseDateOnlyLocal(factoredDate);
       const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-
       if (months[monthKey]) {
-        const amount = item.load.grandTotal || item.load.rate || 0;
-        const fee = resolveLoadFactoringFee(item.load, item.invoice, factoringCompanies);
-        months[monthKey].factored += amount;
-        months[monthKey].fees += fee;
+        months[monthKey].factored += getLoadFactoredAmount(item.load);
+        months[monthKey].fees += getLoadAllocatedFee(
+          item.load,
+          item.invoice,
+          item.factoringCompany?.feePercentage
+        );
       }
     });
 
     return Object.entries(months).map(([month, data]) => ({
       month,
       factored: data.factored,
-      fees: data.fees
+      fees: data.fees,
     }));
   }, [factoredData]);
 
-  const handleMarkFactoredInvoicePaid = (invoiceId: string, netReceived: number) => {
+  const syncInvoiceFromLoads = (invoiceId: string, nextLoads: Load[]) => {
+    const invoice = invoices.find(inv => inv.id === invoiceId);
+    if (!invoice) return;
+    const derived = deriveInvoiceFundingFromLoads(invoice, nextLoads);
     updateInvoice(invoiceId, {
-      status: 'paid',
-      paidAt: new Date().toISOString(),
-      paidAmount: netReceived,
-      paymentMethod: 'Factoring',
-      paymentReference: 'Factored'
+      status: derived.status,
+      fundingStatus: derived.fundingStatus,
+      paidAmount: derived.paidAmount,
+      factorFundedDate: derived.factorFundedDate,
+      paidAt: derived.paidAt,
+      paymentMethod: derived.paymentMethod,
+      paymentReference: derived.paymentReference,
+      netFundedAmount: derived.paidAmount,
     });
+  };
+
+  const handleMarkLoadFunded = async (loadId: string) => {
+    const item = factoredData.find(d => d.load.id === loadId);
+    if (!item) return;
+    const patch = buildMarkLoadFundedPatch(
+      item.load,
+      item.invoice,
+      item.factoringCompany?.feePercentage,
+      `Factored-${item.load.loadNumber}`
+    );
+    await updateLoad(loadId, patch);
+    const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
+    if (item.invoice) {
+      syncInvoiceFromLoads(item.invoice.id, nextLoads);
+    }
+  };
+
+  const handleMarkLoadHeld = async (loadId: string) => {
+    const item = factoredData.find(d => d.load.id === loadId);
+    if (!item) return;
+    if (!window.confirm(`Hold load ${item.load.loadNumber} for missing paperwork? Sibling loads will not be affected.`)) {
+      return;
+    }
+    const patch = buildMarkLoadHeldPatch('Missing paperwork');
+    await updateLoad(loadId, patch);
+    const nextLoads = loads.map(l => (l.id === loadId ? { ...l, ...patch } : l));
+    if (item.invoice) {
+      syncInvoiceFromLoads(item.invoice.id, nextLoads);
+    }
+  };
+
+  const handleMarkAllFunded = async (invoiceId: string) => {
+    const invoice = invoices.find(inv => inv.id === invoiceId);
+    if (!invoice) return;
+    const siblings = factoredData.filter(d => d.invoice?.id === invoiceId);
+    const held = siblings.filter(d => isLoadHeld(d.load));
+    if (held.length > 0) {
+      alert(
+        `Cannot Mark All Funded: ${held.length} load(s) are held/rejected. Clear holds first.`
+      );
+      return;
+    }
+    const pending = siblings.filter(d => !isLoadFunded(d.load));
+    if (pending.length === 0) {
+      alert('All loads on this invoice are already funded.');
+      return;
+    }
+    const totalExpected = pending.reduce(
+      (s, d) =>
+        s + getLoadExpectedNet(d.load, d.invoice, d.factoringCompany?.feePercentage),
+      0
+    );
+    if (
+      !window.confirm(
+        `Mark all ${pending.length} pending load(s) on ${invoice.invoiceNumber} as funded?\n\n` +
+          `Expected net for these loads: ${formatCurrency(totalExpected)}\n\n` +
+          `This only funds unfunded loads. Confirm paperwork is complete and payment matches.`
+      )
+    ) {
+      return;
+    }
+
+    let nextLoads = [...loads];
+    for (const item of pending) {
+      const patch = buildMarkLoadFundedPatch(
+        item.load,
+        item.invoice,
+        item.factoringCompany?.feePercentage,
+        `Factored-All-${invoice.invoiceNumber}`
+      );
+      await updateLoad(item.load.id, patch);
+      nextLoads = nextLoads.map(l => (l.id === item.load.id ? { ...l, ...patch } : l));
+    }
+    syncInvoiceFromLoads(invoiceId, nextLoads);
   };
 
   return (
     <div className="space-y-6">
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Stats Cards — expected vs actual */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <FileText className="text-blue-600" size={24} />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-slate-500">Total Factored</p>
-              <p className="text-2xl font-bold text-slate-900">{factoringStats.totalFactored}</p>
-            </div>
-          </div>
+          <p className="text-sm font-medium text-slate-500">Total Submitted/Factored</p>
+          <p className="text-xl font-bold text-slate-900 mt-1">{formatCurrency(factoringStats.totalFactoredAmount)}</p>
+          <p className="text-xs text-slate-400 mt-1">{factoringStats.totalLoads} loads</p>
         </div>
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <DollarSign className="text-green-600" size={24} />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-slate-500">Total Factored Amt</p>
-              <p className="text-2xl font-bold text-slate-900">{formatCurrency(factoringStats.totalFactoredAmount)}</p>
-            </div>
-          </div>
+          <p className="text-sm font-medium text-slate-500">Expected Fees</p>
+          <p className="text-xl font-bold text-amber-600 mt-1">{formatCurrency(factoringStats.expectedFees)}</p>
         </div>
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-              <CheckCircle className="text-green-600" size={24} />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-slate-500">Paid by Factoring</p>
-              <p className="text-2xl font-bold text-slate-900">{factoringStats.paidByFactoring}</p>
-            </div>
-          </div>
+          <p className="text-sm font-medium text-slate-500">Expected Net</p>
+          <p className="text-xl font-bold text-slate-900 mt-1">{formatCurrency(factoringStats.expectedNet)}</p>
         </div>
         <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
-              <Clock className="text-yellow-600" size={24} />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-slate-500">Pending Payment</p>
-              <p className="text-2xl font-bold text-slate-900">{factoringStats.pendingPayment}</p>
-            </div>
-          </div>
+          <p className="text-sm font-medium text-slate-500">Actual Net Received</p>
+          <p className="text-xl font-bold text-green-600 mt-1">{formatCurrency(factoringStats.actualNetReceived)}</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Funded Loads</p>
+          <p className="text-xl font-bold text-green-700 mt-1">{factoringStats.fundedLoads}</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Pending Loads</p>
+          <p className="text-xl font-bold text-yellow-700 mt-1">{factoringStats.pendingLoads}</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Held Loads</p>
+          <p className="text-xl font-bold text-red-700 mt-1">{factoringStats.heldLoads}</p>
         </div>
       </div>
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Donut Chart */}
         <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Factoring Breakdown</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Expected Factoring Breakdown</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height={256}>
               <PieChart>
@@ -1569,14 +1652,13 @@ const FactoredLoadsTab: React.FC = () => {
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-4 text-center">
-            <p className="text-sm text-slate-600">Total Factored: {formatCurrency(factoringStats.totalFactoredAmount)}</p>
-            <p className="text-sm text-slate-600">Net Received: {formatCurrency(factoringStats.totalNetReceived)}</p>
-            <p className="text-sm text-slate-600">Total Fees: {formatCurrency(factoringStats.totalFees)}</p>
+          <div className="mt-4 text-center space-y-1">
+            <p className="text-sm text-slate-600">Expected Net: {formatCurrency(factoringStats.expectedNet)}</p>
+            <p className="text-sm text-slate-600">Actual Net Received: {formatCurrency(factoringStats.actualNetReceived)}</p>
+            <p className="text-sm text-slate-600">Expected Fees: {formatCurrency(factoringStats.expectedFees)}</p>
           </div>
         </div>
 
-        {/* Bar Chart */}
         <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-4">Monthly Factoring Trend</h3>
           <div className="h-64">
@@ -1588,7 +1670,7 @@ const FactoredLoadsTab: React.FC = () => {
                 <Tooltip formatter={(value: number) => formatCurrency(value)} />
                 <Legend />
                 <Bar dataKey="factored" fill="#3B82F6" name="Factored Amount" />
-                <Bar dataKey="fees" fill="#F59E0B" name="Fees Paid" />
+                <Bar dataKey="fees" fill="#F59E0B" name="Expected Fees" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1637,8 +1719,9 @@ const FactoredLoadsTab: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Invoice #</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Factored Date</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Factored Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Fee</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Net Received</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Allocated Fee</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Expected Net</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Actual Received</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Actions</th>
               </tr>
@@ -1646,7 +1729,7 @@ const FactoredLoadsTab: React.FC = () => {
             <tbody className="bg-white divide-y divide-slate-200">
               {filteredFactoredData.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={11} className="px-6 py-8 text-center text-slate-500">
                     No factored loads found
                   </td>
                 </tr>
@@ -1655,11 +1738,23 @@ const FactoredLoadsTab: React.FC = () => {
                   const load = item.load;
                   const invoice = item.invoice;
                   const company = item.factoringCompany;
-                  const factoredAmount = load.grandTotal || load.rate || 0;
-                  const feeRate = company?.feePercentage || load.factoringFeePercent || 2.5;
-                  const fee = load.factoringFee || (factoredAmount * (feeRate / 100));
-                  const netReceived = factoredAmount - fee;
-                  const isPaid = invoice?.status === 'paid';
+                  const factoredAmount = getLoadFactoredAmount(load);
+                  const feeRate = getLoadFeePercent(load, invoice, company?.feePercentage);
+                  const fee = getLoadAllocatedFee(load, invoice, company?.feePercentage);
+                  const expectedNet = getLoadExpectedNet(load, invoice, company?.feePercentage);
+                  const funded = isLoadFunded(load);
+                  const held = isLoadHeld(load);
+                  const status = getLoadFactoringStatus(load);
+                  const actualReceived = funded
+                    ? (Number(load.actualReceived ?? load.paymentAmount) || expectedNet)
+                    : 0;
+                  const showMarkAll =
+                    !!invoice &&
+                    filteredFactoredData.some(
+                      d => d.invoice?.id === invoice.id && d.load.id === load.id
+                    ) &&
+                    load.id ===
+                      filteredFactoredData.find(d => d.invoice?.id === invoice.id)?.load.id;
 
                   return (
                     <tr key={load.id} className="hover:bg-slate-50">
@@ -1671,7 +1766,14 @@ const FactoredLoadsTab: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{load.brokerName || load.customerName}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{company?.name || 'N/A'}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{invoice?.invoiceNumber || '—'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
+                        <div>{invoice?.invoiceNumber || '—'}</div>
+                        {invoice && (
+                          <div className="text-xs text-slate-400">
+                            Inv: {invoice.status}{invoice.fundingStatus ? ` · ${invoice.fundingStatus}` : ''}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                         {load.factoredDate ? formatDate(load.factoredDate) : '—'}
                       </td>
@@ -1679,28 +1781,42 @@ const FactoredLoadsTab: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                         {formatCurrency(fee)} ({feeRate}%)
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">{formatCurrency(netReceived)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-700">{formatCurrency(expectedNet)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
+                        {formatCurrency(actualReceived)}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {isPaid ? (
-                          <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                            PAID
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-200">
-                            PENDING
-                          </span>
-                        )}
+                        {factoringStatusBadge(status)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        {!isPaid && invoice && (
-                          <button
-                            onClick={() => handleMarkFactoredInvoicePaid(invoice.id, netReceived)}
-                            className="text-blue-600 hover:text-blue-900 flex items-center gap-1"
-                            title="Mark as Paid"
-                          >
-                            <CheckCircle size={16} /> Mark Paid
-                          </button>
-                        )}
+                        <div className="flex flex-col gap-1 items-start">
+                          {!funded && !held && (
+                            <button
+                              onClick={() => handleMarkLoadFunded(load.id)}
+                              className="text-blue-600 hover:text-blue-900 flex items-center gap-1"
+                              title="Fund this load only — does not mark sibling loads"
+                            >
+                              <CheckCircle size={16} /> Mark Load Funded
+                            </button>
+                          )}
+                          {!funded && !held && (
+                            <button
+                              onClick={() => handleMarkLoadHeld(load.id)}
+                              className="text-red-600 hover:text-red-800 text-xs"
+                            >
+                              Hold (paperwork)
+                            </button>
+                          )}
+                          {showMarkAll && invoice && (
+                            <button
+                              onClick={() => handleMarkAllFunded(invoice.id)}
+                              className="text-xs text-slate-600 hover:text-slate-900 underline"
+                              title="Requires confirmation; skips held/rejected loads"
+                            >
+                              Mark All Funded
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

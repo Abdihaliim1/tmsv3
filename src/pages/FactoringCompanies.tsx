@@ -3,6 +3,16 @@ import { Plus, Building2, Edit, Trash2, Search, X, MapPin, DollarSign, FileText,
 import { useTMS } from '../context/TMSContext';
 import { FactoringCompany, NewFactoringCompanyInput, Load, Invoice } from '../types';
 import { useDebounce } from '../utils/debounce';
+import {
+  buildMarkLoadFundedPatch,
+  deriveInvoiceFundingFromLoads,
+  getLoadAllocatedFee,
+  getLoadExpectedNet,
+  getLoadFactoredAmount,
+  getLoadFactoringStatus,
+  getLoadFeePercent,
+  isLoadFunded,
+} from '../services/factoringFunding';
 
 const FactoringCompanies: React.FC = () => {
   const { factoringCompanies, loads, invoices, addFactoringCompany, updateFactoringCompany, deleteFactoringCompany, updateInvoice, updateLoad } = useTMS();
@@ -319,19 +329,16 @@ const FactoringCompanies: React.FC = () => {
                         );
                       })
                       .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
-                      .map((item, index) => {
+                      .map((item) => {
                         const load = item.load;
                         const invoice = item.invoice;
                         const company = item.factoringCompany;
-                        // Factored Amount = grandTotal (total invoice amount)
-                        const factoredAmount = load.grandTotal || load.rate || 0;
-                        // Fee Rate from factoring company (default to 2.5% if not set)
-                        const feeRate = company?.feePercentage || load.factoringFeePercent || 2.5;
-                        // Net Received = Factored Amount * (1 - Fee Rate / 100)
-                        const netReceived = factoredAmount * (1 - feeRate / 100);
-                        // Fee = Factored Amount - Net Received
-                        const fee = factoredAmount - netReceived;
-                        const isPaid = invoice?.status === 'paid' || invoice?.isFactored;
+                        const amount = getLoadFactoredAmount(load);
+                        const pct = getLoadFeePercent(load, invoice, company?.feePercentage);
+                        const fee = getLoadAllocatedFee(load, invoice, company?.feePercentage);
+                        const expectedNet = getLoadExpectedNet(load, invoice, company?.feePercentage);
+                        const funded = isLoadFunded(load);
+                        const status = getLoadFactoringStatus(load);
 
                         return (
                           <tr key={load.id} className="hover:bg-slate-50">
@@ -344,9 +351,7 @@ const FactoringCompanies: React.FC = () => {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="text-sm text-slate-900">{company?.name || load.factoringCompanyName || 'N/A'}</div>
-                              {company?.feePercentage && (
-                                <div className="text-xs text-slate-500">{company.feePercentage}% fee</div>
-                              )}
+                              <div className="text-xs text-slate-500">{pct}% fee</div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               {invoice ? (
@@ -359,59 +364,68 @@ const FactoringCompanies: React.FC = () => {
                               <div className="text-sm text-slate-900">{formatDate(load.factoredDate)}</div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-slate-900">{formatCurrency(factoredAmount)}</div>
+                              <div className="text-sm font-medium text-slate-900">{formatCurrency(amount)}</div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="text-sm text-slate-600">{formatCurrency(fee)}</div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-green-600">{formatCurrency(netReceived)}</div>
+                              <div className="text-sm font-medium text-green-600">{formatCurrency(expectedNet)}</div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="flex flex-col gap-1">
-                                {isPaid ? (
+                                {funded ? (
                                   <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
                                     <CheckCircle size={12} className="mr-1" />
-                                    PAID
+                                    FUNDED
                                   </span>
                                 ) : (
                                   <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
                                     <Clock size={12} className="mr-1" />
-                                    PENDING
-                                  </span>
-                                )}
-                                {invoice?.isFactored && (
-                                  <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
-                                    FACTORED
+                                    {status.replace(/_/g, ' ').toUpperCase()}
                                   </span>
                                 )}
                               </div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                              {!isPaid && (
+                              {!funded && (
                                 <button
-                                  onClick={() => {
-                                    if (window.confirm(`Mark load ${load.loadNumber} as paid/received from factoring company?`)) {
-                                      // Update invoice status to paid
-                                      if (invoice) {
-                                        updateInvoice(invoice.id, {
-                                          status: 'paid',
-                                          paidAt: new Date().toISOString(),
-                                          paidAmount: netReceived,
-                                          paymentMethod: 'Factoring Company',
-                                          paymentReference: `Factored-${load.loadNumber}`
-                                        });
-                                      }
+                                  onClick={async () => {
+                                    if (!window.confirm(`Mark load ${load.loadNumber} as funded? Sibling loads will not change.`)) {
+                                      return;
+                                    }
+                                    const patch = buildMarkLoadFundedPatch(
+                                      load,
+                                      invoice,
+                                      company?.feePercentage,
+                                      `Factored-${load.loadNumber}`
+                                    );
+                                    await updateLoad(load.id, patch);
+                                    if (invoice) {
+                                      const nextLoads = loads.map(l =>
+                                        l.id === load.id ? { ...l, ...patch } : l
+                                      );
+                                      const derived = deriveInvoiceFundingFromLoads(invoice, nextLoads);
+                                      updateInvoice(invoice.id, {
+                                        status: derived.status,
+                                        fundingStatus: derived.fundingStatus,
+                                        paidAmount: derived.paidAmount,
+                                        factorFundedDate: derived.factorFundedDate,
+                                        paidAt: derived.paidAt,
+                                        paymentMethod: derived.paymentMethod,
+                                        paymentReference: derived.paymentReference,
+                                        netFundedAmount: derived.paidAmount,
+                                      });
                                     }
                                   }}
                                   className="text-green-600 hover:text-green-900 flex items-center gap-1 px-3 py-1.5 rounded-md hover:bg-green-50 transition-colors"
-                                  title="Mark as Paid/Received"
+                                  title="Fund this load only"
                                 >
                                   <CheckCircle size={16} />
-                                  <span className="text-xs font-medium">Mark Paid</span>
+                                  <span className="text-xs font-medium">Mark Load Funded</span>
                                 </button>
                               )}
-                              {isPaid && (
+                              {funded && (
                                 <span className="text-xs text-slate-400">—</span>
                               )}
                             </td>
