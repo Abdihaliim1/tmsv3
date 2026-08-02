@@ -38,6 +38,14 @@ const FINANCIAL_OR_TERMINAL: LoadStatus[] = [
   LoadStatus.TONU,
 ];
 
+/** Current status plus legally allowed next statuses (for status dropdowns). */
+export function getAllowedLoadStatusOptions(from: LoadStatus | string): LoadStatus[] {
+  const fromStatus = from as LoadStatus;
+  const next = ALLOWED_TRANSITIONS[fromStatus] || [];
+  const options = [fromStatus, ...next];
+  return Array.from(new Set(options));
+}
+
 export function canTransitionLoadStatus(
   from: LoadStatus | string,
   to: LoadStatus | string

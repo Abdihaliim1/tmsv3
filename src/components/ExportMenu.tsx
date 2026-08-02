@@ -31,10 +31,33 @@ import {
 } from '../services/exportService';
 
 const ExportMenu: React.FC = () => {
-  const { loads, invoices, settlements, drivers, dispatchers } = useTMS();
+  const {
+    loads, invoices, settlements, drivers, dispatchers, employees,
+    expenses, trips, plannedLoads, trucks, trailers, brokers, customers,
+    factoringCompanies, factoringTransactions,
+  } = useTMS();
   const { tenant } = useTenant();
   const [exporting, setExporting] = useState<string | null>(null);
   const [exported, setExported] = useState<string | null>(null);
+
+  const fullSnapshotBase = {
+    loads,
+    invoices,
+    settlements,
+    drivers,
+    dispatchers,
+    employees,
+    expenses,
+    trips,
+    plannedLoads,
+    trucks,
+    trailers,
+    brokers,
+    customers,
+    factoringCompanies,
+    factoringTransactions,
+    tenantId: tenant?.id || 'default',
+  };
 
   const handleExport = async (type: string) => {
     setExporting(type);
@@ -44,50 +67,38 @@ const ExportMenu: React.FC = () => {
       const timestamp = new Date().toISOString().split('T')[0];
 
       switch (type) {
-        case 'loads':
+        case 'loads': {
           const loadsCSV = exportLoadsToCSV(loads);
           downloadCSV(loadsCSV, `loads-export-${timestamp}.csv`);
           break;
-
-        case 'invoices':
+        }
+        case 'invoices': {
           const invoicesCSV = exportInvoicesToCSV(invoices);
           downloadCSV(invoicesCSV, `invoices-export-${timestamp}.csv`);
           break;
-
-        case 'settlements':
+        }
+        case 'settlements': {
           const settlementsCSV = exportSettlementsToCSV(settlements);
           downloadCSV(settlementsCSV, `settlements-export-${timestamp}.csv`);
           break;
-
-        case 'drivers':
+        }
+        case 'drivers': {
           const driversCSV = exportDriversToCSV(drivers);
           downloadCSV(driversCSV, `drivers-export-${timestamp}.csv`);
           break;
-
-        case 'all-json':
+        }
+        case 'all-json': {
           const snapshot = exportTenantSnapshot({
-            loads,
-            invoices,
-            settlements,
-            drivers,
-            dispatchers,
-            tenantId: tenant?.id || 'default',
+            ...fullSnapshotBase,
             exportedAt: new Date().toISOString(),
           });
           downloadJSON(snapshot, `tms-backup-${tenant?.id || 'default'}-${timestamp}.json`);
           break;
-
-        case 'all':
-          exportAllData({
-            loads,
-            invoices,
-            settlements,
-            drivers,
-            dispatchers,
-            tenantId: tenant?.id || 'default',
-          });
+        }
+        case 'all': {
+          exportAllData(fullSnapshotBase);
           break;
-
+        }
         default:
           throw new Error('Unknown export type');
       }
@@ -134,9 +145,13 @@ const ExportMenu: React.FC = () => {
     {
       id: 'all-json',
       label: 'Full Backup (JSON)',
-      description: 'Complete tenant snapshot with metadata',
+      description: 'Loads, invoices, settlements, expenses, trips, fleet, customers, factoring, and more',
       icon: FileJson,
-      count: loads.length + invoices.length + settlements.length,
+      count:
+        loads.length + invoices.length + settlements.length + expenses.length
+        + trips.length + plannedLoads.length + trucks.length + trailers.length
+        + customers.length + brokers.length + factoringCompanies.length
+        + factoringTransactions.length + employees.length,
     },
   ];
 

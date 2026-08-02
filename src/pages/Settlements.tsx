@@ -1874,16 +1874,17 @@ const Settlements: React.FC = () => {
                               const pay = resolveDriverPayment(driver);
                               const miles = getLoadMiles(load);
                               const base = calculateDriverPay(load, driver);
-                              const detentionPay = load.detentionAmount || 0;
-                              const layoverPay = load.layoverAmount || 0;
-                              const tonuPay = load.tonuFee || 0;
+                              // Percentage of company gross already includes accessorials
+                              const detentionPay = pay.type === 'percentage' ? 0 : (load.detentionAmount || 0);
+                              const layoverPay = pay.type === 'percentage' ? 0 : (load.layoverAmount || 0);
+                              const tonuPay = pay.type === 'percentage' ? 0 : (load.tonuFee || 0);
                               payAmount = base + detentionPay + layoverPay + tonuPay;
                               if (pay.type === 'per_mile') {
                                 payFormula = miles > 0
                                   ? `${miles} mi × $${pay.perMileRate.toFixed(2)}/mi`
                                   : `0 mi × $${pay.perMileRate.toFixed(2)}/mi (set miles on load)`;
                               } else if (pay.type === 'percentage') {
-                                payFormula = `Rev × ${pay.percentageDisplay.toFixed(2)}%`;
+                                payFormula = `Company gross × ${pay.percentageDisplay.toFixed(2)}%`;
                               } else {
                                 payFormula = `Flat $${pay.flatRate.toFixed(2)}`;
                               }

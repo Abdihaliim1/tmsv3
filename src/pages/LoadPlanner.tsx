@@ -935,6 +935,29 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const primaryFee = parseFloat(fees.primaryFee) || 0;
+    const fscAmount = parseFloat(fees.fscAmount) || 0;
+    const detention = parseFloat(fees.detention) || 0;
+    const lumper = parseFloat(fees.lumper) || 0;
+    const stopOff = parseFloat(fees.stopOff) || 0;
+    const tarpFee = parseFloat(fees.tarpFee) || 0;
+    const invoiceAdvance = parseFloat(fees.invoiceAdvance) || 0;
+    const negativeFees = [
+      ['Primary fee', primaryFee],
+      ['FSC', fscAmount],
+      ['Detention', detention],
+      ['Lumper', lumper],
+      ['Stop-off', stopOff],
+      ['Tarp fee', tarpFee],
+      ['Invoice advance', invoiceAdvance],
+    ].filter(([, value]) => Number(value) < 0);
+    if (negativeFees.length > 0) {
+      alert(
+        `Negative revenue is not allowed on planned loads (${negativeFees.map(([label]) => label).join(', ')}). ` +
+          `Use a dedicated credit/adjustment workflow instead.`
+      );
+      return;
+    }
     const dispatcher = dispatchers.find(d => d.id === dispatcherId);
     onSave({
       customLoadNumber,
@@ -985,18 +1008,18 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
         driverInstructions: d.driverInstructions,
       })),
       fees: {
-        primaryFee: parseFloat(fees.primaryFee) || 0,
+        primaryFee,
         primaryFeeType: fees.primaryFeeType as FeeType,
-        fscAmount: parseFloat(fees.fscAmount) || 0,
+        fscAmount,
         fscType: fees.fscType as FeeType,
         accessoryFees: {
-          detention: parseFloat(fees.detention) || 0,
-          lumper: parseFloat(fees.lumper) || 0,
-          stopOff: parseFloat(fees.stopOff) || 0,
-          tarpFee: parseFloat(fees.tarpFee) || 0,
+          detention,
+          lumper,
+          stopOff,
+          tarpFee,
           additional: [],
         },
-        invoiceAdvance: parseFloat(fees.invoiceAdvance) || 0,
+        invoiceAdvance,
       },
       legalDisclaimer,
     });
@@ -1170,6 +1193,8 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
                     <input
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={fees.primaryFee}
                       onChange={(e) => setFees({ ...fees, primaryFee: e.target.value })}
                       className="w-full pl-7 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -1336,7 +1361,7 @@ interface ViewPlannedLoadProps {
   onBack: () => void;
   onAddTrip: () => void;
   onBrokerTrip: () => void;
-  onDispatch: (driverId: string, dispatcherId?: string) => void;
+  onDispatch: (driverId: string, dispatcherId?: string, truckId?: string) => void;
   onCopy: () => void;
   onDelete: () => void;
 }
@@ -1360,7 +1385,11 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
       alert('Please select a driver');
       return;
     }
-    onDispatch(selectedDriverId, selectedDispatcherId || undefined);
+    if (!selectedTruckId) {
+      alert('Please select a truck');
+      return;
+    }
+    onDispatch(selectedDriverId, selectedDispatcherId || undefined, selectedTruckId);
   };
 
   const handleAttachFile = async (docType: 'RATE_CON' | 'BOL', file: File | undefined) => {
@@ -1848,12 +1877,14 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     }
   }, [selectedLoad, selectedDriverId, selectedTruckId, selectedTrailerId, selectedDispatcherId, dispatchMiles, drivers, trucks, trailers, employees, dispatchPlannedLoadsToTrip]);
 
-  // Handle dispatching from ViewPlannedLoad component (accepts driverId from its internal state)
-  const handleDispatchFromView = useCallback(async (driverId: string, dispatcherId?: string) => {
+  // Handle dispatching from ViewPlannedLoad — prefer the truck selected on that screen.
+  const handleDispatchFromView = useCallback(async (driverId: string, dispatcherId?: string, truckId?: string) => {
     if (!selectedLoad) return;
 
     const driver = drivers.find(d => d.id === driverId);
     const dispatcher = dispatcherId ? employees.find(e => e.id === dispatcherId) : undefined;
+    const truckFromScreen = truckId ? trucks.find(t => t.id === truckId) : undefined;
+    const resolvedTruckId = truckFromScreen?.id || driver?.truckId;
 
     if (!driver) {
       alert('Driver not found');
@@ -1863,8 +1894,8 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       alert('Please select a dispatcher (Booked By) before dispatch');
       return;
     }
-    if (!driver.truckId) {
-      alert('Selected driver has no truck assigned. Set a truck on the driver or use Dispatch to Trip.');
+    if (!resolvedTruckId) {
+      alert('Please select a truck on this screen (or assign a truck to the driver).');
       return;
     }
     const miles = Number(selectedLoad.totalMiles) || 0;
@@ -1872,14 +1903,14 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       alert('Planned load miles must be greater than 0 before dispatch. Edit the load or use Dispatch to Trip.');
       return;
     }
-    // Quick-dispatch from View has no trailer picker — route through the full form.
+    // Quick-dispatch from View has no trailer picker — route through the full form with selected truck.
     setSelectedDriverId(driver.id);
-    setSelectedTruckId(driver.truckId);
+    setSelectedTruckId(resolvedTruckId);
     setSelectedDispatcherId(dispatcher.id);
     setDispatchMiles(miles > 0 ? String(miles) : '');
     setViewMode('addTrip');
-    alert('Select a trailer (and confirm miles), then click Dispatch to Trip.');
-  }, [selectedLoad, drivers, employees]);
+    alert('Truck selection saved. Select a trailer (and confirm miles), then click Dispatch to Trip.');
+  }, [selectedLoad, drivers, employees, trucks]);
 
   // Render based on view mode
   if (viewMode === 'add') {

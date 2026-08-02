@@ -9,6 +9,7 @@ import { LoadStatus, Load, StatusChangeInfo } from '../types';
 import { PageType } from '../App';
 import { formatDateOnly } from '../utils/dateOnly';
 import { withDispatcherCommission } from '../services/businessLogic';
+import { getAllowedLoadStatusOptions } from '../services/loadLifecycle';
 
 // ============================================================================
 // Helper Functions
@@ -419,9 +420,9 @@ const EditLoadModal: React.FC<EditLoadModalProps> = ({ isOpen, onClose, load, on
                 onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as LoadStatus }))}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               >
-                {Object.values(LoadStatus).map(status => (
+                {getAllowedLoadStatusOptions(formData.status || LoadStatus.Available).map(status => (
                   <option key={status} value={status}>
-                    {status.replace('_', ' ').toUpperCase()}
+                    {status.replace(/_/g, ' ').toUpperCase()}
                   </option>
                 ))}
               </select>
@@ -846,13 +847,19 @@ const Loads: React.FC<LoadsProps> = ({ onNavigate }) => {
     }
   }, [editingLoad, updateLoad]);
 
-  const handleDeleteLoad = useCallback((load: Load) => {
-    const confirmMessage = load.invoiceId
-      ? `This load (${load.loadNumber}) is linked to an invoice. Are you sure you want to delete it? This action cannot be undone.`
-      : `Are you sure you want to delete load ${load.loadNumber}? This action cannot be undone.`;
-
-    if (window.confirm(confirmMessage)) {
-      deleteLoad(load.id, true); // force delete
+  const handleDeleteLoad = useCallback(async (load: Load) => {
+    if (load.invoiceId || load.settlementId || load.dispatcherSettlementId) {
+      alert(
+        `Cannot delete load ${load.loadNumber}: it is linked to an invoice or settlement. ` +
+          `Delete or void those financial records first.`
+      );
+      return;
+    }
+    if (!window.confirm(`Delete load ${load.loadNumber}? This cannot be undone.`)) return;
+    try {
+      await deleteLoad(load.id, false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete load.');
     }
   }, [deleteLoad]);
 

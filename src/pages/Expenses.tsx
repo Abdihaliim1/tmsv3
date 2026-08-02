@@ -40,7 +40,7 @@ type ExpensePeriod =
 const PAGE_SIZE = 50;
 
 const Expenses: React.FC = () => {
-  const { drivers, trucks, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
+  const { drivers, trucks, loads, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
   const { activeTenantId } = useTenant();
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -49,7 +49,17 @@ const Expenses: React.FC = () => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [selectedLoadId, setSelectedLoadId] = useState<string>('');
   const [period, setPeriod] = useState<ExpensePeriod>('current_month');
+  const MAX_EXPENSE_AMOUNT = 999_999.99;
+  const MAX_DESCRIPTION_LENGTH = 500;
+  const ALLOWED_RECEIPT_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'application/pdf',
+  ]);
   const [selectMonth, setSelectMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -160,6 +170,7 @@ const Expenses: React.FC = () => {
     return {
       driverId: selectedDriverId ? selectedDriverId : null,
       driverName: selectedDriverId ? driverName : null,
+      loadId: selectedLoadId ? selectedLoadId : null,
       ...truckFields,
     };
   };
@@ -189,9 +200,13 @@ const Expenses: React.FC = () => {
       date: getTodayDateString(),
       type: 'other',
       status: 'pending',
+      description: '',
+      amount: undefined,
+      receipt: undefined,
     });
     setSelectedDriverId('');
     setSelectedTruckId('');
+    setSelectedLoadId('');
   };
 
   const periodBounds = useMemo((): { start: Date | null; end: Date | null; label: string } => {
@@ -478,7 +493,13 @@ const Expenses: React.FC = () => {
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm text-slate-900">{expense.description}</td>
+                      <td className="px-6 py-4 text-sm text-slate-900 max-w-[240px]">
+                        <span className="block truncate" title={expense.description}>
+                          {(expense.description || '').length > 120
+                            ? `${expense.description.slice(0, 120)}…`
+                            : (expense.description || '—')}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 text-sm text-slate-600">
                         {expense.driverName || expense.truckNumber || expense.truckId || <span className="text-slate-400 italic">N/A</span>}
                       </td>
@@ -538,6 +559,7 @@ const Expenses: React.FC = () => {
                                   });
                                   setSelectedDriverId(expenseToEdit.driverId || drivers.find(d => `${d.firstName} ${d.lastName}` === expenseToEdit.driverName)?.id || '');
                                   setSelectedTruckId(expenseToEdit.truckId || expenseToEdit.truckNumber || '');
+                                  setSelectedLoadId(expenseToEdit.loadId || '');
                                   setEditingExpenseId(expenseToEdit.id);
                                   setIsEditModalOpen(true);
                                   setOpenMenuId(null);
@@ -551,7 +573,12 @@ const Expenses: React.FC = () => {
                             <button
                               onClick={async (e) => {
                                 e.stopPropagation();
-                                if (!confirm('Are you sure you want to delete this expense?')) return;
+                                const ok = window.confirm(
+                                  `Delete this expense ($${Number(expense.amount || 0).toFixed(2)})?\n\n` +
+                                    `This permanently removes a financial record and may change P&L.\n` +
+                                    `Click OK to confirm deletion.`
+                                );
+                                if (!ok) return;
                                 try {
                                   await deleteExpense(expense.id);
                                   await deleteFirebaseReceiptBestEffort(expense.receipt);
@@ -637,9 +664,23 @@ const Expenses: React.FC = () => {
                 alert('Expense amount must be greater than zero.');
                 return;
               }
+              if (amount > MAX_EXPENSE_AMOUNT) {
+                alert(`Expense amount cannot exceed $${MAX_EXPENSE_AMOUNT.toLocaleString()}.`);
+                return;
+              }
+              const description = String(formData.description || '').trim();
+              if (!description) {
+                alert('Description is required.');
+                return;
+              }
+              if (description.length > MAX_DESCRIPTION_LENGTH) {
+                alert(`Description cannot exceed ${MAX_DESCRIPTION_LENGTH} characters.`);
+                return;
+              }
               const normalized = {
                 ...formData,
-                amount,
+                description,
+                amount: Math.round(amount * 100) / 100,
                 type: (formData.type || 'other') as Expense['type'],
                 status: (formData.status || 'pending') as Expense['status'],
                 category: formData.category || formData.type || 'other',
@@ -660,8 +701,9 @@ const Expenses: React.FC = () => {
                 } else {
                   await addExpense({
                     ...normalized,
+                    description,
                     ...assignment,
-                  });
+                  } as Expense);
                   setIsAddModalOpen(false);
                 }
                 resetForm();
@@ -715,16 +757,20 @@ const Expenses: React.FC = () => {
                 </label>
                 <textarea
                   required
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  maxLength={MAX_DESCRIPTION_LENGTH}
+                  value={formData.description || ''}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value.slice(0, MAX_DESCRIPTION_LENGTH) })}
                   placeholder="Enter expense description..."
                   rows={3}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
+                <p className="text-xs text-slate-500 mt-1">
+                  {(formData.description || '').length}/{MAX_DESCRIPTION_LENGTH} characters
+                </p>
               </div>
 
-              {/* Driver/Truck Selection */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Driver/Truck/Load Selection */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     Driver
@@ -757,6 +803,27 @@ const Expenses: React.FC = () => {
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Linked Load
+                  </label>
+                  <select
+                    value={selectedLoadId}
+                    onChange={(e) => setSelectedLoadId(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">No load (optional)</option>
+                    {loads
+                      .slice()
+                      .sort((a, b) => String(b.deliveryDate || b.pickupDate || '').localeCompare(String(a.deliveryDate || a.pickupDate || '')))
+                      .slice(0, 300)
+                      .map(load => (
+                        <option key={load.id} value={load.id}>
+                          {load.loadNumber} — {load.originCity || '?'}/{load.destCity || '?'}
+                        </option>
+                      ))}
+                  </select>
+                </div>
               </div>
 
               {/* Amount */}
@@ -767,16 +834,25 @@ const Expenses: React.FC = () => {
                 <input
                   type="number"
                   required
-                  min="0"
+                  min="0.01"
+                  max={MAX_EXPENSE_AMOUNT}
                   step="0.01"
                   value={formData.amount || ''}
                   onChange={(e) => {
                     const next = parseFloat(e.target.value);
-                    setFormData({ ...formData, amount: Number.isFinite(next) ? Math.max(0, next) : 0 });
+                    if (!Number.isFinite(next)) {
+                      setFormData({ ...formData, amount: 0 });
+                      return;
+                    }
+                    setFormData({
+                      ...formData,
+                      amount: Math.min(MAX_EXPENSE_AMOUNT, Math.max(0, next)),
+                    });
                   }}
                   placeholder="0.00"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
+                <p className="text-xs text-slate-500 mt-1">Maximum ${MAX_EXPENSE_AMOUNT.toLocaleString()}</p>
               </div>
 
               {/* Receipt Upload */}
@@ -786,24 +862,31 @@ const Expenses: React.FC = () => {
                 </label>
                 <input
                   type="file"
-                  accept="image/*,.pdf"
+                  accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.jpg,.jpeg,.png,.webp,.gif,.pdf"
                   disabled={uploadingReceipt}
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
+                    const mimeOk = ALLOWED_RECEIPT_TYPES.has(file.type)
+                      || /\.(jpe?g|png|webp|gif|pdf)$/i.test(file.name);
+                    if (!mimeOk || file.type === 'text/plain') {
+                      alert('Only image (JPEG, PNG, WEBP, GIF) or PDF receipts are allowed.');
+                      e.target.value = '';
+                      return;
+                    }
                     setUploadingReceipt(true);
                     try {
                       const tenant = activeTenantId || 'default';
                       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
                       const path = `tenants/${tenant}/expenses/receipts/${Date.now()}_${safeName}`;
                       const storageRef = ref(storage, path);
-                      await uploadBytes(storageRef, file);
+                      await uploadBytes(storageRef, file, { contentType: file.type || 'application/octet-stream' });
                       const url = await getDownloadURL(storageRef);
                       setFormData({ ...formData, receipt: url });
                     } catch (err) {
                       console.error('Receipt upload failed:', err);
-                      alert('Receipt upload failed. Saving filename only as fallback.');
-                      setFormData({ ...formData, receipt: file.name });
+                      alert('Receipt upload failed. Please try again with an image or PDF.');
+                      e.target.value = '';
                     } finally {
                       setUploadingReceipt(false);
                     }
@@ -815,7 +898,7 @@ const Expenses: React.FC = () => {
                     ? 'Uploading receipt…'
                     : formData.receipt?.startsWith('http')
                       ? 'Receipt uploaded to storage'
-                      : 'Upload receipt image or PDF'}
+                      : 'Images or PDF only — other file types are rejected'}
                 </p>
               </div>
 

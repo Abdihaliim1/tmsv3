@@ -204,9 +204,9 @@ class ErrorBoundary extends Component<Props, State> {
   };
 
   handleGoHome = (): void => {
-    // Reset and navigate to dashboard
-    this.handleReset();
-    window.location.href = '/';
+    // Hard navigate with cache-bust so we never reuse a stale index.html / old bundle.
+    const target = `/?v=${Date.now()}`;
+    window.location.replace(target);
   };
 
   handleCopyError = async (): Promise<void> => {
@@ -296,7 +296,10 @@ class ErrorBoundary extends Component<Props, State> {
                   Go Home
                 </button>
                 <button
-                  onClick={() => window.location.reload()}
+                  onClick={() => {
+                    // Prefer a cache-busted navigation over soft reload (avoids stale SPA shell).
+                    window.location.replace(`/?v=${Date.now()}`);
+                  }}
                   className="flex-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-700 px-4 py-3 rounded-lg hover:bg-slate-200 transition-colors font-medium"
                 >
                   <RefreshCw className="w-4 h-4" />

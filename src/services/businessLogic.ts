@@ -711,6 +711,58 @@ export function calculateDriverBasePay(load: Load, driver?: Driver): number {
 }
 
 /**
+ * Compute canonical stored driver pay fields for a load.
+ * Percentage drivers: % of company gross (includes detention/FSC) — do NOT add accessorials again.
+ * Per-mile / flat: base + detention + layover pass-through.
+ */
+export function computeStoredDriverPayFields(
+  load: Load,
+  driver?: Driver
+): {
+  driverBasePay: number;
+  driverDetentionPay: number;
+  driverLayoverPay: number;
+  driverTotalGross: number;
+} {
+  if (!driver) {
+    return {
+      driverBasePay: 0,
+      driverDetentionPay: 0,
+      driverLayoverPay: 0,
+      driverTotalGross: 0,
+    };
+  }
+
+  const pay = resolveDriverPayment(driver);
+  const scratch: Load = {
+    ...load,
+    driverBasePay: undefined,
+    driverTotalGross: undefined,
+    driverDetentionPay: undefined,
+    driverLayoverPay: undefined,
+  };
+  const driverBasePay = calculateDriverBasePay(scratch, driver);
+  const driverDetentionPay = coerceMoney(load.detentionAmount);
+  const driverLayoverPay = coerceMoney(load.layoverAmount);
+
+  if (pay.type === 'percentage') {
+    return {
+      driverBasePay,
+      driverDetentionPay,
+      driverLayoverPay,
+      driverTotalGross: driverBasePay,
+    };
+  }
+
+  return {
+    driverBasePay,
+    driverDetentionPay,
+    driverLayoverPay,
+    driverTotalGross: roundMoney(driverBasePay + driverDetentionPay + driverLayoverPay),
+  };
+}
+
+/**
  * Calculate settlement gross pay from loads
  */
 export function calculateSettlementGrossPay(

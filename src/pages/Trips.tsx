@@ -794,7 +794,7 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-600">Total Miles:</span>
-                  <span className="font-medium">{trip.totalMiles.toLocaleString()} mi</span>
+                  <span className="font-medium">{(trip.totalMiles ?? 0).toLocaleString()} mi</span>
                 </div>
               </div>
             </div>
@@ -830,7 +830,7 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-slate-600">Revenue:</span>
-                  <span className="font-medium text-green-600">${trip.revenue.toLocaleString()}</span>
+                  <span className="font-medium text-green-600">${(trip.revenue ?? 0).toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-600">Driver Pay:</span>
@@ -1029,8 +1029,8 @@ const ViewTripModal: React.FC<ViewTripModalProps> = ({ isOpen, onClose, trip, on
                       <tr key={load.id} className="hover:bg-slate-50">
                         <td className="px-3 py-2 font-medium">{load.customLoadNumber || load.systemLoadNumber}</td>
                         <td className="px-3 py-2">{load.customer?.name || '-'}</td>
-                        <td className="px-3 py-2">{load.pickups[0]?.shipper?.city}, {load.pickups[0]?.shipper?.state}</td>
-                        <td className="px-3 py-2">{load.deliveries[0]?.consignee?.city}, {load.deliveries[0]?.consignee?.state}</td>
+                        <td className="px-3 py-2">{load.pickups?.[0]?.shipper?.city}, {load.pickups?.[0]?.shipper?.state}</td>
+                        <td className="px-3 py-2">{load.deliveries?.[0]?.consignee?.city}, {load.deliveries?.[0]?.consignee?.state}</td>
                         <td className="px-3 py-2">
                           <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700">
                             {load.status}

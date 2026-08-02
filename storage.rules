@@ -8,6 +8,23 @@ service firebase.storage {
     // Tenant document uploads (Rate Con, BOL, POD, receipts, etc.)
     // Auth-only: Firestore membership cross-gets were denying legitimate ATS users
     // (storage/unauthorized) even when the same user could use the rest of the app.
+    function isAllowedReceiptContentType() {
+      return request.resource.contentType.matches('image/.*')
+        || request.resource.contentType == 'application/pdf';
+    }
+
+    // Expense receipts: images/PDF only
+    match /tenants/{tenantId}/expenses/receipts/{fileName} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.size < 25 * 1024 * 1024
+        && isAllowedReceiptContentType();
+      allow update: if isSignedIn()
+        && request.resource.size < 25 * 1024 * 1024
+        && isAllowedReceiptContentType();
+      allow delete: if isSignedIn();
+    }
+
     match /tenants/{tenantId}/{allPaths=**} {
       allow read: if isSignedIn();
       allow create: if isSignedIn()

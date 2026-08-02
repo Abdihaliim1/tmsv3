@@ -54,7 +54,7 @@ import {
 import { buildDueInsuranceExpenses } from '../services/insuranceRecurrence';
 import {
   withDispatcherCommission,
-  calculateDriverPay,
+  computeStoredDriverPayFields,
   getDispatcherAssignmentFields,
   getLoadRevenue,
 } from '../services/businessLogic';
@@ -1272,81 +1272,104 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     }
   };
 
-  const deleteLoad = async (id: string, force: boolean = false) => {
+  const deleteLoad = async (id: string, _force: boolean = false) => {
     const load = loads.find(l => l.id === id);
     if (!load) return;
 
-    // Check for linked entities
+    // Financial integrity: never leave orphan invoices/settlements by unlinking alone.
     const linkedInvoices = invoices.filter(inv =>
-      inv.loadId === id || inv.loadIds?.includes(id)
+      inv.loadId === id || inv.loadIds?.includes(id) || load.invoiceId === inv.id
     );
     const linkedSettlements = settlements.filter(sett =>
       sett.loadId === id ||
       sett.loadIds?.includes(id) ||
-      sett.loads?.some(snapshot => snapshot.loadId === id)
+      sett.loads?.some(snapshot => snapshot.loadId === id) ||
+      load.settlementId === sett.id ||
+      load.dispatcherSettlementId === sett.id
     );
 
-    // If linked entities exist, ask for confirmation
-    if (!force && (linkedInvoices.length > 0 || linkedSettlements.length > 0)) {
-      const invoiceList = linkedInvoices.map(inv => inv.invoiceNumber).join(', ');
-      const settlementList = linkedSettlements.map(sett => sett.settlementNumber || sett.id).join(', ');
-
-      const message =
-        `Load ${load.loadNumber} is linked to:\n` +
-        (linkedInvoices.length > 0 ? `- Invoices: ${invoiceList}\n` : '') +
-        (linkedSettlements.length > 0 ? `- Settlements: ${settlementList}\n` : '') +
-        '\nDeleting this load will unlink it from these entities.\n\nAre you sure you want to delete this load?';
-
-      if (!window.confirm(message)) {
-        return; // User cancelled
-      }
+    if (linkedInvoices.length > 0 || load.invoiceId) {
+      const invoiceList = linkedInvoices.map(inv => inv.invoiceNumber || inv.id).join(', ')
+        || load.invoiceId;
+      throw new Error(
+        `Cannot delete load ${load.loadNumber}: it is linked to invoice(s) ${invoiceList}. ` +
+          `Delete or void the invoice first so AR stays accurate.`
+      );
+    }
+    if (linkedSettlements.length > 0 || load.settlementId || load.dispatcherSettlementId) {
+      const settlementList = linkedSettlements.map(sett => sett.settlementNumber || sett.id).join(', ')
+        || load.settlementId
+        || load.dispatcherSettlementId;
+      throw new Error(
+        `Cannot delete load ${load.loadNumber}: it is linked to settlement(s) ${settlementList}. ` +
+          `Delete or void the settlement first so driver payables stay accurate.`
+      );
     }
 
-    // Store original state for rollback
-    const originalInvoices = [...invoices];
-    const originalSettlements = [...settlements];
+    const tripId = load.tripId || null;
+    const linkedTrip = tripId ? trips.find(t => t.id === tripId) : undefined;
+    const remainingTripLoads = tripId
+      ? loads.filter(l => l.id !== id && l.tripId === tripId)
+      : [];
+    const originalTrips = [...trips];
+    const originalLoads = [...loads];
 
-    // Optimistic update - unlink from invoices first
-    setInvoices(prev => prev.map(inv => {
-      if (inv.loadId === id) {
-        const updated = { ...inv };
-        delete updated.loadId;
-        return updated;
-      }
-      if (inv.loadIds?.includes(id)) {
-        return { ...inv, loadIds: inv.loadIds.filter(lid => lid !== id) };
-      }
-      return inv;
-    }));
-
-    // Optimistic update - unlink from settlements
-    setSettlements(prev => prev.map(sett => {
-      if (
-        sett.loadId === id ||
-        sett.loadIds?.includes(id) ||
-        sett.loads?.some(snapshot => snapshot.loadId === id)
-      ) {
-        const updated = {
-          ...sett,
-          loadIds: sett.loadIds?.filter(lid => lid !== id),
-          loads: sett.loads?.filter(snapshot => snapshot.loadId !== id),
-        };
-        delete updated.loadId;
-        return updated;
-      }
-      return sett;
-    }));
-
-    // Optimistic delete - remove the load
     setLoads(prev => prev.filter(l => l.id !== id));
+
+    // Optimistically prune / recalculate trip shell
+    if (linkedTrip) {
+      if (remainingTripLoads.length === 0) {
+        setTrips(prev => prev.filter(t => t.id !== linkedTrip.id));
+      } else {
+        const revenue = remainingTripLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
+        const totalMiles = remainingTripLoads.reduce((sum, l) => sum + (Number(l.miles) || 0), 0);
+        const driverPay = remainingTripLoads.reduce((sum, l) => sum + (Number(l.driverTotalGross) || 0), 0);
+        setTrips(prev => prev.map(t =>
+          t.id === linkedTrip.id
+            ? {
+                ...t,
+                revenue,
+                totalMiles,
+                driverPay,
+                plannedLoadIds: (t.plannedLoadIds || []).filter(plId => {
+                  // Keep planned ids that still have a live load or unmatched planned load
+                  return remainingTripLoads.some(l =>
+                    l.loadNumber === plId || l.id === plId
+                  ) || plannedLoads.some(pl => pl.id === plId && pl.tripId === t.id);
+                }),
+                updatedAt: new Date().toISOString(),
+              }
+            : t
+        ));
+      }
+    }
 
     try {
       await deleteLoadWithUnlink({
         tenantId: tenantId || 'default',
         loadId: id,
-        invoices: linkedInvoices,
-        settlements: linkedSettlements,
+        invoices: [],
+        settlements: [],
       });
+
+      if (linkedTrip) {
+        if (remainingTripLoads.length === 0) {
+          await firestoreDeleteTrip(tenantId || 'default', linkedTrip.id);
+        } else {
+          const revenue = remainingTripLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
+          const totalMiles = remainingTripLoads.reduce((sum, l) => sum + (Number(l.miles) || 0), 0);
+          const driverPay = remainingTripLoads.reduce((sum, l) => sum + (Number(l.driverTotalGross) || 0), 0);
+          const updatedTrip: Trip = {
+            ...linkedTrip,
+            revenue,
+            totalMiles,
+            driverPay,
+            updatedAt: new Date().toISOString(),
+          };
+          await saveTrip(tenantId || 'default', updatedTrip);
+        }
+      }
+
       if (load.loadNumber) {
         await releaseUniqueKey({
           tenantId: tenantId || 'default',
@@ -1360,13 +1383,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         tenantId,
         loadId: id,
         loadNumber: load.loadNumber,
+        tripId: tripId || undefined,
       });
-
     } catch (error) {
-      // Rollback all optimistic updates
-      setLoads(prev => [...prev, load]);
-      setInvoices(originalInvoices);
-      setSettlements(originalSettlements);
+      setLoads(originalLoads);
+      setTrips(originalTrips);
 
       errorHandler.handle(
         error,
@@ -3479,16 +3500,11 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         };
 
         const withCommission = withDispatcherCommission(draftLoad, dispatcher) as Load;
-        const driverBasePay = driver ? calculateDriverPay(withCommission, driver as Driver) : 0;
+        // Percentage of company gross already includes detention — do not add it again.
+        const payFields = computeStoredDriverPayFields(withCommission, driver as Driver | undefined);
         newLoads.push({
           ...withCommission,
-          driverBasePay,
-          driverDetentionPay: withCommission.detentionAmount || 0,
-          driverLayoverPay: withCommission.layoverAmount || 0,
-          driverTotalGross:
-            driverBasePay +
-            (withCommission.detentionAmount || 0) +
-            (withCommission.layoverAmount || 0),
+          ...payFields,
         });
       }
 

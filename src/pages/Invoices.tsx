@@ -645,8 +645,11 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
     setNewRemitAddress('');
   };
 
-  // Get uninvoiced loads for this customer
+  const allowNoLoadInvoice = !initialCustomerName && preSelectedLoadIds.length === 0;
+
+  // Get uninvoiced loads for this customer (never dump all loads for no-load invoices)
   const customerLoads = useMemo(() => {
+    if (allowNoLoadInvoice) return [];
     return loads.filter(load => {
       const isDelivered =
         load.status === LoadStatus.Delivered
@@ -664,7 +667,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       }
       return true;
     });
-  }, [loads, invoices, initialCustomerName]);
+  }, [loads, invoices, initialCustomerName, allowNoLoadInvoice]);
 
   const handleLoadToggle = (loadId: string) => {
     setSelectedLoadIds(prev =>
@@ -684,8 +687,6 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const totalAmount = selectedLoads.reduce((sum, load) => sum + (load.grandTotal || load.rate || 0), 0);
   const factoringFee = isFactored ? totalAmount * (factoringFeePercent / 100) : 0;
   const netAmount = totalAmount - factoringFee;
-
-  const allowNoLoadInvoice = !initialCustomerName && preSelectedLoadIds.length === 0;
 
   const handleCreateInvoice = async () => {
     if (isSubmitting) return;
@@ -1151,8 +1152,18 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
         </div>
       </div>
 
-      {/* Uninvoiced Loads Section */}
+      {/* Uninvoiced Loads Section — skipped for standalone no-load invoices */}
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+        {allowNoLoadInvoice ? (
+          <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-5">
+            <h3 className="text-lg font-semibold text-slate-900">No-Load Invoice</h3>
+            <p className="text-sm text-slate-600 mt-1">
+              This invoice is not linked to freight loads. Click Create No-Load Invoice and enter the
+              customer name and amount when prompted. Use Create Invoice from a customer group to bill delivered loads.
+            </p>
+          </div>
+        ) : (
+          <>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Uninvoiced Loads</h3>
@@ -1266,6 +1277,8 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
             Show Miles on Invoice
           </label>
         </div>
+          </>
+        )}
       </div>
 
       {/* Actions */}

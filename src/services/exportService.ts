@@ -9,7 +9,23 @@
  * - Complete tenant snapshot
  */
 
-import { Load, Invoice, Settlement, Driver, Dispatcher } from '../types';
+import {
+  Load,
+  Invoice,
+  Settlement,
+  Driver,
+  Dispatcher,
+  Expense,
+  Trip,
+  PlannedLoad,
+  Truck,
+  Trailer,
+  Broker,
+  CustomerEntity,
+  FactoringCompany,
+  FactoringTransaction,
+  Employee,
+} from '../types';
 
 /**
  * Export loads to CSV
@@ -205,39 +221,74 @@ export function exportDriversToCSV(drivers: Driver[]): string {
     .join('\n');
 }
 
-/**
- * Export complete tenant snapshot to JSON
- */
-export function exportTenantSnapshot(params: {
+export type TenantSnapshotParams = {
   loads: Load[];
   invoices: Invoice[];
   settlements: Settlement[];
   drivers: Driver[];
   dispatchers: Dispatcher[];
+  employees?: Employee[];
+  expenses?: Expense[];
+  trips?: Trip[];
+  plannedLoads?: PlannedLoad[];
+  trucks?: Truck[];
+  trailers?: Trailer[];
+  brokers?: Broker[];
+  customers?: CustomerEntity[];
+  factoringCompanies?: FactoringCompany[];
+  factoringTransactions?: FactoringTransaction[];
   tenantId: string;
   exportedAt: string;
-}): string {
+};
+
+/**
+ * Export complete tenant snapshot to JSON (all primary business collections).
+ */
+export function exportTenantSnapshot(params: TenantSnapshotParams): string {
+  const data = {
+    loads: params.loads,
+    invoices: params.invoices,
+    settlements: params.settlements,
+    drivers: params.drivers,
+    dispatchers: params.dispatchers,
+    employees: params.employees || [],
+    expenses: params.expenses || [],
+    trips: params.trips || [],
+    plannedLoads: params.plannedLoads || [],
+    trucks: params.trucks || [],
+    trailers: params.trailers || [],
+    brokers: params.brokers || [],
+    customers: params.customers || [],
+    factoringCompanies: params.factoringCompanies || [],
+    factoringTransactions: params.factoringTransactions || [],
+  };
+
   const snapshot = {
     tenantId: params.tenantId,
     exportedAt: params.exportedAt,
-    version: '1.0',
-    data: {
-      loads: params.loads,
-      invoices: params.invoices,
-      settlements: params.settlements,
-      drivers: params.drivers,
-      dispatchers: params.dispatchers,
-    },
+    version: '2.0',
+    data,
     summary: {
-      totalLoads: params.loads.length,
-      totalInvoices: params.invoices.length,
-      totalSettlements: params.settlements.length,
-      totalDrivers: params.drivers.length,
-      totalDispatchers: params.dispatchers.length,
-      totalRevenue: params.invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0),
-      totalSettlementsPaid: params.settlements
+      totalLoads: data.loads.length,
+      totalInvoices: data.invoices.length,
+      totalSettlements: data.settlements.length,
+      totalDrivers: data.drivers.length,
+      totalDispatchers: data.dispatchers.length,
+      totalEmployees: data.employees.length,
+      totalExpenses: data.expenses.length,
+      totalTrips: data.trips.length,
+      totalPlannedLoads: data.plannedLoads.length,
+      totalTrucks: data.trucks.length,
+      totalTrailers: data.trailers.length,
+      totalBrokers: data.brokers.length,
+      totalCustomers: data.customers.length,
+      totalFactoringCompanies: data.factoringCompanies.length,
+      totalFactoringTransactions: data.factoringTransactions.length,
+      totalRevenue: data.invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0),
+      totalSettlementsPaid: data.settlements
         .filter(s => s.status === 'paid')
         .reduce((sum, s) => sum + (s.netPay || 0), 0),
+      totalExpensesAmount: data.expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
     },
   };
 
@@ -285,22 +336,12 @@ export function downloadJSON(json: string, filename: string): void {
 /**
  * Export all data (convenience function)
  */
-export function exportAllData(params: {
-  loads: Load[];
-  invoices: Invoice[];
-  settlements: Settlement[];
-  drivers: Driver[];
-  dispatchers: Dispatcher[];
-  tenantId: string;
-}): void {
+export function exportAllData(params: Omit<TenantSnapshotParams, 'exportedAt'>): void {
   const timestamp = new Date().toISOString().split('T')[0];
-  
-  // Export as JSON snapshot
   const snapshot = exportTenantSnapshot({
     ...params,
     exportedAt: new Date().toISOString(),
   });
-  
   downloadJSON(snapshot, `tms-export-${params.tenantId}-${timestamp}.json`);
 }
 

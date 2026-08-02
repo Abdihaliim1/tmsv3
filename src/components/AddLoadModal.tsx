@@ -9,6 +9,7 @@ import { normalize } from '../services/brokerUtils';
 import { BrokerAutocomplete } from './BrokerAutocomplete';
 import DocumentUpload from './DocumentUpload';
 import { isLoadLocked, validatePostDeliveryUpdates } from '../services/loadLocking';
+import { getAllowedLoadStatusOptions } from '../services/loadLifecycle';
 
 interface AddLoadModalProps {
   isOpen: boolean;
@@ -348,27 +349,30 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
     setFormData(prev => ({ ...prev, totalAccessorials, grandTotal }));
   }, [formData.rate, formData.detentionAmount, formData.layoverAmount, formData.lumperAmount, formData.fscAmount, formData.tonuFee, formData.otherAccessorials]);
 
-  // Auto-calculate driver pay (base + detention + layover)
+  // Auto-calculate driver pay.
+  // Percentage: % of company gross (rate+FSC+accessorials) — do NOT add detention again.
+  // Per-mile / flat: base + detention + layover pass-through.
   useEffect(() => {
     if (formData.driverId && formData.rate > 0) {
       const driver = drivers.find(d => d.id === formData.driverId);
       if (driver) {
+        const driverDetentionPay = formData.detentionAmount || 0;
+        const driverLayoverPay = formData.layoverAmount || 0;
         let driverBasePay = 0;
+        let driverTotalGross = 0;
+
         if (driver.payment?.type === 'percentage') {
           const payPercentage = validatePayPercentage(driver.payPercentage || driver.rateOrSplit || 0, driver.type);
-          driverBasePay = formData.rate * payPercentage; // Base pay from base rate (not grand total)
+          const companyGross = formData.grandTotal || formData.rate || 0;
+          driverBasePay = companyGross * payPercentage;
+          driverTotalGross = driverBasePay;
         } else if (driver.payment?.type === 'per_mile') {
           driverBasePay = (formData.miles || 0) * (driver.payment.perMileRate || 0);
+          driverTotalGross = driverBasePay + driverDetentionPay + driverLayoverPay;
+        } else {
+          driverBasePay = driver.payment?.flatRate || 0;
+          driverTotalGross = driverBasePay + driverDetentionPay + driverLayoverPay;
         }
-
-        // Detention is 100% pass-through to driver
-        const driverDetentionPay = formData.detentionAmount || 0;
-
-        // Layover is also pass-through to driver
-        const driverLayoverPay = formData.layoverAmount || 0;
-
-        // Total gross = base + detention + layover
-        const driverTotalGross = driverBasePay + driverDetentionPay + driverLayoverPay;
 
         setFormData(prev => ({
           ...prev,
@@ -387,7 +391,7 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
         driverTotalGross: 0
       }));
     }
-  }, [formData.driverId, formData.rate, formData.miles, formData.detentionAmount, formData.layoverAmount, drivers]);
+  }, [formData.driverId, formData.rate, formData.miles, formData.detentionAmount, formData.layoverAmount, formData.grandTotal, drivers]);
 
   // Auto-calculate dispatcher commission on gross revenue (rate+FSC+accessorials) by default
   useEffect(() => {
@@ -1230,14 +1234,14 @@ const AddLoadModal: React.FC<AddLoadModalProps> = ({ isOpen, onClose, onSubmit, 
                   <label className="text-xs font-medium text-slate-600">Status</label>
                   <select name="status" value={formData.status} onChange={handleChange} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                     {(editingLoad
-                      ? Object.values(LoadStatus)
+                      ? getAllowedLoadStatusOptions(editingLoad.status || formData.status || LoadStatus.Available)
                       : [
                           LoadStatus.Available,
                           LoadStatus.Dispatched,
                           LoadStatus.InTransit,
                         ]
                     ).map(status => (
-                      <option key={status} value={status}>{status.replace('_', ' ').toUpperCase()}</option>
+                      <option key={status} value={status}>{status.replace(/_/g, ' ').toUpperCase()}</option>
                     ))}
                   </select>
                   {!editingLoad && (
