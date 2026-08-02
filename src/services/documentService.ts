@@ -559,29 +559,70 @@ export function getLatestDocument(
   );
 }
 
+export interface LoadPaperworkStatus {
+  hasUploadedPOD: boolean;
+  hasUploadedBOL: boolean;
+  bolNumber?: string;
+  podNumber?: string;
+  missing: string[];
+  /** True when uploaded POD and BOL files are present. */
+  isReady: boolean;
+}
+
+/**
+ * Distinguish reference numbers from uploaded POD/BOL files.
+ * A BOL/POD number alone does not count as paperwork.
+ */
+export function getLoadPaperworkStatus(load: Load): LoadPaperworkStatus {
+  const documents = load.documents || [];
+  const hasUploadedPOD = documents.some(d => {
+    const type = String(d.type || '').toLowerCase();
+    return type === 'pod' || type === 'proof_of_delivery' || type.includes('proof');
+  });
+  const hasUploadedBOL = documents.some(d => String(d.type || '').toLowerCase() === 'bol');
+
+  const missing: string[] = [];
+  if (!hasUploadedPOD) missing.push('POD');
+  if (!hasUploadedBOL) missing.push('BOL');
+
+  return {
+    hasUploadedPOD,
+    hasUploadedBOL,
+    bolNumber: load.bolNumber || undefined,
+    podNumber: load.podNumber || undefined,
+    missing,
+    isReady: missing.length === 0,
+  };
+}
+
+export type CanInvoiceOptions = {
+  /** When true, missing uploaded POD/BOL does not block (UI must audit the override). */
+  allowMissingDocuments?: boolean;
+};
+
 /**
  * Check if a load can be invoiced
  *
  * A load can be invoiced if:
  * - It has a valid status (delivered or completed)
  * - It has not already been invoiced
- * - It has the required documents (POD is typically required)
+ * - It has uploaded POD + BOL documents (unless allowMissingDocuments)
  *
  * @param load - The load to check
  * @returns Object with canInvoice boolean and reason if not
  */
-export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: string } {
-  // Check if load exists
+export function canInvoiceLoad(
+  load: Load,
+  options: CanInvoiceOptions = {}
+): { canInvoice: boolean; reason?: string; missingDocuments?: string[] } {
   if (!load) {
     return { canInvoice: false, reason: 'Load not found' };
   }
 
-  // Check if already invoiced
   if (load.invoiceId) {
     return { canInvoice: false, reason: 'Load already invoiced' };
   }
 
-  // Check status - must be delivered (or delivered with BOL / completed)
   const invoiceableStatuses = [
     'delivered',
     'completed',
@@ -594,23 +635,13 @@ export function canInvoiceLoad(load: Load): { canInvoice: boolean; reason?: stri
     return { canInvoice: false, reason: `Load status must be delivered or completed (current: ${load.status})` };
   }
 
-  // POD + BOL are required before invoicing (hard block)
-  const documents = load.documents || [];
-  // Reference numbers describe paperwork; they do not prove a file was uploaded.
-  const hasPOD = documents.some(d => {
-    const type = String(d.type || '').toLowerCase();
-    return type === 'pod' || type === 'proof_of_delivery' || type.includes('proof');
-  });
-  const hasBOL = documents.some(d => String(d.type || '').toLowerCase() === 'bol');
-
-  const missing: string[] = [];
-  if (!hasPOD) missing.push('POD');
-  if (!hasBOL) missing.push('BOL');
-  if (missing.length > 0) {
-    return {
-      canInvoice: false,
-      reason: `Missing uploaded required document${missing.length > 1 ? 's' : ''}: ${missing.join(' + ')}`,
-    };
+  const paperwork = getLoadPaperworkStatus(load);
+  if (paperwork.missing.length > 0) {
+    const reason = `Missing uploaded required document${paperwork.missing.length > 1 ? 's' : ''}: ${paperwork.missing.join(' + ')}`;
+    if (options.allowMissingDocuments) {
+      return { canInvoice: true, reason, missingDocuments: paperwork.missing };
+    }
+    return { canInvoice: false, reason, missingDocuments: paperwork.missing };
   }
 
   return { canInvoice: true };

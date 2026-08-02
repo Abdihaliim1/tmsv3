@@ -10,6 +10,19 @@
 
 export type InvoiceStatus = 'pending' | 'paid' | 'partial' | 'overdue' | 'draft';
 
+export type InvoiceDocumentOverrideMode = 'paperwork_hold' | 'admin_continue';
+
+/** Audited override when creating an invoice without uploaded POD/BOL files. */
+export interface InvoiceDocumentOverride {
+  mode: InvoiceDocumentOverrideMode;
+  missingDocuments: string[];
+  loadIds: string[];
+  reason: string;
+  overriddenBy: string;
+  overriddenByUid: string;
+  overriddenAt: string;
+}
+
 export interface Payment {
   id: string;
   invoiceId: string;
@@ -64,6 +77,10 @@ export interface Invoice {
   notes?: string;
   /** Remit-to payee line (factoring company or customer address book entry) */
   remitTo?: string;
+  /** True when invoice was created while POD/BOL files were still missing. */
+  paperworkHold?: boolean;
+  /** Audit details for missing-document invoicing overrides. */
+  documentOverride?: InvoiceDocumentOverride;
   createdAt?: string;
   updatedAt?: string;
 }

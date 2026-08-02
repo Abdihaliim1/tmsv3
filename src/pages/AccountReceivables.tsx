@@ -202,9 +202,9 @@ const AccountReceivables: React.FC = () => {
   };
 
   // Handle print/download invoice PDF
-  const handlePrintInvoice = (invoice: Invoice) => {
+  const handlePrintInvoice = async (invoice: Invoice) => {
     try {
-      generateInvoicePDF(invoice, loads, companyProfile);
+      await generateInvoicePDF(invoice, loads, companyProfile);
       setOpenMenuId(null);
     } catch (error) {
       console.error('Error generating invoice PDF:', error);

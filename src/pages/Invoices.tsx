@@ -12,19 +12,30 @@ import {
   FileText, Plus, Search, ChevronLeft, ChevronRight,
   Check, X, Download, Edit, Trash2, MoreHorizontal,
   Building2, Package, Clock, CheckCircle,
-  AlertTriangle, TrendingUp
+  AlertTriangle, TrendingUp, Upload
 } from 'lucide-react';
 import { useTMS } from '../context/TMSContext';
 import { useCompany } from '../context/CompanyContext';
 import { useTenant } from '../context/TenantContext';
-import { Invoice, InvoiceStatus, LoadStatus, Load, FactoringCompany, NewFactoringCompanyInput } from '../types';
+import { useAuth } from '../context/AuthContext';
+import {
+  Invoice,
+  InvoiceStatus,
+  LoadStatus,
+  Load,
+  FactoringCompany,
+  NewFactoringCompanyInput,
+  InvoiceDocumentOverride,
+  InvoiceDocumentOverrideMode,
+} from '../types';
 import { generateUniqueInvoiceNumber } from '../services/invoiceService';
 import { generateInvoicePDF } from '../services/invoicePDF';
 import { useDebounce } from '../utils/debounce';
-import { formatDateOnly, tryParseDateOnlyLocal } from '../utils/dateOnly';
+import { formatDateOnly, formatLocalDate, getTodayDateString, tryParseDateOnlyLocal } from '../utils/dateOnly';
 import { FactoringCompanyAutocomplete } from '../components/FactoringCompanyAutocomplete';
 import { getFactoredLoads } from '../services/businessLogic';
-import { canInvoiceLoad } from '../services/documentService';
+import { canInvoiceLoad, getLoadPaperworkStatus } from '../services/documentService';
+import { writeAuditLog } from '../data/audit';
 import {
   calculateTotalPaid,
   calculateOutstandingBalance,
@@ -102,71 +113,153 @@ interface LoadsNotInvoicedProps {
   onViewInvoiceList: () => void;
 }
 
+const groupLoadsByCustomer = (loadList: Load[], search: string): Record<string, Load[]> => {
+  const groups: Record<string, Load[]> = {};
+  loadList.forEach(load => {
+    const customerName = load.customerName || load.brokerName || 'Unknown Customer';
+    if (!groups[customerName]) groups[customerName] = [];
+    groups[customerName].push(load);
+  });
+  if (!search) return groups;
+  const filtered: Record<string, Load[]> = {};
+  Object.entries(groups).forEach(([customer, customerLoads]) => {
+    if (customer.toLowerCase().includes(search.toLowerCase())) {
+      filtered[customer] = customerLoads;
+    }
+  });
+  return filtered;
+};
+
+const CustomerInvoiceGroupTable: React.FC<{
+  title: string;
+  description: string;
+  emptyTitle: string;
+  emptySubtitle: string;
+  groups: Record<string, Load[]>;
+  accent: 'ready' | 'missing';
+  onCreateInvoice: (customerName: string, loadIds: string[]) => void;
+  actionLabel?: string;
+}> = ({ title, description, emptyTitle, emptySubtitle, groups, accent, onCreateInvoice, actionLabel }) => {
+  const entries = Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  const headerBg = accent === 'ready' ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100';
+  const btnClass = accent === 'ready'
+    ? 'bg-emerald-600 hover:bg-emerald-700'
+    : 'bg-amber-600 hover:bg-amber-700';
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+      <div className={`px-4 py-3 border-b ${headerBg}`}>
+        <h3 className="font-semibold text-slate-900">{title}</h3>
+        <p className="text-xs text-slate-600 mt-1">{description}</p>
+      </div>
+      <table className="w-full">
+        <thead className="bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th className="text-left py-3 px-4 font-medium text-slate-700">Customer</th>
+            <th className="text-center py-3 px-4 font-medium text-slate-700"># of Loads</th>
+            <th className="text-right py-3 px-4 font-medium text-slate-700">Total Amount</th>
+            <th className="text-right py-3 px-4 font-medium text-slate-700">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="py-10 text-center text-slate-500">
+                <Package size={40} className="mx-auto mb-3 text-slate-300" />
+                <p className="font-medium">{emptyTitle}</p>
+                <p className="text-sm">{emptySubtitle}</p>
+              </td>
+            </tr>
+          ) : (
+            entries.map(([customerName, customerLoads]) => {
+              const totalAmount = customerLoads.reduce((sum, load) => sum + (load.grandTotal || load.rate || 0), 0);
+              return (
+                <tr key={`${accent}-${customerName}`} className="border-b border-slate-100 hover:bg-slate-50">
+                  <td className="py-4 px-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${accent === 'ready' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+                        {accent === 'ready'
+                          ? <CheckCircle size={20} className="text-emerald-600" />
+                          : <AlertTriangle size={20} className="text-amber-600" />}
+                      </div>
+                      <span className="font-medium text-slate-900">{customerName}</span>
+                    </div>
+                  </td>
+                  <td className="py-4 px-4 text-center">
+                    <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-sm font-medium">
+                      {customerLoads.length}
+                    </span>
+                  </td>
+                  <td className="py-4 px-4 text-right font-medium text-slate-900">
+                    {formatCurrency(totalAmount)}
+                  </td>
+                  <td className="py-4 px-4 text-right">
+                    <button
+                      onClick={() => {
+                        const recentIds = customerLoads.filter(isRecentDeliveredLoad).map(l => l.id);
+                        onCreateInvoice(customerName, recentIds.length ? recentIds : customerLoads.map(l => l.id));
+                      }}
+                      className={`px-4 py-2 text-white rounded-lg text-sm font-medium flex items-center gap-2 ml-auto ${btnClass}`}
+                    >
+                      <Plus size={16} />
+                      {actionLabel || 'Create Invoice'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, onViewInvoiceList }) => {
   const { loads, invoices } = useTMS();
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  // Get delivered loads that are NOT invoiced
   const uninvoicedLoads = useMemo(() => {
     return loads.filter(load => {
-      // Must be delivered or completed
       const isDelivered =
         load.status === LoadStatus.Delivered
         || load.status === LoadStatus.Completed
         || load.status === LoadStatus.DeliveredWithBOL;
       if (!isDelivered) return false;
-
-      // Check if already invoiced via load's invoiceId
       if (load.invoiceId) return false;
-
-      // Check if any invoice references this load
       const hasInvoice = invoices.some(inv =>
         inv.loadId === load.id || inv.loadIds?.includes(load.id)
       );
-      if (hasInvoice) return false;
-
-      return true;
+      return !hasInvoice;
     });
   }, [loads, invoices]);
 
-  // Group by customer name
-  const groupedByCustomer = useMemo(() => {
-    const groups: Record<string, Load[]> = {};
+  const readyLoads = useMemo(
+    () => uninvoicedLoads.filter(l => getLoadPaperworkStatus(l).isReady),
+    [uninvoicedLoads]
+  );
+  const missingPaperworkLoads = useMemo(
+    () => uninvoicedLoads.filter(l => !getLoadPaperworkStatus(l).isReady),
+    [uninvoicedLoads]
+  );
 
-    uninvoicedLoads.forEach(load => {
-      const customerName = load.customerName || load.brokerName || 'Unknown Customer';
-      if (!groups[customerName]) {
-        groups[customerName] = [];
-      }
-      groups[customerName].push(load);
-    });
-
-    // Filter by search term
-    if (debouncedSearchTerm) {
-      const filtered: Record<string, Load[]> = {};
-      Object.entries(groups).forEach(([customer, customerLoads]) => {
-        if (customer.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) {
-          filtered[customer] = customerLoads;
-        }
-      });
-      return filtered;
-    }
-
-    return groups;
-  }, [uninvoicedLoads, debouncedSearchTerm]);
-
-  const customerCount = Object.keys(groupedByCustomer).length;
-  const totalLoads = uninvoicedLoads.length;
+  const readyGroups = useMemo(
+    () => groupLoadsByCustomer(readyLoads, debouncedSearchTerm),
+    [readyLoads, debouncedSearchTerm]
+  );
+  const missingGroups = useMemo(
+    () => groupLoadsByCustomer(missingPaperworkLoads, debouncedSearchTerm),
+    [missingPaperworkLoads, debouncedSearchTerm]
+  );
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Loads Not Invoiced</h2>
+          <h2 className="text-xl font-bold text-slate-900">Delivered → Invoice Queue</h2>
           <p className="text-slate-600 mt-1">
-            {totalLoads} delivered, uninvoiced load{totalLoads !== 1 ? 's' : ''} from {customerCount} customer{customerCount !== 1 ? 's' : ''}. Totals include all uninvoiced loads.
+            {readyLoads.length} ready to invoice · {missingPaperworkLoads.length} missing paperwork · {uninvoicedLoads.length} total uninvoiced
           </p>
         </div>
         <div className="flex gap-3">
@@ -187,7 +280,6 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
         </div>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
         <input
@@ -199,73 +291,204 @@ const LoadsNotInvoiced: React.FC<LoadsNotInvoicedProps> = ({ onCreateInvoice, on
         />
       </div>
 
-      {/* Customer Groups Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-        <p className="px-4 py-3 text-xs text-slate-600 bg-blue-50 border-b border-blue-100">
-          Create Invoice preselects delivered loads from the last 45 days or the current/previous calendar month. Older loads remain available unchecked on the invoice form.
-        </p>
-        <table className="w-full">
-          <thead className="bg-slate-50 border-b border-slate-200">
-            <tr>
-              <th className="text-left py-3 px-4 font-medium text-slate-700">Customer</th>
-              <th className="text-center py-3 px-4 font-medium text-slate-700"># of Loads</th>
-              <th className="text-right py-3 px-4 font-medium text-slate-700">Total Amount</th>
-              <th className="text-right py-3 px-4 font-medium text-slate-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(groupedByCustomer).length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-12 text-center text-slate-500">
-                  <Package size={48} className="mx-auto mb-4 text-slate-300" />
-                  <p className="text-lg font-medium">No loads ready for invoicing</p>
-                  <p className="text-sm">Delivered loads will appear here when ready to invoice</p>
-                </td>
-              </tr>
-            ) : (
-              Object.entries(groupedByCustomer)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([customerName, customerLoads]) => {
-                  const totalAmount = customerLoads.reduce((sum, load) => sum + (load.grandTotal || load.rate || 0), 0);
-                  return (
-                    <tr key={customerName} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                            <Building2 size={20} className="text-blue-600" />
-                          </div>
-                          <span className="font-medium text-slate-900">{customerName}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 text-center">
-                        <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-sm font-medium">
-                          {customerLoads.length}
-                        </span>
-                      </td>
-                      <td className="py-4 px-4 text-right font-medium text-slate-900">
-                        {formatCurrency(totalAmount)}
-                      </td>
-                      <td className="py-4 px-4 text-right">
-                        <button
-                          onClick={() => {
-                            const recentIds = customerLoads
-                              .filter(isRecentDeliveredLoad)
-                              .map(l => l.id);
-                            onCreateInvoice(customerName, recentIds);
-                          }}
-                          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium flex items-center gap-2 ml-auto"
-                        >
-                          <Plus size={16} />
-                          Create Invoice
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
+      <p className="text-xs text-slate-600 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3">
+        Ready loads have uploaded POD and BOL files. BOL/POD reference numbers alone do not count.
+        Create Invoice preselects loads from the last 45 days or the current/previous calendar month.
+      </p>
+
+      <CustomerInvoiceGroupTable
+        title="Ready to Invoice"
+        description="Delivered loads with uploaded POD and BOL documents."
+        emptyTitle="No loads ready to invoice"
+        emptySubtitle="Upload POD and BOL files on delivered loads to move them here"
+        groups={readyGroups}
+        accent="ready"
+        onCreateInvoice={onCreateInvoice}
+      />
+
+      <CustomerInvoiceGroupTable
+        title="Missing Paperwork"
+        description="Delivered loads still missing uploaded POD and/or BOL files. You can invoice on Paperwork Hold or with an admin override."
+        emptyTitle="No loads waiting on paperwork"
+        emptySubtitle="All delivered uninvoiced loads have uploaded POD and BOL"
+        groups={missingGroups}
+        accent="missing"
+        onCreateInvoice={onCreateInvoice}
+        actionLabel="Invoice / Resolve"
+      />
+    </div>
+  );
+};
+
+// ============================================================================
+// Missing Documents Override Modal
+// ============================================================================
+
+interface MissingDocumentsModalProps {
+  blockedLoads: Array<{ load: Load; missing: string[] }>;
+  isAdmin: boolean;
+  onUpload: () => void;
+  onPaperworkHold: (reason: string) => void;
+  onAdminContinue: (reason: string) => void;
+  onCancel: () => void;
+}
+
+const MissingDocumentsModal: React.FC<MissingDocumentsModalProps> = ({
+  blockedLoads,
+  isAdmin,
+  onUpload,
+  onPaperworkHold,
+  onAdminContinue,
+  onCancel,
+}) => {
+  const [reason, setReason] = useState('');
+  const [mode, setMode] = useState<'choose' | 'paperwork_hold' | 'admin_continue'>('choose');
+
+  const confirmWithReason = (target: 'paperwork_hold' | 'admin_continue') => {
+    const trimmed = reason.trim();
+    if (trimmed.length < 5) {
+      alert('Please enter a reason (at least 5 characters) for the audit log.');
+      return;
+    }
+    if (target === 'paperwork_hold') onPaperworkHold(trimmed);
+    else onAdminContinue(trimmed);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="text-amber-600" size={20} />
+            <h3 className="text-lg font-semibold text-slate-900">Missing Documents</h3>
+          </div>
+          <button onClick={onCancel} className="p-1 hover:bg-slate-100 rounded-lg">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          <p className="text-sm text-slate-600">
+            Uploaded POD and BOL files are required. BOL/POD reference numbers alone do not count as paperwork.
+          </p>
+          <ul className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm space-y-1 max-h-40 overflow-y-auto">
+            {blockedLoads.slice(0, 12).map(({ load, missing }) => (
+              <li key={load.id} className="text-slate-800">
+                <span className="font-medium">{load.loadNumber}</span>
+                {' — missing '}
+                <span className="text-amber-800">{missing.join(' + ')}</span>
+                {load.bolNumber ? (
+                  <span className="text-slate-500"> (BOL # {load.bolNumber} on file)</span>
+                ) : null}
+              </li>
+            ))}
+            {blockedLoads.length > 12 && (
+              <li className="text-slate-500">…and {blockedLoads.length - 12} more</li>
             )}
-          </tbody>
-        </table>
+          </ul>
+
+          {mode === 'choose' && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={onUpload}
+                className="w-full flex items-center gap-3 px-4 py-3 border border-slate-200 rounded-lg hover:bg-slate-50 text-left"
+              >
+                <Upload size={18} className="text-blue-600" />
+                <div>
+                  <div className="font-medium text-slate-900">Upload missing documents</div>
+                  <div className="text-xs text-slate-500">Cancel invoicing and attach POD/BOL files on each load</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('paperwork_hold')}
+                className="w-full flex items-center gap-3 px-4 py-3 border border-amber-200 rounded-lg hover:bg-amber-50 text-left"
+              >
+                <Clock size={18} className="text-amber-600" />
+                <div>
+                  <div className="font-medium text-slate-900">Create invoice on Paperwork Hold</div>
+                  <div className="text-xs text-slate-500">Invoice is created and flagged until documents are uploaded</div>
+                </div>
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setMode('admin_continue')}
+                  className="w-full flex items-center gap-3 px-4 py-3 border border-red-200 rounded-lg hover:bg-red-50 text-left"
+                >
+                  <CheckCircle size={18} className="text-red-600" />
+                  <div>
+                    <div className="font-medium text-slate-900">Continue without documents</div>
+                    <div className="text-xs text-slate-500">Admin only — requires reason and writes an audit log</div>
+                  </div>
+                </button>
+              )}
+            </div>
+          )}
+
+          {(mode === 'paperwork_hold' || mode === 'admin_continue') && (
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-slate-700">
+                Reason (required for audit)
+              </label>
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={3}
+                placeholder="Why is this invoice being created without uploaded POD/BOL?"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMode('choose')}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmWithReason(mode)}
+                  className={`px-4 py-2 rounded-lg text-sm text-white ${
+                    mode === 'paperwork_hold' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'
+                  }`}
+                >
+                  {mode === 'paperwork_hold' ? 'Create on Paperwork Hold' : 'Continue without documents'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
+    </div>
+  );
+};
+
+const PaperworkBadges: React.FC<{ load: Load }> = ({ load }) => {
+  const status = getLoadPaperworkStatus(load);
+  return (
+    <div className="flex flex-wrap gap-1">
+      <span
+        className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+          status.hasUploadedPOD
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-amber-50 text-amber-700 border-amber-200'
+        }`}
+        title={status.hasUploadedPOD ? 'Uploaded POD file present' : 'Uploaded POD file missing'}
+      >
+        POD {status.hasUploadedPOD ? '✓' : '—'}
+      </span>
+      <span
+        className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+          status.hasUploadedBOL
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-amber-50 text-amber-700 border-amber-200'
+        }`}
+        title={status.hasUploadedBOL ? 'Uploaded BOL file present' : 'Uploaded BOL file missing'}
+      >
+        BOL {status.hasUploadedBOL ? '✓' : '—'}
+      </span>
     </div>
   );
 };
@@ -289,17 +512,19 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
 }) => {
   const { loads, invoices, factoringCompanies, customers, addInvoice, addCustomer } = useTMS();
   const { activeTenantId } = useTenant();
+  const { user: authUser } = useAuth();
   useCompany();
   const tenantId = activeTenantId || 'default';
+  const isAdmin = authUser?.role === 'admin';
 
   // Form state
   const [invoiceNumber] = useState(() => generateUniqueInvoiceNumber(tenantId, invoices));
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [invoiceDate, setInvoiceDate] = useState(() => getTodayDateString());
   const [dueDate, setDueDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() + 30);
-    return date.toISOString().split('T')[0];
+    return formatLocalDate(date);
   });
   const [remitTo, setRemitTo] = useState('');
   const [remitSearch, setRemitSearch] = useState('');
@@ -317,6 +542,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
   const [selectedFactoringCompany, setSelectedFactoringCompany] = useState<FactoringCompany | null>(null);
   const [factoringFeePercent, setFactoringFeePercent] = useState(2.5);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [docOverrideModal, setDocOverrideModal] = useState<Array<{ load: Load; missing: string[] }> | null>(null);
 
   const remitOptions = useMemo(() => {
     const fromFactor = factoringCompanies.map(fc => ({
@@ -504,32 +730,39 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
     }
 
     const checks = selectedLoads.map(load => ({ load, check: canInvoiceLoad(load) }));
-    const blocked = checks.filter(x => !x.check.canInvoice);
-    if (blocked.length > 0) {
+    const hardBlocked = checks.filter(
+      x => !x.check.canInvoice && !x.check.missingDocuments?.length
+    );
+    if (hardBlocked.length > 0) {
       alert(
-        `Cannot invoice — missing requirements:\n` +
-          blocked
+        `Cannot invoice — blocked loads:\n` +
+          hardBlocked
             .slice(0, 8)
             .map(x => `• ${x.load.loadNumber}: ${x.check.reason}`)
-            .join('\n') +
-          (blocked.length > 8 ? `\n…and ${blocked.length - 8} more` : '')
+            .join('\n')
       );
       return;
     }
-    const warnings = checks.filter(x => x.check.canInvoice && x.check.reason);
-    if (warnings.length > 0) {
-      const ok = window.confirm(
-        `Warning — paperwork incomplete:\n` +
-          warnings
-            .slice(0, 8)
-            .map(x => `• ${x.load.loadNumber}: ${x.check.reason}`)
-            .join('\n') +
-          (warnings.length > 8 ? `\n…and ${warnings.length - 8} more` : '') +
-          `\n\nCreate invoice anyway?`
-      );
-      if (!ok) return;
+
+    const missingDocs = checks
+      .filter(x => (x.check.missingDocuments?.length || 0) > 0)
+      .map(x => ({
+        load: x.load,
+        missing: x.check.missingDocuments || getLoadPaperworkStatus(x.load).missing,
+      }));
+    if (missingDocs.length > 0) {
+      setDocOverrideModal(missingDocs);
+      return;
     }
 
+    await createInvoiceWithOptions();
+  };
+
+  const createInvoiceWithOptions = async (override?: {
+    mode: InvoiceDocumentOverrideMode;
+    reason: string;
+    missingLoads: Array<{ load: Load; missing: string[] }>;
+  }) => {
     const finalInvoiceNumber = (customInvoiceNumber || invoiceNumber).trim();
     const duplicate = invoices.some(
       inv => inv.invoiceNumber?.trim().toLowerCase() === finalInvoiceNumber.toLowerCase()
@@ -544,9 +777,42 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       return;
     }
 
-    const customerName = selectedLoads[0]?.customerName || selectedLoads[0]?.brokerName || initialCustomerName || 'Unknown';
+    if (override) {
+      const recheck = selectedLoads.map(load =>
+        canInvoiceLoad(load, { allowMissingDocuments: true })
+      );
+      const stillBlocked = recheck.filter(c => !c.canInvoice);
+      if (stillBlocked.length > 0) {
+        alert(stillBlocked.map(c => c.reason).join('\n'));
+        return;
+      }
+    }
 
-    // Create the invoice
+    const customerName = selectedLoads[0]?.customerName || selectedLoads[0]?.brokerName || initialCustomerName || 'Unknown';
+    const missingAll = Array.from(
+      new Set((override?.missingLoads || []).flatMap(x => x.missing))
+    );
+
+    let documentOverride: InvoiceDocumentOverride | undefined;
+    if (override) {
+      documentOverride = {
+        mode: override.mode,
+        missingDocuments: missingAll,
+        loadIds: override.missingLoads.map(x => x.load.id),
+        reason: override.reason,
+        overriddenBy: authUser?.displayName || authUser?.email || 'unknown',
+        overriddenByUid: authUser?.uid || 'unknown',
+        overriddenAt: new Date().toISOString(),
+      };
+    }
+
+    const holdNote =
+      override?.mode === 'paperwork_hold'
+        ? `[Paperwork Hold] Missing uploaded ${missingAll.join(' + ') || 'POD/BOL'}. Reason: ${override.reason}`
+        : override?.mode === 'admin_continue'
+          ? `[Admin document override] Missing uploaded ${missingAll.join(' + ') || 'POD/BOL'}. Reason: ${override.reason}`
+          : '';
+
     const newInvoice: Omit<Invoice, 'id'> = {
       invoiceNumber: finalInvoiceNumber,
       customerName: customerName,
@@ -556,7 +822,7 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       status: 'pending',
       date: invoiceDate,
       dueDate: dueDate,
-      notes: note,
+      notes: [note, holdNote].filter(Boolean).join('\n') || undefined,
       remitTo: remitTo.trim() || undefined,
       createdAt: new Date().toISOString(),
       isFactored: isFactored,
@@ -567,16 +833,44 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
       factoringFee: isFactored ? factoringFee : undefined,
       netFundedAmount: isFactored ? netAmount : undefined,
       fundingStatus: isFactored ? 'submitted' : undefined,
+      paperworkHold: override?.mode === 'paperwork_hold' || undefined,
+      documentOverride,
     };
 
     setIsSubmitting(true);
     try {
-      // addInvoice atomically creates the invoice and links real invoiceId on loads.
-      // Do NOT overwrite invoiceId with "pending" afterward — that corrupts the link.
       const created = await addInvoice(newInvoice);
       if (!created?.id) {
         throw new Error('Invoice was not created. Check whether the load is already invoiced.');
       }
+
+      if (documentOverride) {
+        await writeAuditLog({
+          tenantId: tenantId || 'default',
+          actorUid: documentOverride.overriddenByUid,
+          actorRole: authUser?.role || 'viewer',
+          entityType: 'invoice',
+          entityId: created.id,
+          action: 'ADJUSTMENT',
+          summary:
+            documentOverride.mode === 'paperwork_hold'
+              ? `Created invoice ${created.invoiceNumber} on Paperwork Hold (missing ${documentOverride.missingDocuments.join(', ')})`
+              : `Admin created invoice ${created.invoiceNumber} without uploaded documents (missing ${documentOverride.missingDocuments.join(', ')})`,
+          reason: documentOverride.reason,
+          after: {
+            invoiceNumber: created.invoiceNumber,
+            paperworkHold: !!created.paperworkHold,
+            documentOverride,
+          },
+          metadata: {
+            loadIds: documentOverride.loadIds,
+            missingDocuments: documentOverride.missingDocuments,
+            mode: documentOverride.mode,
+          },
+        });
+      }
+
+      setDocOverrideModal(null);
       onSave();
     } catch (error: any) {
       alert(error?.message || 'Failed to create invoice');
@@ -899,7 +1193,8 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
                 <th className="py-2 px-3 text-left font-medium text-slate-700">Delivery</th>
                 <th className="py-2 px-3 text-left font-medium text-slate-700">From</th>
                 <th className="py-2 px-3 text-left font-medium text-slate-700">To</th>
-                <th className="py-2 px-3 text-left font-medium text-slate-700">BOL</th>
+                <th className="py-2 px-3 text-left font-medium text-slate-700">BOL Number</th>
+                <th className="py-2 px-3 text-left font-medium text-slate-700">Uploaded POD/BOL</th>
                 <th className="py-2 px-3 text-right font-medium text-slate-700">Miles</th>
                 <th className="py-2 px-3 text-right font-medium text-slate-700">Rate</th>
                 <th className="py-2 px-3 text-right font-medium text-slate-700">Total</th>
@@ -908,15 +1203,17 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
             <tbody>
               {customerLoads.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                  <td colSpan={11} className="py-8 text-center text-slate-500">
                     No uninvoiced loads found for this customer
                   </td>
                 </tr>
               ) : (
-                customerLoads.map(load => (
+                customerLoads.map(load => {
+                  const paperwork = getLoadPaperworkStatus(load);
+                  return (
                   <tr
                     key={load.id}
-                    className={`border-b border-slate-100 hover:bg-slate-50 ${selectedLoadIds.includes(load.id) ? 'bg-blue-50' : ''}`}
+                    className={`border-b border-slate-100 hover:bg-slate-50 ${selectedLoadIds.includes(load.id) ? 'bg-blue-50' : ''} ${!paperwork.isReady ? 'bg-amber-50/40' : ''}`}
                   >
                     <td className="py-3 px-3">
                       <input
@@ -931,12 +1228,18 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
                     <td className="py-3 px-3">{formatDate(load.deliveryDate)}</td>
                     <td className="py-3 px-3">{load.originCity}, {load.originState}</td>
                     <td className="py-3 px-3">{load.destCity}, {load.destState}</td>
-                    <td className="py-3 px-3">{load.bolNumber || '-'}</td>
+                    <td className="py-3 px-3 text-slate-600" title="Reference number only — not an uploaded file">
+                      {load.bolNumber || '—'}
+                    </td>
+                    <td className="py-3 px-3">
+                      <PaperworkBadges load={load} />
+                    </td>
                     <td className="py-3 px-3 text-right">{load.miles?.toLocaleString() || '-'}</td>
                     <td className="py-3 px-3 text-right">{formatCurrency(load.rate || 0)}</td>
                     <td className="py-3 px-3 text-right font-medium">{formatCurrency(load.grandTotal || load.rate || 0)}</td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -981,6 +1284,42 @@ const NewInvoiceForm: React.FC<NewInvoiceFormProps> = ({
           Cancel
         </button>
       </div>
+
+      {docOverrideModal && (
+        <MissingDocumentsModal
+          blockedLoads={docOverrideModal}
+          isAdmin={isAdmin}
+          onUpload={() => {
+            setDocOverrideModal(null);
+            alert(
+              'Upload POD and BOL files on each load (Documents section), then return here to create the invoice.\n\n' +
+                docOverrideModal
+                  .slice(0, 10)
+                  .map(x => `• ${x.load.loadNumber}: needs ${x.missing.join(' + ')}`)
+                  .join('\n')
+            );
+          }}
+          onPaperworkHold={async (reason) => {
+            await createInvoiceWithOptions({
+              mode: 'paperwork_hold',
+              reason,
+              missingLoads: docOverrideModal,
+            });
+          }}
+          onAdminContinue={async (reason) => {
+            if (!isAdmin) {
+              alert('Only admins can continue without documents.');
+              return;
+            }
+            await createInvoiceWithOptions({
+              mode: 'admin_continue',
+              reason,
+              missingLoads: docOverrideModal,
+            });
+          }}
+          onCancel={() => setDocOverrideModal(null)}
+        />
+      )}
     </div>
   );
 };
@@ -1286,7 +1625,14 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
     };
   }, [invoices]);
 
-  const getStatusBadge = (status: InvoiceStatus) => {
+  const getStatusBadge = (status: InvoiceStatus, invoice?: Invoice) => {
+    if (invoice?.paperworkHold && status !== 'paid') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium border bg-orange-50 text-orange-700 border-orange-200">
+          PAPERWORK HOLD
+        </span>
+      );
+    }
     const styles: Record<InvoiceStatus, string> = {
       pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
       paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -1498,7 +1844,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                     <td className="py-3 px-4">{formatDate(invoice.dueDate)}</td>
                     <td className="py-3 px-4">{invoice.loadIds?.length || 1}</td>
                     <td className="py-3 px-4 text-right font-medium">{formatCurrency(invoice.amount)}</td>
-                    <td className="py-3 px-4 text-center">{getStatusBadge(invoice.status)}</td>
+                    <td className="py-3 px-4 text-center">{getStatusBadge(invoice.status, invoice)}</td>
                     <td className="py-3 px-4 text-center text-xs text-slate-600">
                       {invoice.isFactored ? (invoice.fundingStatus || 'submitted') : '—'}
                     </td>
@@ -1518,7 +1864,7 @@ const InvoiceList: React.FC<InvoiceListProps> = ({ onBack }) => {
                                 className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
                               >
                                 <CheckCircle size={16} />
-                                Mark Invoice Paid (customer)
+                                Record Payment
                               </button>
                             )}
                             {invoice.isFactored && (

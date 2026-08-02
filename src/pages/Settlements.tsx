@@ -1628,10 +1628,10 @@ const Settlements: React.FC = () => {
                           </button>
                         )}
                         <button 
-                          onClick={() => {
+                          onClick={async () => {
                             if (payee) {
                               try {
-                                generateSettlementPDF(settlement, payee, loads, settlements, companyProfile);
+                                await generateSettlementPDF(settlement, payee, loads, settlements, companyProfile);
                               } catch (error) {
                                 console.error('Error generating PDF:', error);
                                 alert('Error generating PDF. Please try again.');
@@ -2500,12 +2500,17 @@ const Settlements: React.FC = () => {
                 Close
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const payee = previewSettlement.driverId 
                     ? drivers.find(d => d.id === previewSettlement.driverId)
                     : employees.find(e => e.id === previewSettlement.dispatcherId);
                   if (payee) {
-                    generateSettlementPDF(previewSettlement, payee, loads, settlements, companyProfile);
+                    try {
+                      await generateSettlementPDF(previewSettlement, payee, loads, settlements, companyProfile);
+                    } catch (error) {
+                      console.error('Error generating PDF:', error);
+                      alert('Error generating PDF. Please try again.');
+                    }
                   }
                 }}
                 className="btn-primary px-4 py-2 rounded-lg flex items-center gap-2"

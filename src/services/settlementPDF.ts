@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { Settlement, Employee, Load, CompanyProfile } from '../types';
-import { yearFromDateOnly } from '../utils/dateOnly';
+import { formatDateOnly, yearFromDateOnly } from '../utils/dateOnly';
+import { drawPdfLogo, loadLogoForPdf } from '../utils/pdfLogo';
 import { getLoadRevenue } from './businessLogic';
 
 /** =========================
@@ -61,16 +62,12 @@ const formatCurrency = (amount: number): string => {
 
 const formatDate = (dateStr: string): string => {
   if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return 'N/A';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDateOnly(dateStr, { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
 const formatDateHeader = (dateStr: string): string => {
   if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return 'N/A';
-  return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+  return formatDateOnly(dateStr, { month: 'short', day: '2-digit', year: 'numeric' });
 };
 
 /**
@@ -348,14 +345,15 @@ const ensurePageSpace = (doc: jsPDF, y: number, needed: number, margin: number) 
  *  MAIN: Driver settlement PDF
  *  ========================= */
 
-export const generateDriverSettlementPDF = (
+export const generateDriverSettlementPDF = async (
   settlement: Settlement,
   driver: Employee,
   loads: Load[],
   allSettlements: Settlement[],
   companyProfile: CompanyProfile
-): void => {
+): Promise<void> => {
   const COMPANY = getCompanyInfo(companyProfile);
+  const logo = await loadLogoForPdf(COMPANY.logoUrl);
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
   doc.setFont(FONT, 'normal');
@@ -367,34 +365,16 @@ export const generateDriverSettlementPDF = (
   let y = margin;
 
   /** ====== HEADER ====== */
-  // Title right aligned
+  // Title right aligned — keep clear of logo box on the left
   drawText(doc, 'SETTLEMENT STATEMENT', pageWidth - margin, y + 0.10, { size: FONT_SIZES.title, bold: true, align: 'right' });
-  
-  // Compliance disclaimer - Settlement type notice
-  const isOwnerOperator = (driver as any).employeeType === 'owner_operator' || (driver as any).type === 'OwnerOperator';
-  const settlementTypeText = isOwnerOperator 
-    ? 'Settlement Type: Owner-Operator (Independent Contractor) | This document is not a payroll paystub'
-    : 'Settlement Type: Company Driver | This document is not a payroll paystub';
-  drawText(doc, settlementTypeText, margin, y + 0.25, { 
-    size: FONT_SIZES.small, 
-    bold: false, 
-    align: 'left',
-    maxWidth: contentW 
-  });
 
   // Logo (if available) or placeholder left
-  if (COMPANY.logoUrl) {
-    try {
-      // Try to add logo image (base64 or URL)
-      // Note: jsPDF requires image to be loaded first
-      // For now, we'll use placeholder but structure is ready for image loading
-      // TODO: Implement async image loading for logoUrl
-      drawLogoPlaceholder(doc, margin, y);
-    } catch (error) {
-      console.warn('Could not load logo, using placeholder:', error);
-      drawLogoPlaceholder(doc, margin, y);
-    }
-  } else {
+  const logoSize = 0.9;
+  let logoDrawn = false;
+  if (logo) {
+    logoDrawn = drawPdfLogo(doc, logo, margin, y, logoSize, logoSize);
+  }
+  if (!logoDrawn) {
     drawLogoPlaceholder(doc, margin, y);
   }
 
@@ -429,7 +409,19 @@ export const generateDriverSettlementPDF = (
     cy += 0.14;
   });
 
-  y += 1.05;
+  // Settlement type sits below the logo/company header so it never overlaps the logo box
+  y = Math.max(y + logoSize + 0.12, cy + 0.08);
+  const isOwnerOperator = (driver as any).employeeType === 'owner_operator' || (driver as any).type === 'OwnerOperator';
+  const settlementTypeText = isOwnerOperator
+    ? 'Settlement Type: Owner-Operator (Independent Contractor) | This document is not a payroll paystub'
+    : 'Settlement Type: Company Driver | This document is not a payroll paystub';
+  drawText(doc, settlementTypeText, margin, y, {
+    size: FONT_SIZES.small,
+    bold: false,
+    align: 'left',
+    maxWidth: contentW,
+  });
+  y += 0.22;
 
   /** ====== PAYMENT FOR BAR + PANELS ====== */
   y = ensurePageSpace(doc, y, 1.2, margin);
@@ -907,15 +899,15 @@ export const generateDriverSettlementPDF = (
   doc.save(filename);
 };
 
-export const generateDispatcherSettlementPDF = (
+export const generateDispatcherSettlementPDF = async (
   settlement: Settlement,
   dispatcher: Employee,
   loads: Load[],
   allSettlements: Settlement[],
   companyProfile: CompanyProfile
-): void => {
+): Promise<void> => {
   // Same layout; settlement.type === 'dispatcher' switches labels/columns to commission
-  generateDriverSettlementPDF(
+  await generateDriverSettlementPDF(
     { ...settlement, type: 'dispatcher' },
     dispatcher,
     loads,
@@ -924,16 +916,16 @@ export const generateDispatcherSettlementPDF = (
   );
 };
 
-export const generateSettlementPDF = (
+export const generateSettlementPDF = async (
   settlement: Settlement,
   payee: Employee,
   loads: Load[],
   allSettlements: Settlement[],
   companyProfile: CompanyProfile
-): void => {
+): Promise<void> => {
   if (settlement.type === 'dispatcher' || (payee as any).employeeType === 'dispatcher') {
-    generateDispatcherSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
+    await generateDispatcherSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
   } else {
-    generateDriverSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
+    await generateDriverSettlementPDF(settlement, payee, loads, allSettlements, companyProfile);
   }
 };

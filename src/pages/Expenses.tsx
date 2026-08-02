@@ -1,12 +1,33 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2, X } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Plus, Download, Filter, Receipt, Fuel, Wrench, Shield, MapPin, DollarSign, FileText, Bed, MoreHorizontal, Edit, Trash2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { useTMS } from '../context/TMSContext';
 import { useTenant } from '../context/TenantContext';
 import { Expense, Truck } from '../types';
 import { downloadCSV } from '../services/exportService';
 import { storage } from '../lib/firebase';
-import { getTodayDateString } from '../utils/dateOnly';
+import {
+  formatLocalDate,
+  getTodayDateString,
+  tryParseDateOnlyLocal,
+} from '../utils/dateOnly';
+import {
+  currentISOWeekKey,
+  getDateOfISOWeek,
+  getISOWeekParts,
+  shiftISOWeekKey,
+} from '../utils/isoWeek';
+
+type ExpensePeriod =
+  | 'current_week'
+  | 'last_week'
+  | 'current_month'
+  | 'last_month'
+  | 'select_month'
+  | 'custom'
+  | 'all_time';
+
+const PAGE_SIZE = 50;
 
 const Expenses: React.FC = () => {
   const { drivers, trucks, expenses, addExpense, updateExpense, deleteExpense } = useTMS();
@@ -18,6 +39,14 @@ const Expenses: React.FC = () => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [period, setPeriod] = useState<ExpensePeriod>('current_month');
+  const [selectMonth, setSelectMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [page, setPage] = useState(1);
   
   // Form state
   const [formData, setFormData] = useState<Partial<Omit<Expense, 'id'>> & Pick<Expense, 'date'>>({
@@ -155,19 +184,96 @@ const Expenses: React.FC = () => {
     setSelectedTruckId('');
   };
 
-  const filteredExpenses = expenses.filter(expense => {
-    if (filterType !== 'all' && expense.type !== filterType) return false;
-    if (filterStatus !== 'all' && expense.status !== filterStatus) return false;
-    return true;
-  });
+  const periodBounds = useMemo((): { start: Date | null; end: Date | null; label: string } => {
+    const now = new Date();
+    const endOfDay = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(23, 59, 59, 999);
+      return x;
+    };
+    const startOfDay = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      return x;
+    };
+
+    switch (period) {
+      case 'current_week': {
+        const { week, year } = getISOWeekParts(now);
+        const start = startOfDay(getDateOfISOWeek(week, year));
+        const end = endOfDay(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6));
+        return { start, end, label: `Week ${year}-W${String(week).padStart(2, '0')}` };
+      }
+      case 'last_week': {
+        const lastKey = shiftISOWeekKey(currentISOWeekKey(), -1);
+        const [y, w] = lastKey.split('-W');
+        const start = startOfDay(getDateOfISOWeek(parseInt(w, 10), parseInt(y, 10)));
+        const end = endOfDay(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6));
+        return { start, end, label: `Week ${lastKey}` };
+      }
+      case 'current_month': {
+        const start = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+        const end = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+        return { start, end, label: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) };
+      }
+      case 'last_month': {
+        const start = startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+        const end = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0));
+        return { start, end, label: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) };
+      }
+      case 'select_month': {
+        const [y, m] = selectMonth.split('-').map(Number);
+        const start = startOfDay(new Date(y, m - 1, 1));
+        const end = endOfDay(new Date(y, m, 0));
+        return { start, end, label: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) };
+      }
+      case 'custom': {
+        const start = customStart ? tryParseDateOnlyLocal(customStart) : null;
+        const endRaw = customEnd ? tryParseDateOnlyLocal(customEnd) : null;
+        const end = endRaw ? endOfDay(endRaw) : null;
+        return {
+          start: start ? startOfDay(start) : null,
+          end,
+          label: start && end
+            ? `${formatLocalDate(start)} → ${formatLocalDate(endRaw!)}`
+            : 'Custom range',
+        };
+      }
+      case 'all_time':
+      default:
+        return { start: null, end: null, label: 'All Time' };
+    }
+  }, [period, selectMonth, customStart, customEnd]);
+
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter(expense => {
+      if (filterType !== 'all' && expense.type !== filterType) return false;
+      if (filterStatus !== 'all' && expense.status !== filterStatus) return false;
+
+      if (periodBounds.start || periodBounds.end) {
+        const expDate = tryParseDateOnlyLocal(expense.date || expense.createdAt || '');
+        if (!expDate) return false;
+        if (periodBounds.start && expDate < periodBounds.start) return false;
+        if (periodBounds.end && expDate > periodBounds.end) return false;
+      }
+      return true;
+    });
+  }, [expenses, filterType, filterStatus, periodBounds]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterType, filterStatus, period, selectMonth, customStart, customEnd]);
 
   // Rejected expenses never count toward totals unless explicitly filtering rejected
   const totalAmount = filteredExpenses
     .filter(exp => filterStatus === 'rejected' || exp.status !== 'rejected')
     .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
-  const pendingAmount = expenses
+  const pendingAmount = filteredExpenses
     .filter(e => e.status === 'pending')
     .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+
+  const totalPages = Math.max(1, Math.ceil(filteredExpenses.length / PAGE_SIZE));
+  const paginatedExpenses = filteredExpenses.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <div className="p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
@@ -198,7 +304,8 @@ const Expenses: React.FC = () => {
               const csv = rows
                 .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
                 .join('\n');
-              downloadCSV(csv, `expenses-${new Date().toISOString().slice(0, 10)}.csv`);
+              const periodSlug = periodBounds.label.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
+              downloadCSV(csv, `expenses-${periodSlug || 'export'}-${getTodayDateString()}.csv`);
             }}
             className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 flex items-center gap-2"
           >
@@ -215,7 +322,7 @@ const Expenses: React.FC = () => {
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards — reflect selected period + filters */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-4">
@@ -223,8 +330,9 @@ const Expenses: React.FC = () => {
               <DollarSign size={24} />
             </div>
           </div>
-          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Total Expenses</p>
+          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Period Total</p>
           <h3 className="text-2xl font-bold text-slate-900 mt-1">${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+          <p className="text-xs text-slate-500 mt-1">{periodBounds.label}</p>
         </div>
         <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-4">
@@ -232,7 +340,7 @@ const Expenses: React.FC = () => {
               <Receipt size={24} />
             </div>
           </div>
-          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Pending Approval</p>
+          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Pending in Period</p>
           <h3 className="text-2xl font-bold text-slate-900 mt-1">${pendingAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
         </div>
         <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
@@ -241,18 +349,59 @@ const Expenses: React.FC = () => {
               <FileText size={24} />
             </div>
           </div>
-          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Total Count</p>
+          <p className="text-slate-500 text-sm font-medium uppercase tracking-wide">Expense Count</p>
           <h3 className="text-2xl font-bold text-slate-900 mt-1">{filteredExpenses.length}</h3>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Filter size={18} className="text-slate-500" />
-            <span className="text-sm font-medium text-slate-700">Filters:</span>
+            <span className="text-sm font-medium text-slate-700">Period:</span>
           </div>
+          <select
+            value={period}
+            onChange={(e) => setPeriod(e.target.value as ExpensePeriod)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="current_week">Current Week</option>
+            <option value="last_week">Last Week</option>
+            <option value="current_month">Current Month</option>
+            <option value="last_month">Last Month</option>
+            <option value="select_month">Select Month</option>
+            <option value="custom">Custom Date Range</option>
+            <option value="all_time">All Time</option>
+          </select>
+          {period === 'select_month' && (
+            <input
+              type="month"
+              value={selectMonth}
+              onChange={(e) => setSelectMonth(e.target.value)}
+              className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          )}
+          {period === 'custom' && (
+            <>
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-slate-400 text-sm">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="text-sm font-medium text-slate-700">Type / Status:</span>
           <select
             value={filterType}
             onChange={(e) => setFilterType(e.target.value)}
@@ -298,14 +447,14 @@ const Expenses: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {filteredExpenses.length === 0 ? (
+              {paginatedExpenses.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
-                    No expenses found. Add a new expense to get started.
+                    No expenses found for {periodBounds.label}. Adjust the period or add a new expense.
                   </td>
                 </tr>
               ) : (
-                filteredExpenses.map((expense) => {
+                paginatedExpenses.map((expense) => {
                   const expenseType = expense.type || 'other';
                   const TypeIcon = getTypeIcon(expenseType);
                   return (
@@ -420,6 +569,34 @@ const Expenses: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {filteredExpenses.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50">
+            <p className="text-sm text-slate-600">
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filteredExpenses.length)} of {filteredExpenses.length}
+              {' · '}
+              {periodBounds.label}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-40 hover:bg-white flex items-center gap-1"
+              >
+                <ChevronLeft size={16} /> Prev
+              </button>
+              <span className="text-sm text-slate-600">Page {page} / {totalPages}</span>
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm disabled:opacity-40 hover:bg-white flex items-center gap-1"
+              >
+                Next <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add/Edit Expense Modal */}
