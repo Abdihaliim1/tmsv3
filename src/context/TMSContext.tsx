@@ -63,6 +63,11 @@ import { claimUniqueKey, releaseUniqueKey } from '../services/uniqueKeyService';
 import { allocateStateMiles } from '../services/stateMiles';
 import { syncEmployeeAppRoleToUser } from '../services/userRoleSync';
 import { assertDeliveryOnOrAfterPickup } from '../utils/dateOnly';
+import {
+  createPlannedLoadPersisted,
+  deletePlannedLoadPersisted,
+  updatePlannedLoadPersisted,
+} from '../services/plannedLoadPersistence';
 
 /** In-flight guards against double-click / concurrent creates (client-side). */
 const inFlightInvoiceKeys = new Set<string>();
@@ -155,9 +160,9 @@ interface TMSContextType {
   updateDispatcher: (id: string, dispatcher: Partial<Dispatcher>) => void;
   deleteDispatcher: (id: string) => void;
   // Planned Load management
-  addPlannedLoad: (plannedLoad: NewPlannedLoadInput) => string;
-  updatePlannedLoad: (id: string, plannedLoad: Partial<PlannedLoad>) => void;
-  deletePlannedLoad: (id: string) => void;
+  addPlannedLoad: (plannedLoad: NewPlannedLoadInput) => Promise<string>;
+  updatePlannedLoad: (id: string, plannedLoad: Partial<PlannedLoad>) => Promise<void>;
+  deletePlannedLoad: (id: string) => Promise<void>;
   // Trip management
   addTrip: (trip: NewTripInput) => string;
   updateTrip: (id: string, trip: Partial<Trip>) => void;
@@ -256,9 +261,9 @@ export const TMSProvider: React.FC<TMSProviderProps> = ({ children, tenantId }) 
         addDispatcher: () => { },
         updateDispatcher: () => { },
         deleteDispatcher: () => { },
-        addPlannedLoad: () => '',
-        updatePlannedLoad: () => { },
-        deletePlannedLoad: () => { },
+        addPlannedLoad: async () => '',
+        updatePlannedLoad: async () => { },
+        deletePlannedLoad: async () => { },
         addTrip: () => '',
         updateTrip: () => { },
         deleteTrip: () => { },
@@ -2824,97 +2829,83 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
   // Planned Load functions
   // ============================================================================
 
-  const generatePlannedLoadNumber = (): string => {
-    const prefix = 'PL';
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).substring(2, 5).toUpperCase();
-    return `${prefix}-${timestamp}-${random}`;
+  const addPlannedLoad = async (input: NewPlannedLoadInput): Promise<string> => {
+    // Await Firestore write before treating the load as saved.
+    // Optimistic UI is applied only after persistence succeeds.
+    const persisted = await createPlannedLoadPersisted({
+      tenantId: tenantId || 'default',
+      input,
+      actorUid: authUser?.uid || 'system',
+      save: savePlannedLoad,
+    });
+
+    setPlannedLoads(prev => [persisted, ...prev]);
+    logger.info('[TMSContext] Planned load created', {
+      id: persisted.id,
+      systemLoadNumber: persisted.systemLoadNumber,
+    });
+    return persisted.id;
   };
 
-  const addPlannedLoad = (input: NewPlannedLoadInput): string => {
-    const dateOrderError = assertDeliveryOnOrAfterPickup(
-      input.pickups?.[0]?.pickupDate,
-      input.deliveries?.[input.deliveries.length - 1]?.deliveryDate
-    );
-    if (dateOrderError) throw new Error(dateOrderError);
-
-    const now = new Date().toISOString();
-    const id = generateShortId();
-    const systemLoadNumber = input.systemLoadNumber || generatePlannedLoadNumber();
-
-    const newPlannedLoad: PlannedLoad = {
-      ...input,
-      id,
-      systemLoadNumber,
-      status: 'planned',
-      currentStep: 1,
-      createdAt: now,
-      updatedAt: now,
-      createdBy: authUser?.uid || 'system',
-    };
-
-    setPlannedLoads(prev => [newPlannedLoad, ...prev]);
-    savePlannedLoad(tenantId || 'default', newPlannedLoad).catch(e => console.error('Failed to save planned load:', e));
-
-    logger.info('[TMSContext] Planned load created', { id, systemLoadNumber });
-    return id;
-  };
-
-  const updatePlannedLoad = (id: string, updates: Partial<PlannedLoad>) => {
+  const updatePlannedLoad = async (id: string, updates: Partial<PlannedLoad>): Promise<void> => {
     const existingPlannedLoad = plannedLoads.find(pl => pl.id === id);
-    if (!existingPlannedLoad) return;
-    const mergedPlannedLoad = { ...existingPlannedLoad, ...updates };
-    const dateOrderError = assertDeliveryOnOrAfterPickup(
-      mergedPlannedLoad.pickups?.[0]?.pickupDate,
-      mergedPlannedLoad.deliveries?.[mergedPlannedLoad.deliveries.length - 1]?.deliveryDate
-    );
-    if (dateOrderError) throw new Error(dateOrderError);
+    if (!existingPlannedLoad) {
+      throw new Error('plannedLoad not found');
+    }
 
-    let updatedPlannedLoad: PlannedLoad | null = null;
+    const previous = existingPlannedLoad;
+    // Optimistic update only after we know validation will run in the helper;
+    // roll back if persistence fails.
+    const optimistic: PlannedLoad = {
+      ...existingPlannedLoad,
+      ...updates,
+      id: existingPlannedLoad.id,
+      updatedAt: new Date().toISOString(),
+    };
+    setPlannedLoads(prev => prev.map(pl => (pl.id === id ? optimistic : pl)));
 
-    setPlannedLoads(prev => prev.map(pl => {
-      if (pl.id === id) {
-        const updated = { ...pl, ...updates, updatedAt: new Date().toISOString() };
-        updatedPlannedLoad = updated;
-        return updated;
-      }
-      return pl;
-    }));
-
-    if (updatedPlannedLoad) {
-      // Doc attach already wrote rateConUrl via documentService — use a partial
-      // update so a full setDoc merge cannot wipe those fields / documents.
-      if (updates.rateConUrl || updates.bolUrl || updates.documents) {
-        firestoreUpdateDocument(tenantId || 'default', 'plannedLoads', id, {
-          ...updates,
-          updatedAt: new Date().toISOString(),
-        } as Record<string, unknown>).catch(e =>
-          console.error('Failed to update planned load:', e)
-        );
-      } else {
-        savePlannedLoad(tenantId || 'default', updatedPlannedLoad).catch(e =>
-          console.error('Failed to update planned load:', e)
-        );
-      }
+    try {
+      const persisted = await updatePlannedLoadPersisted({
+        tenantId: tenantId || 'default',
+        existing: existingPlannedLoad,
+        updates,
+        save: savePlannedLoad,
+        partialUpdate: (tid, docId, patch) =>
+          firestoreUpdateDocument(tid, 'plannedLoads', docId, patch),
+      });
+      setPlannedLoads(prev => prev.map(pl => (pl.id === id ? persisted : pl)));
+    } catch (e) {
+      setPlannedLoads(prev => prev.map(pl => (pl.id === id ? previous : pl)));
+      throw e instanceof Error ? e : new Error('Failed to update planned load');
     }
   };
 
-  const deletePlannedLoad = (id: string) => {
+  const deletePlannedLoad = async (id: string): Promise<void> => {
     const plannedLoad = plannedLoads.find(pl => pl.id === id);
-    if (!plannedLoad) return;
+    if (!plannedLoad) {
+      throw new Error('plannedLoad not found');
+    }
 
-    // Don't delete if already dispatched
     if (plannedLoad.status !== 'planned') {
-      alert('Cannot delete a planned load that has already been dispatched.');
-      return;
+      throw new Error('Cannot delete a planned load that has already been dispatched.');
     }
 
     if (!window.confirm(`Are you sure you want to delete planned load ${plannedLoad.customLoadNumber || plannedLoad.systemLoadNumber}?`)) {
       return;
     }
 
+    const previous = plannedLoads;
     setPlannedLoads(prev => prev.filter(pl => pl.id !== id));
-    firestoreDeletePlannedLoad(tenantId || 'default', id).catch(e => console.error('Failed to delete planned load:', e));
+    try {
+      await deletePlannedLoadPersisted({
+        tenantId: tenantId || 'default',
+        plannedLoad,
+        deleteFn: firestoreDeletePlannedLoad,
+      });
+    } catch (e) {
+      setPlannedLoads(previous);
+      throw e instanceof Error ? e : new Error('Failed to delete planned load');
+    }
   };
 
   // ============================================================================
@@ -3904,9 +3895,9 @@ export const useTMS = () => {
         updateDispatcher: () => { },
         deleteDispatcher: () => { },
         // Planned Load management
-        addPlannedLoad: () => '',
-        updatePlannedLoad: () => { },
-        deletePlannedLoad: () => { },
+        addPlannedLoad: async () => '',
+        updatePlannedLoad: async () => { },
+        deletePlannedLoad: async () => { },
         // Trip management
         addTrip: () => '',
         updateTrip: () => { },

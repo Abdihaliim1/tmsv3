@@ -645,13 +645,14 @@ const DeliverySection: React.FC<DeliverySectionProps> = ({
 
 interface PlannedLoadFormProps {
   load?: PlannedLoad;
-  onSave: (load: Partial<PlannedLoad>) => void;
+  onSave: (load: Partial<PlannedLoad>) => void | Promise<void>;
   onCancel: () => void;
 }
 
 const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCancel }) => {
   const { customers, addCustomer, employees } = useTMS();
   const dispatchers = employees.filter(e => e.employeeType === 'dispatcher' && e.status === 'active');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Basic form data
   const [customLoadNumber, setCustomLoadNumber] = useState(load?.customLoadNumber || '');
@@ -933,8 +934,9 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     const primaryFee = parseFloat(fees.primaryFee) || 0;
     const fscAmount = parseFloat(fees.fscAmount) || 0;
     const detention = parseFloat(fees.detention) || 0;
@@ -959,70 +961,78 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
       return;
     }
     const dispatcher = dispatchers.find(d => d.id === dispatcherId);
-    onSave({
-      customLoadNumber,
-      customerId,
-      dispatcherId: dispatcherId || undefined,
-      dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
-      customer: selectedCustomer ? {
-        id: selectedCustomer.id,
-        name: selectedCustomer.name,
-        address: selectedCustomer.address,
-        city: selectedCustomer.city,
-        state: selectedCustomer.state,
-      } : {
-        id: 'new',
-        name: customerName,
-      },
-      pickups: pickups.map(p => ({
-        id: p.id,
-        shipper: {
-          id: p.shipperId || `shipper_${Date.now()}`,
-          name: p.shipperName,
-          address: p.shipperAddress,
-          city: p.shipperCity,
-          state: p.shipperState,
-          zipCode: p.shipperZipCode,
+    setIsSaving(true);
+    try {
+      await onSave({
+        customLoadNumber,
+        customerId,
+        dispatcherId: dispatcherId || undefined,
+        dispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
+        customer: selectedCustomer ? {
+          id: selectedCustomer.id,
+          name: selectedCustomer.name,
+          address: selectedCustomer.address,
+          city: selectedCustomer.city,
+          state: selectedCustomer.state,
+        } : {
+          id: 'new',
+          name: customerName,
         },
-        pickupDate: p.pickupDate,
-        driverInstructions: p.driverInstructions,
-        bolNumber: p.bolNumber,
-        customerRequiredInfo: p.customerRequiredInfo,
-        weight: parseFloat(p.weight) || 0,
-        quantity: parseFloat(p.quantity) || 0,
-        quantityUnit: p.quantityUnit,
-        notes: p.notes,
-        commodity: p.commodity,
-      })),
-      deliveries: deliveries.map(d => ({
-        id: d.id,
-        consignee: {
-          id: d.consigneeId || `consignee_${Date.now()}`,
-          name: d.consigneeName,
-          address: d.consigneeAddress,
-          city: d.consigneeCity,
-          state: d.consigneeState,
-          zipCode: d.consigneeZipCode,
+        pickups: pickups.map(p => ({
+          id: p.id,
+          shipper: {
+            id: p.shipperId || `shipper_${Date.now()}`,
+            name: p.shipperName,
+            address: p.shipperAddress,
+            city: p.shipperCity,
+            state: p.shipperState,
+            zipCode: p.shipperZipCode,
+          },
+          pickupDate: p.pickupDate,
+          driverInstructions: p.driverInstructions,
+          bolNumber: p.bolNumber,
+          customerRequiredInfo: p.customerRequiredInfo,
+          weight: parseFloat(p.weight) || 0,
+          quantity: parseFloat(p.quantity) || 0,
+          quantityUnit: p.quantityUnit,
+          notes: p.notes,
+          commodity: p.commodity,
+        })),
+        deliveries: deliveries.map(d => ({
+          id: d.id,
+          consignee: {
+            id: d.consigneeId || `consignee_${Date.now()}`,
+            name: d.consigneeName,
+            address: d.consigneeAddress,
+            city: d.consigneeCity,
+            state: d.consigneeState,
+            zipCode: d.consigneeZipCode,
+          },
+          deliveryDate: d.deliveryDate,
+          driverInstructions: d.driverInstructions,
+        })),
+        fees: {
+          primaryFee,
+          primaryFeeType: fees.primaryFeeType as FeeType,
+          fscAmount,
+          fscType: fees.fscType as FeeType,
+          accessoryFees: {
+            detention,
+            lumper,
+            stopOff,
+            tarpFee,
+            additional: [],
+          },
+          invoiceAdvance,
         },
-        deliveryDate: d.deliveryDate,
-        driverInstructions: d.driverInstructions,
-      })),
-      fees: {
-        primaryFee,
-        primaryFeeType: fees.primaryFeeType as FeeType,
-        fscAmount,
-        fscType: fees.fscType as FeeType,
-        accessoryFees: {
-          detention,
-          lumper,
-          stopOff,
-          tarpFee,
-          additional: [],
-        },
-        invoiceAdvance,
-      },
-      legalDisclaimer,
-    });
+        legalDisclaimer,
+      });
+    } catch (err) {
+      // Parent keeps the form open and surfaces the error; stay on this form.
+      alert(err instanceof Error ? err.message : 'Failed to save planned load. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -1335,15 +1345,17 @@ const PlannedLoadForm: React.FC<PlannedLoadFormProps> = ({ load, onSave, onCance
           <button
             type="button"
             onClick={onCancel}
-            className="px-6 py-2 text-red-600 hover:text-red-800 font-medium"
+            disabled={isSaving}
+            className="px-6 py-2 text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            disabled={isSaving}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:bg-slate-300 disabled:cursor-not-allowed"
           >
-            Save
+            {isSaving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </form>
@@ -1394,12 +1406,16 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
 
   const handleAttachFile = async (docType: 'RATE_CON' | 'BOL', file: File | undefined) => {
     if (!file) return;
+    if (!load.id) {
+      alert('This planned load has no persisted ID yet. Save the load first, then attach documents.');
+      return;
+    }
     setAttachBusy(docType);
     try {
       const uploaded = await uploadEntityDocument({
         tenantId: activeTenantId || 'default',
         entityType: 'plannedLoad',
-        entityId: load.id,
+        entityId: load.id, // must be the Firestore document ID
         type: docType,
         file,
         actorUid: user?.uid || 'anonymous',
@@ -1425,11 +1441,16 @@ const ViewPlannedLoad: React.FC<ViewPlannedLoadProps> = ({
           rateConAttached: true,
         } as PlannedLoad['customer'];
       }
-      updatePlannedLoad(load.id, patch);
+      await updatePlannedLoad(load.id, patch);
       alert(`${docType === 'RATE_CON' ? 'Rate Confirmation' : 'BOL'} attached successfully. You can now Add Trip.`);
     } catch (error) {
       console.error('Attach failed:', error);
-      alert(error instanceof Error ? error.message : 'Failed to attach document.');
+      const message = error instanceof Error ? error.message : 'Failed to attach document.';
+      alert(
+        message.includes('not found')
+          ? 'Planned load was not found in Firestore. Save the load first, hard-refresh, then attach Rate Confirmation.'
+          : message
+      );
     } finally {
       setAttachBusy(null);
     }
@@ -1758,12 +1779,10 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
     });
   }, [plannedLoads, searchTerm]);
 
-  const handleSaveLoad = useCallback((loadData: Partial<PlannedLoad>) => {
+  const handleSaveLoad = useCallback(async (loadData: Partial<PlannedLoad>) => {
     if (viewMode === 'edit' && selectedLoad) {
-      // Update existing planned load
-      updatePlannedLoad(selectedLoad.id, loadData);
+      await updatePlannedLoad(selectedLoad.id, loadData);
     } else {
-      // Create new planned load
       const newLoadInput: NewPlannedLoadInput = {
         customLoadNumber: loadData.customLoadNumber,
         customerId: loadData.customerId,
@@ -1779,20 +1798,28 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
           invoiceAdvance: 0,
         },
         legalDisclaimer: loadData.legalDisclaimer,
+        dispatcherId: loadData.dispatcherId,
+        dispatcherName: loadData.dispatcherName,
       };
-      addPlannedLoad(newLoadInput);
+      // Only leave the form after Firestore persistence succeeds.
+      const persistedId = await addPlannedLoad(newLoadInput);
+      if (!persistedId) {
+        throw new Error('Failed to persist planned load.');
+      }
     }
     setViewMode('list');
     setSelectedLoad(null);
   }, [viewMode, selectedLoad, addPlannedLoad, updatePlannedLoad]);
 
-  const handleDeleteLoad = useCallback((id: string) => {
-    if (confirm('Are you sure you want to delete this planned load?')) {
-      deletePlannedLoad(id);
+  const handleDeleteLoad = useCallback(async (id: string) => {
+    try {
+      await deletePlannedLoad(id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete planned load.');
     }
   }, [deletePlannedLoad]);
 
-  const handleCopyLoad = useCallback((load: PlannedLoad) => {
+  const handleCopyLoad = useCallback(async (load: PlannedLoad) => {
     const copiedLoadInput: NewPlannedLoadInput = {
       customLoadNumber: load.customLoadNumber ? `${load.customLoadNumber}-COPY` : undefined,
       customerId: load.customerId,
@@ -1802,7 +1829,11 @@ const LoadPlanner: React.FC<LoadPlannerProps> = ({ onNavigate }) => {
       fees: load.fees,
       legalDisclaimer: load.legalDisclaimer,
     };
-    addPlannedLoad(copiedLoadInput);
+    try {
+      await addPlannedLoad(copiedLoadInput);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to copy planned load.');
+    }
   }, [addPlannedLoad]);
 
   // Handle dispatching planned load to trip (from addTrip view)
