@@ -58,20 +58,26 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+    <div
+      className="min-h-dvh bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4 py-6"
+      style={{
+        paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
+        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+      }}
+    >
       <div className="max-w-md w-full">
         {/* Logo/Title */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-full mb-4">
-            <LogIn className="w-8 h-8 text-white" />
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 bg-blue-600 rounded-full mb-4">
+            <LogIn className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">TMS Pro</h1>
-          <p className="text-gray-600">Transportation Management System</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">TMS Pro</h1>
+          <p className="text-gray-600 text-sm sm:text-base">Transportation Management System</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-white rounded-xl shadow-xl p-8">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-6 text-center">
+        <div className="bg-white rounded-xl shadow-xl p-5 sm:p-8">
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900 mb-5 sm:mb-6 text-center">
             {showForgotPassword ? 'Reset Password' : 'Sign In'}
           </h2>
 
