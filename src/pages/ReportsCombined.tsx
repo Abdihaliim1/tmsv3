@@ -12,7 +12,7 @@ import {
   getLoadRevenue,
   getLoadFsc,
   isRevenueLoadStatus,
-  calculateFactoringFees,
+  calculateFactoringAccrual,
   calculateAccruedDriverPay,
   calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
@@ -198,6 +198,14 @@ const TaxReport: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 <p className="text-xl font-bold text-blue-700">{fmtMoney(estimatedTaxBase)}</p>
               </div>
             </div>
+            {financials.factoringBelowCoverageTarget && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Factoring coverage {financials.factoringCoveragePercent.toFixed(2)}% of revenue
+                (target {financials.factoringCoverageTargetPercent}%). Fees include accrued{' '}
+                {fmtMoney(financials.factoringAccruedFees)} on unfactored revenue; actual{' '}
+                {fmtMoney(financials.factoringActualFees)} uses historical invoice rates.
+              </div>
+            )}
             <p className="text-xs text-slate-500">
               Net profit for period: {fmtMoney(financials.netProfit)}. This is a management summary — not a filed tax return.
             </p>
@@ -1212,8 +1220,9 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
     );
     const dispatcherCost = accruedDispatcher.total;
 
-    // Factoring fees from loads + factored invoices
-    const factoringExpenses = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
+    // Actual factoring fees + accrued estimate on unfactored revenue (BUG-019)
+    const factoring = calculateFactoringAccrual(revenueLoads, invoices, factoringCompanies);
+    const factoringExpenses = factoring.total;
 
     const totalExpensesWithFees = totalExpenses + factoringExpenses + dispatcherCost;
     const netProfit = totalRevenue - totalExpensesWithFees - totalDriverPay;
@@ -1236,6 +1245,7 @@ const CompanyOverviewReport: React.FC<{ onCancel: () => void }> = ({ onCancel })
       totalExpenses: totalExpensesWithFees,
       netProfit,
       profitMargin,
+      factoring,
       uniqueCustomers: uniqueCustomers.size,
       activeDrivers: uniqueDrivers.size,
       avgRevenuePerLoad: loadsCompleted > 0 ? totalRevenue / loadsCompleted : 0,
@@ -1559,7 +1569,8 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
     );
     const dispatcherCost = accruedDispatcher.total;
 
-    const factoringExpenses = calculateFactoringFees(filteredLoads, invoices, factoringCompanies);
+    const factoring = calculateFactoringAccrual(filteredLoads, invoices, factoringCompanies);
+    const factoringExpenses = factoring.total;
 
     const operatingExpenses = Object.values(expensesByCategory).reduce((sum, val) => sum + val, 0);
     const totalExpenses = driverExpenses + operatingExpenses + dispatcherCost + factoringExpenses;
@@ -1583,6 +1594,13 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
         dispatcher: dispatcherCost,
         dispatcherEstimated: accruedDispatcher.isEstimated,
         factoring: factoringExpenses,
+        factoringActual: factoring.actualFees,
+        factoringAccrued: factoring.accruedFees,
+        factoredRevenue: factoring.factoredRevenue,
+        unfactoredRevenue: factoring.unfactoredRevenue,
+        factoringCoveragePercent: factoring.coveragePercent,
+        factoringBelowCoverageTarget: factoring.belowCoverageTarget,
+        factoringDefaultPercent: factoring.defaultFeePercent,
         operating: operatingExpenses,
         total: totalExpenses,
       },
@@ -1733,7 +1751,12 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
                   : 'Dispatcher Commission',
                 String(reportData.expenses.dispatcher),
               ],
-              ['Expense', 'Factoring Fees', String(reportData.expenses.factoring)],
+              ['Expense', 'Factoring Fees (Actual + Accrued)', String(reportData.expenses.factoring)],
+              ['Expense', 'Factoring Fees Actual', String(reportData.expenses.factoringActual || 0)],
+              ['Expense', 'Factoring Fees Accrued', String(reportData.expenses.factoringAccrued || 0)],
+              ['Expense', 'Factored Revenue', String(reportData.expenses.factoredRevenue || 0)],
+              ['Expense', 'Unfactored Revenue', String(reportData.expenses.unfactoredRevenue || 0)],
+              ['Expense', 'Factoring Coverage %', String(reportData.expenses.factoringCoveragePercent ?? 0)],
               ...Object.entries(reportData.expenses.byCategory).map(([cat, amt]) => [
                 'Expense',
                 cat,
@@ -1831,6 +1854,16 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
           {/* Expenses Section */}
           <div className="mb-6">
             <h3 className="text-lg font-bold text-white mb-3">Expenses</h3>
+            {reportData!.expenses.factoringBelowCoverageTarget && (
+              <div className="mb-3 rounded border border-amber-500/50 bg-amber-900/30 px-3 py-2 text-sm text-amber-100">
+                Factoring coverage {(reportData!.expenses.factoringCoveragePercent ?? 0).toFixed(2)}%
+                (target 100%). Accruing {(reportData!.expenses.factoringDefaultPercent ?? 2.5).toFixed(1)}% on{' '}
+                {formatCurrency(reportData!.expenses.unfactoredRevenue || 0)} unfactored revenue.
+                Actual {formatCurrency(reportData!.expenses.factoringActual || 0)} + accrued{' '}
+                {formatCurrency(reportData!.expenses.factoringAccrued || 0)} ={' '}
+                {formatCurrency(reportData!.expenses.factoring)}.
+              </div>
+            )}
             <table className="w-full max-w-2xl">
               <tbody className="text-white">
                 <tr className="border-b border-slate-700">
@@ -1849,9 +1882,26 @@ const ProfitLossReport: React.FC<{ onCancel: () => void }> = ({ onCancel }) => {
                   <td className="py-2 px-4 text-right">{formatCurrency(reportData!.expenses.dispatcher)}</td>
                 </tr>
                 <tr className="border-b border-slate-700">
-                  <td className="py-2 px-4 bg-slate-800">Factoring Fees</td>
+                  <td className="py-2 px-4 bg-slate-800">
+                    Factoring Fees
+                    {(reportData!.expenses.factoringAccrued || 0) > 0 ? ' (actual + accrued)' : ''}
+                  </td>
                   <td className="py-2 px-4 bg-slate-800 text-right">{formatCurrency(reportData!.expenses.factoring)}</td>
                 </tr>
+                {(reportData!.expenses.factoringActual || 0) > 0 || (reportData!.expenses.factoringAccrued || 0) > 0 ? (
+                  <>
+                    <tr className="border-b border-slate-700 text-sm text-slate-300">
+                      <td className="py-1 px-4 pl-8">Actual (factored)</td>
+                      <td className="py-1 px-4 text-right">{formatCurrency(reportData!.expenses.factoringActual || 0)}</td>
+                    </tr>
+                    <tr className="border-b border-slate-700 text-sm text-slate-300">
+                      <td className="py-1 px-4 pl-8">
+                        Accrued ({(reportData!.expenses.factoringDefaultPercent ?? 2.5).toFixed(1)}% unfactored)
+                      </td>
+                      <td className="py-1 px-4 text-right">{formatCurrency(reportData!.expenses.factoringAccrued || 0)}</td>
+                    </tr>
+                  </>
+                ) : null}
                 {Object.entries(reportData!.expenses.byCategory).map(([category, amount], index) => (
                   <tr key={category} className="border-b border-slate-700">
                     <td className={`py-2 px-4 ${index % 2 === 0 ? 'bg-slate-800' : ''}`}>{category}</td>

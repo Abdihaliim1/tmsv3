@@ -192,6 +192,21 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         />
       </div>
 
+      {periodFinancials.factoringBelowCoverageTarget && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">Factoring coverage below 100%</p>
+          <p className="mt-1">
+            {periodFinancials.factoringCoveragePercent.toFixed(2)}% of revenue is factored
+            (${periodFinancials.factoredRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).
+            P&amp;L accrues {periodFinancials.factoringDefaultPercent}% on unfactored revenue
+            (${periodFinancials.factoringAccruedFees.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} estimated)
+            and keeps actual fees
+            (${periodFinancials.factoringActualFees.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+            at each invoice&apos;s historical rate.
+          </p>
+        </div>
+      )}
+
       {/* Row 2: Trends (PRIMARY CONTENT) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Revenue Chart */}

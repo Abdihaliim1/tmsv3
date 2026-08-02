@@ -294,11 +294,40 @@ export function isCompanyRecognizedExpense(
   return true;
 }
 
+/** Default factoring fee when no company / invoice historical rate is available. */
+export const DEFAULT_FACTORING_FEE_PERCENT = 2.5;
+/** Business model assumes 100% of revenue is factored. */
+export const DEFAULT_FACTORING_COVERAGE_TARGET_PERCENT = 100;
+
+export type FactoringAccrualResult = {
+  /** Actual fees from factored invoices/loads + accrued estimate on unfactored revenue. */
+  total: number;
+  /** Fees recognized from factored invoices/loads (historical rate preserved). */
+  actualFees: number;
+  /** Accrued estimate on revenue still awaiting a factoring record. */
+  accruedFees: number;
+  factoredRevenue: number;
+  unfactoredRevenue: number;
+  totalRevenue: number;
+  coveragePercent: number;
+  coverageTargetPercent: number;
+  belowCoverageTarget: boolean;
+  defaultFeePercent: number;
+};
+
 export type PeriodFinancials = {
   revenue: number;
   driverPay: number;
   operatingExpenses: number;
   factoringFees: number;
+  factoringActualFees: number;
+  factoringAccruedFees: number;
+  factoredRevenue: number;
+  unfactoredRevenue: number;
+  factoringCoveragePercent: number;
+  factoringCoverageTargetPercent: number;
+  factoringBelowCoverageTarget: boolean;
+  factoringDefaultPercent: number;
   dispatcherCost: number;
   dispatcherCostEstimated: boolean;
   netProfit: number;
@@ -349,7 +378,7 @@ export function calculatePeriodFinancials(input: {
       .reduce((sum, exp) => sum + coerceMoney(exp.amount), 0)
   );
 
-  const factoringFees = calculateFactoringFees(revenueLoads, invoices, factoringCompanies);
+  const factoring = calculateFactoringAccrual(revenueLoads, invoices, factoringCompanies);
   const accruedDispatcher = calculateAccruedDispatcherCommission(
     revenueLoads,
     settlements,
@@ -357,14 +386,24 @@ export function calculatePeriodFinancials(input: {
   );
   const dispatcherCost = accruedDispatcher.total;
 
-  const netProfit = roundMoney(revenue - operatingExpenses - factoringFees - dispatcherCost - driverPay);
+  const netProfit = roundMoney(
+    revenue - operatingExpenses - factoring.total - dispatcherCost - driverPay
+  );
   const profitMargin = revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0;
 
   return {
     revenue,
     driverPay,
     operatingExpenses,
-    factoringFees,
+    factoringFees: factoring.total,
+    factoringActualFees: factoring.actualFees,
+    factoringAccruedFees: factoring.accruedFees,
+    factoredRevenue: factoring.factoredRevenue,
+    unfactoredRevenue: factoring.unfactoredRevenue,
+    factoringCoveragePercent: factoring.coveragePercent,
+    factoringCoverageTargetPercent: factoring.coverageTargetPercent,
+    factoringBelowCoverageTarget: factoring.belowCoverageTarget,
+    factoringDefaultPercent: factoring.defaultFeePercent,
     dispatcherCost,
     dispatcherCostEstimated: accruedDispatcher.isEstimated,
     netProfit,
@@ -401,7 +440,7 @@ export function resolveLoadFactoringFee(
     const company = factoringCompanies.find(fc => fc.id === companyId);
     pct = company?.feePercentage || 0;
   }
-  if (!pct || pct <= 0) pct = 2.5;
+  if (!pct || pct <= 0) pct = DEFAULT_FACTORING_FEE_PERCENT;
   // Guard nonsense percents
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
@@ -414,19 +453,18 @@ export function resolveLoadFactoringFee(
   return computed;
 }
 
-/**
- * Factoring fees for the given period loads only.
- * Does NOT inject orphan invoice fees when the period has no matching loads
- * (fixes empty-period P&L leaking year-to-date fees).
- *
- * When multiple period loads share one invoice, allocate that invoice's fee
- * by revenue share so cents stay consistent with the invoice total.
- */
-export function calculateFactoringFees(
-  loads: Load[],
-  invoices: Invoice[],
-  factoringCompanies: Array<{ id: string; feePercentage?: number }> = []
+/** Resolve the configured default factoring % (company fee, else 2.5%). */
+export function resolveDefaultFactoringPercent(
+  factoringCompanies: Array<{ feePercentage?: number }> = []
 ): number {
+  const withFee = factoringCompanies.find(fc => Number(fc.feePercentage) > 0);
+  let pct = Number(withFee?.feePercentage);
+  if (!Number.isFinite(pct) || pct <= 0) pct = DEFAULT_FACTORING_FEE_PERCENT;
+  if (pct > 100) pct = 100;
+  return pct;
+}
+
+function buildFactoredInvoiceByLoadId(invoices: Invoice[]): Map<string, Invoice> {
   const invoiceByLoadId = new Map<string, Invoice>();
   invoices.forEach(invoice => {
     if (!invoice.isFactored) return;
@@ -434,6 +472,23 @@ export function calculateFactoringFees(
       if (!invoiceByLoadId.has(id)) invoiceByLoadId.set(id, invoice);
     });
   });
+  return invoiceByLoadId;
+}
+
+/**
+ * Actual factoring fees for loads that already have a factoring record.
+ * Preserves each invoice's historical fee / rate. Does not accrue estimates.
+ *
+ * When multiple period loads share one invoice, allocate that invoice's fee
+ * by revenue share so cents stay consistent with the invoice total.
+ * Does NOT inject orphan invoice fees when the period has no matching loads.
+ */
+export function calculateActualFactoringFees(
+  loads: Load[],
+  invoices: Invoice[],
+  factoringCompanies: Array<{ id: string; feePercentage?: number }> = []
+): number {
+  const invoiceByLoadId = buildFactoredInvoiceByLoadId(invoices);
 
   const byInvoice = new Map<string, { invoice: Invoice; loads: Load[] }>();
   const orphanLoads: Load[] = [];
@@ -456,19 +511,19 @@ export function calculateFactoringFees(
 
   byInvoice.forEach(({ invoice, loads: invLoads }) => {
     const invoiceRevenue = Number(invoice.amount) || invLoads.reduce((s, l) => s + getLoadRevenue(l), 0);
+    // Prefer stored invoice fee (historical). Fall back to invoice historical %.
     let invoiceFee = Number(invoice.factoringFee) || 0;
     if (invoiceFee <= 0) {
       let pct = invoice.factoringFeePercent || 0;
       if ((!pct || pct <= 0) && invoice.factoringCompanyId) {
         pct = factoringCompanies.find(fc => fc.id === invoice.factoringCompanyId)?.feePercentage || 0;
       }
-      if (!pct || pct <= 0) pct = 2.5;
+      if (!pct || pct <= 0) pct = resolveDefaultFactoringPercent(factoringCompanies);
       invoiceFee = invoiceRevenue * (pct / 100);
     }
 
     const periodRevenue = invLoads.reduce((s, l) => s + getLoadRevenue(l), 0);
     if (invoiceRevenue > 0 && periodRevenue > 0) {
-      // Allocate only the share of the invoice that falls in this period's loads
       total += invoiceFee * (periodRevenue / invoiceRevenue);
     } else {
       invLoads.forEach(l => {
@@ -482,6 +537,73 @@ export function calculateFactoringFees(
   });
 
   return roundMoney(total);
+}
+
+/**
+ * BUG-019: P&L factoring accrual.
+ * - Actual fees from factored invoices/loads (historical rate preserved).
+ * - Accrue default % against revenue still awaiting a factoring record.
+ * - Never double-count: each load is either actual or accrued, not both.
+ * - Warn when factored coverage is below the configured target (default 100%).
+ */
+export function calculateFactoringAccrual(
+  loads: Load[],
+  invoices: Invoice[],
+  factoringCompanies: Array<{ id: string; feePercentage?: number }> = [],
+  opts?: { coverageTargetPercent?: number; defaultFeePercent?: number }
+): FactoringAccrualResult {
+  const defaultFeePercent =
+    opts?.defaultFeePercent ?? resolveDefaultFactoringPercent(factoringCompanies);
+  const coverageTargetPercent =
+    opts?.coverageTargetPercent ?? DEFAULT_FACTORING_COVERAGE_TARGET_PERCENT;
+
+  const invoiceByLoadId = buildFactoredInvoiceByLoadId(invoices);
+  const factoredLoads: Load[] = [];
+  const unfactoredLoads: Load[] = [];
+
+  loads.forEach(load => {
+    const invoice = invoiceByLoadId.get(load.id);
+    if (load.isFactored || invoice?.isFactored) {
+      factoredLoads.push(load);
+    } else {
+      unfactoredLoads.push(load);
+    }
+  });
+
+  const actualFees = calculateActualFactoringFees(factoredLoads, invoices, factoringCompanies);
+  const factoredRevenue = roundMoney(sumBookedRevenue(factoredLoads));
+  const unfactoredRevenue = roundMoney(sumBookedRevenue(unfactoredLoads));
+  const totalRevenue = roundMoney(factoredRevenue + unfactoredRevenue);
+  const accruedFees = roundMoney(unfactoredRevenue * (defaultFeePercent / 100));
+  const total = roundMoney(actualFees + accruedFees);
+  const coveragePercent =
+    totalRevenue > 0 ? roundMoney((factoredRevenue / totalRevenue) * 100) : 100;
+  const belowCoverageTarget = coveragePercent + 0.005 < coverageTargetPercent;
+
+  return {
+    total,
+    actualFees,
+    accruedFees,
+    factoredRevenue,
+    unfactoredRevenue,
+    totalRevenue,
+    coveragePercent,
+    coverageTargetPercent,
+    belowCoverageTarget,
+    defaultFeePercent,
+  };
+}
+
+/**
+ * Factoring fees for period loads: actual + accrued estimate (no double-count).
+ * Prefer calculateFactoringAccrual when the UI needs coverage / breakdown.
+ */
+export function calculateFactoringFees(
+  loads: Load[],
+  invoices: Invoice[],
+  factoringCompanies: Array<{ id: string; feePercentage?: number }> = []
+): number {
+  return calculateFactoringAccrual(loads, invoices, factoringCompanies).total;
 }
 
 /** Loads that are factored either on the load record or via a factored invoice. */

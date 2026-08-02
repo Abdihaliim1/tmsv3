@@ -9,7 +9,7 @@ import {
   isRevenueLoadStatus,
   calculateAccruedDriverPay,
   calculateAccruedDispatcherCommission,
-  resolveLoadFactoringFee,
+  calculateFactoringAccrual,
 } from '../services/businessLogic';
 import { tryParseDateOnlyLocal } from '../utils/dateOnly';
 
@@ -285,12 +285,11 @@ const Fleet: React.FC = () => {
         settlements,
         employees
       ).total;
-      const factoringFees = truckLoads.reduce((sum, l) => {
-        const inv = invoices.find(
-          i => i.id === l.invoiceId || i.loadIds?.includes(l.id) || i.loadId === l.id
-        );
-        return sum + resolveLoadFactoringFee(l, inv, factoringCompanies);
-      }, 0);
+      const factoringFees = calculateFactoringAccrual(
+        truckLoads,
+        invoices,
+        factoringCompanies
+      ).total;
       const expenseTotal =
         operatingExpenses + driverPay + dispatcherCommission + factoringFees;
       const miles = truckLoads.reduce((sum, l) => sum + getLoadMiles(l), 0);

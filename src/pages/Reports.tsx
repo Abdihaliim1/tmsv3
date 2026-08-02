@@ -8,7 +8,7 @@ import {
   getLoadMiles,
   getLoadRevenue,
   isRevenueLoadStatus,
-  calculateFactoringFees,
+  calculateFactoringAccrual,
   calculateAccruedDriverPay,
   calculateAccruedDispatcherCommission,
   isCompanyRecognizedExpense,
@@ -523,12 +523,10 @@ const Reports: React.FC = () => {
 
     const dispatcherCost = accruedDispatcher.total;
 
-    // Factoring fees from factored loads and/or factored invoices
-    const periodInvoices = invoices.filter(inv => {
-      if (!periodStart) return tryParseDateOnlyLocal(inv.date || inv.createdAt || '') !== null;
-      return isInPeriod(inv.date || inv.createdAt || '', periodStart, periodEnd);
-    });
-    const factoringExpenses = calculateFactoringFees(revenueLoads, periodInvoices, factoringCompanies);
+    // Match period revenue loads against ALL invoices so historical factored
+    // rates are preserved; accrue default % on revenue still awaiting factoring.
+    const factoring = calculateFactoringAccrual(revenueLoads, invoices, factoringCompanies);
+    const factoringExpenses = factoring.total;
 
     // Add Factoring Fees and Dispatch Fees to expense breakdown
     expenseBreakdown.factoringFees = factoringExpenses;
@@ -563,6 +561,14 @@ const Reports: React.FC = () => {
       dispatcherReports,
       dispatcherCost,
       factoringExpenses,
+      factoringActualFees: factoring.actualFees,
+      factoringAccruedFees: factoring.accruedFees,
+      factoredRevenue: factoring.factoredRevenue,
+      unfactoredRevenue: factoring.unfactoredRevenue,
+      factoringCoveragePercent: factoring.coveragePercent,
+      factoringCoverageTargetPercent: factoring.coverageTargetPercent,
+      factoringBelowCoverageTarget: factoring.belowCoverageTarget,
+      factoringDefaultPercent: factoring.defaultFeePercent,
     };
   }, [filteredLoads, filteredSettlements, filteredExpenses, drivers, employees, settlements, loads, invoices, factoringCompanies, periodStart, periodEnd]);
 
@@ -598,7 +604,12 @@ const Reports: React.FC = () => {
         csvContent += `Loads Completed,${data.loads}\n`;
         csvContent += `Total Driver Pay,${formatCurrency(data.driverPay)}\n`;
         csvContent += `Dispatcher Commission,${formatCurrency(data.dispatcherCost || data.expenseBreakdown?.dispatchFees || 0)}\n`;
-        csvContent += `Factoring Fees,${formatCurrency(data.factoringExpenses || data.expenseBreakdown?.factoringFees || 0)}\n`;
+        csvContent += `Factoring Fees (Actual + Accrued),${formatCurrency(data.factoringExpenses || data.expenseBreakdown?.factoringFees || 0)}\n`;
+        csvContent += `Factoring Fees Actual,${formatCurrency(data.factoringActualFees || 0)}\n`;
+        csvContent += `Factoring Fees Accrued,${formatCurrency(data.factoringAccruedFees || 0)}\n`;
+        csvContent += `Factored Revenue,${formatCurrency(data.factoredRevenue || 0)}\n`;
+        csvContent += `Unfactored Revenue,${formatCurrency(data.unfactoredRevenue || 0)}\n`;
+        csvContent += `Factoring Coverage %,${(data.factoringCoveragePercent ?? 0).toFixed(2)}%\n`;
         csvContent += `Total Expenses,${formatCurrency(data.expenses)}\n`;
         csvContent += `Net Profit,${formatCurrency(data.netProfit)}\n`;
         csvContent += `Profit Margin,${data.profitMargin.toFixed(1)}%\n`;
@@ -822,6 +833,24 @@ const Reports: React.FC = () => {
           <div className="bg-white rounded-lg p-6 border border-slate-200 shadow-sm">
             <h3 className="text-lg font-bold text-slate-900 mb-4">Profit Breakdown</h3>
 
+            {reportData.factoringBelowCoverageTarget && (
+              <div
+                className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                role="status"
+              >
+                <p className="font-semibold">Factoring coverage below target</p>
+                <p className="mt-1">
+                  {formatCurrency(reportData.factoredRevenue || 0)} factored
+                  {' '}({(reportData.factoringCoveragePercent ?? 0).toFixed(2)}% of revenue)
+                  vs target {(reportData.factoringCoverageTargetPercent ?? 100).toFixed(0)}%.
+                  Accruing {(reportData.factoringDefaultPercent ?? 2.5).toFixed(1)}% on{' '}
+                  {formatCurrency(reportData.unfactoredRevenue || 0)} awaiting a factoring record
+                  ({formatCurrency(reportData.factoringAccruedFees || 0)} estimated).
+                  Actual fees use each invoice&apos;s historical rate and are not double-counted.
+                </p>
+              </div>
+            )}
+
             {/* Revenue Section */}
             <div className="mb-4">
               <div className="flex justify-between items-center py-2 border-b-2 border-emerald-200">
@@ -836,6 +865,19 @@ const Reports: React.FC = () => {
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-slate-600">Owner Operator Loads</span>
                   <span className="text-emerald-600 font-medium">{formatCurrency(reportData.revenueBreakdown.ownerOperator)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">Factored Revenue</span>
+                  <span className="text-emerald-600 font-medium">{formatCurrency(reportData.factoredRevenue || 0)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-600">
+                    Factoring Coverage
+                    {reportData.factoringBelowCoverageTarget ? ' (below 100%)' : ''}
+                  </span>
+                  <span className={`font-medium ${reportData.factoringBelowCoverageTarget ? 'text-amber-700' : 'text-emerald-600'}`}>
+                    {(reportData.factoringCoveragePercent ?? 0).toFixed(2)}%
+                  </span>
                 </div>
               </div>
             </div>
@@ -860,9 +902,26 @@ const Reports: React.FC = () => {
                   <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.parkingTolls || 0)}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-600">Factoring Fees</span>
+                  <span className="text-slate-600">
+                    Factoring Fees
+                    {(reportData.factoringAccruedFees || 0) > 0 ? ' (actual + accrued)' : ''}
+                  </span>
                   <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.factoringFees || 0)}</span>
                 </div>
+                {(reportData.factoringActualFees || 0) > 0 || (reportData.factoringAccruedFees || 0) > 0 ? (
+                  <>
+                    <div className="flex justify-between items-center text-xs pl-3">
+                      <span className="text-slate-500">Actual (factored invoices)</span>
+                      <span className="text-red-500 font-medium">{formatCurrency(reportData.factoringActualFees || 0)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs pl-3">
+                      <span className="text-slate-500">
+                        Accrued estimate ({(reportData.factoringDefaultPercent ?? 2.5).toFixed(1)}% on unfactored)
+                      </span>
+                      <span className="text-red-500 font-medium">{formatCurrency(reportData.factoringAccruedFees || 0)}</span>
+                    </div>
+                  </>
+                ) : null}
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-slate-600">Dispatcher Commission</span>
                   <span className="text-red-600 font-medium">{formatCurrency(reportData.expenseBreakdown.dispatchFees || 0)}</span>
