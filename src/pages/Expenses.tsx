@@ -11,6 +11,16 @@ import {
   getTodayDateString,
   tryParseDateOnlyLocal,
 } from '../utils/dateOnly';
+
+/** Display expense dates as YYYY-MM-DD (never raw ISO timestamps). */
+const formatExpenseDate = (raw?: string | null): string => {
+  if (!raw) return '—';
+  const parsed = tryParseDateOnlyLocal(raw);
+  if (parsed) return formatLocalDate(parsed);
+  // Fallback: strip time portion if present
+  const datePart = String(raw).split('T')[0];
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : String(raw);
+};
 import {
   currentISOWeekKey,
   getDateOfISOWeek,
@@ -290,7 +300,7 @@ const Expenses: React.FC = () => {
               const rows = [
                 ['Date', 'Type', 'Description', 'Driver', 'Truck', 'Amount', 'Status', 'Vendor', 'Receipt'],
                 ...filteredExpenses.map(e => [
-                  e.date || '',
+                  formatExpenseDate(e.date || e.createdAt),
                   e.type || '',
                   (e.description || '').replace(/"/g, '""'),
                   e.driverName || '',
@@ -459,7 +469,7 @@ const Expenses: React.FC = () => {
                   const TypeIcon = getTypeIcon(expenseType);
                   return (
                     <tr key={expense.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{expense.date}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{formatExpenseDate(expense.date || expense.createdAt)}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <TypeIcon size={18} className="text-slate-500" />

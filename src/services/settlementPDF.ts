@@ -201,31 +201,36 @@ const drawTwoColumnPanels = (doc: jsPDF, x: number, y: number, w: number) => {
 
 const drawTableHeader = (doc: jsPDF, x: number, y: number, colWidths: number[], headers: string[]) => {
   const h = 0.20;
+  const totalW = colWidths.reduce((a, b) => a + b, 0);
+
+  // One continuous fill first — per-cell fills after text can cover later labels in jsPDF.
   doc.setFillColor(COLORS.blue[0], COLORS.blue[1], COLORS.blue[2]);
+  doc.rect(x, y, totalW, h, 'F');
+
   doc.setTextColor(COLORS.white[0], COLORS.white[1], COLORS.white[2]);
   doc.setFont(FONT, 'bold');
   doc.setFontSize(FONT_SIZES.tableHeader);
 
   let cx = x;
   for (let i = 0; i < headers.length; i++) {
-    doc.rect(cx, y, colWidths[i], h, 'F');
-    const label = truncateToWidth(doc, headers[i], colWidths[i] - 0.08, FONT_SIZES.tableHeader, true);
+    const label = truncateToWidth(doc, headers[i], Math.max(0.05, colWidths[i] - 0.06), FONT_SIZES.tableHeader, true);
+    // Re-assert white after truncateToWidth (it only changes font metrics).
     doc.setTextColor(COLORS.white[0], COLORS.white[1], COLORS.white[2]);
     doc.setFont(FONT, 'bold');
     doc.setFontSize(FONT_SIZES.tableHeader);
     doc.text(label, cx + colWidths[i] / 2, y + 0.13, { align: 'center' });
     cx += colWidths[i];
   }
-  setText(doc);
+
   setBorder(doc);
-  // outer border + verticals
-  doc.rect(x, y, colWidths.reduce((a, b) => a + b, 0), h);
+  doc.rect(x, y, totalW, h, 'S');
   cx = x;
   for (let i = 0; i < colWidths.length; i++) {
     doc.line(cx, y, cx, y + h);
     cx += colWidths[i];
   }
-  doc.line(x + colWidths.reduce((a, b) => a + b, 0), y, x + colWidths.reduce((a, b) => a + b, 0), y + h);
+  doc.line(x + totalW, y, x + totalW, y + h);
+  setText(doc);
   return h;
 };
 
