@@ -28,9 +28,11 @@ const Header: React.FC<HeaderProps> = ({
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isCompanySwitcherOpen, setIsCompanySwitcherOpen] = useState(false);
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const companySwitcherRef = useRef<HTMLDivElement>(null);
+  const mobileSearchRef = useRef<HTMLInputElement>(null);
 
   // Calculate notifications - filter employees to only drivers for CDL/medical checks
   const notifications = useMemo(() => {
@@ -64,6 +66,17 @@ const Header: React.FC<HeaderProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isNotificationsOpen, isUserMenuOpen, isCompanySwitcherOpen]);
+
+  useEffect(() => {
+    if (isMobileSearchOpen) {
+      mobileSearchRef.current?.focus();
+    }
+  }, [isMobileSearchOpen]);
+
+  // Close mobile search when switching to desktop width
+  useEffect(() => {
+    if (!isMobile) setIsMobileSearchOpen(false);
+  }, [isMobile]);
 
   // Handle company switch (admin only)
   const handleCompanySwitch = async (tenantId: string) => {
@@ -107,13 +120,44 @@ const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className={`h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 fixed top-0 right-0 left-0 z-30 transition-all duration-300 ${
-      isMobile ? 'ml-0' : isSidebarOpen ? 'lg:ml-64' : 'lg:ml-20'
-    }`}>
-      <div className="flex items-center gap-4">
-        <button 
+    <header
+      className={`h-16 bg-white border-b border-slate-200 flex items-center justify-between px-3 sm:px-4 lg:px-8 fixed top-0 right-0 left-0 z-30 transition-all duration-300 safe-area-top ${
+        isMobile ? 'ml-0' : isSidebarOpen ? 'lg:ml-64' : 'lg:ml-20'
+      }`}
+    >
+      {isMobileSearchOpen ? (
+        <div className="flex items-center gap-2 w-full">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input
+              ref={mobileSearchRef}
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              placeholder="Search loads, customers, cities…"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:bg-white text-base"
+              style={{ '--tw-ring-color': theme.primary } as React.CSSProperties & { '--tw-ring-color': string }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsMobileSearchOpen(false)}
+            className="p-2.5 hover:bg-slate-100 rounded-lg text-slate-600 shrink-0"
+            aria-label="Close search"
+          >
+            <X size={20} />
+          </button>
+        </div>
+      ) : (
+      <>
+      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+        <button
+          type="button"
           onClick={toggleSidebar}
-          className="p-2 hover:bg-slate-100 rounded-lg lg:hidden text-slate-600"
+          className="p-2.5 hover:bg-slate-100 rounded-lg lg:hidden text-slate-600 shrink-0"
+          aria-label="Open navigation menu"
         >
           <Menu size={24} />
         </button>
@@ -133,28 +177,35 @@ const Header: React.FC<HeaderProps> = ({
         </div>
         
         {/* Mobile Search Button */}
-        <button className="md:hidden p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+        <button
+          type="button"
+          className="md:hidden p-2.5 hover:bg-slate-100 rounded-lg text-slate-600"
+          onClick={() => setIsMobileSearchOpen(true)}
+          aria-label="Search"
+        >
           <Search size={20} />
         </button>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
         {/* Company Switcher (Admin Only) */}
         {isPlatformAdmin && memberships.length > 1 && (
           <div className="relative" ref={companySwitcherRef}>
             <button
+              type="button"
               onClick={() => setIsCompanySwitcherOpen(!isCompanySwitcherOpen)}
-              className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors text-sm"
+              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors text-sm"
+              aria-label="Switch company"
             >
-              <Building2 size={16} className="text-slate-500" />
-              <span className="font-medium text-slate-700 max-w-[150px] truncate">
+              <Building2 size={16} className="text-slate-500 shrink-0" />
+              <span className="font-medium text-slate-700 max-w-[150px] truncate hidden sm:inline">
                 {activeTenant?.name || 'Select Company'}
               </span>
-              <ChevronDown size={14} className={`text-slate-400 transition-transform ${isCompanySwitcherOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown size={14} className={`text-slate-400 transition-transform hidden sm:block ${isCompanySwitcherOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isCompanySwitcherOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden">
+              <div className="absolute right-0 mt-2 w-[min(16rem,calc(100vw-1.5rem))] bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
                   <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Switch Company</p>
                 </div>
@@ -162,17 +213,18 @@ const Header: React.FC<HeaderProps> = ({
                   {memberships.map((membership) => (
                     <button
                       key={membership.tenantId}
+                      type="button"
                       onClick={() => handleCompanySwitch(membership.tenantId)}
                       className={`w-full px-4 py-3 text-left hover:bg-slate-50 transition-colors flex items-center justify-between ${
                         membership.tenantId === activeTenant?.id ? 'bg-blue-50' : ''
                       }`}
                     >
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{membership.tenantName}</p>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-900 truncate">{membership.tenantName}</p>
                         <p className="text-xs text-slate-500 capitalize">{membership.role}</p>
                       </div>
                       {membership.tenantId === activeTenant?.id && (
-                        <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                        <span className="w-2 h-2 bg-blue-500 rounded-full shrink-0"></span>
                       )}
                     </button>
                   ))}
@@ -184,9 +236,11 @@ const Header: React.FC<HeaderProps> = ({
 
         {/* Notifications */}
         <div className="relative" ref={notificationsRef}>
-          <button 
+          <button
+            type="button"
             onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
-            className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors"
+            className="relative p-2.5 text-slate-500 hover:bg-slate-100 rounded-full transition-colors"
+            aria-label="Notifications"
           >
             <Bell size={20} />
             {totalUnread > 0 && (
@@ -196,7 +250,7 @@ const Header: React.FC<HeaderProps> = ({
 
           {/* Notifications Dropdown */}
           {isNotificationsOpen && (
-            <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-xl border border-slate-200 max-h-[600px] overflow-hidden flex flex-col z-50">
+            <div className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-1rem))] bg-white rounded-lg shadow-xl border border-slate-200 max-h-[min(70vh,600px)] overflow-hidden flex flex-col z-50">
               {/* Header */}
               <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50">
                 <div>
@@ -277,7 +331,7 @@ const Header: React.FC<HeaderProps> = ({
           )}
         </div>
         
-        <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
+        <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-slate-200">
           <div className="relative" ref={userMenuRef}>
             <div className="flex items-center gap-3">
               <div className="text-right hidden sm:block">
@@ -285,6 +339,7 @@ const Header: React.FC<HeaderProps> = ({
                 <p className="text-xs text-slate-500 capitalize">{user?.role || 'User'}</p>
               </div>
               <button
+                type="button"
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 className="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer transition-colors text-white"
                 style={{ 
@@ -297,6 +352,7 @@ const Header: React.FC<HeaderProps> = ({
                 onMouseLeave={(e) => {
                   e.currentTarget.style.backgroundColor = `${theme.primary}20`;
                 }}
+                aria-label="User menu"
               >
                 <User size={20} />
               </button>
@@ -306,7 +362,7 @@ const Header: React.FC<HeaderProps> = ({
             {isUserMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-xl border border-slate-200 z-50">
                 <div className="px-4 py-3 border-b border-slate-200">
-                  <p className="text-sm font-medium text-slate-900">{user?.displayName || user?.email || 'User'}</p>
+                  <p className="text-sm font-medium text-slate-900 truncate">{user?.displayName || user?.email || 'User'}</p>
                   <p className="text-xs text-slate-500 mt-0.5 capitalize">{user?.role || 'User'}</p>
                   {isPlatformAdmin && (
                     <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full">
@@ -317,6 +373,7 @@ const Header: React.FC<HeaderProps> = ({
                 {/* Admin Console Link (platform admins only) */}
                 {isPlatformAdmin && onNavigate && (
                   <button
+                    type="button"
                     onClick={() => {
                       setIsUserMenuOpen(false);
                       onNavigate('AdminConsole' as PageType);
@@ -328,6 +385,7 @@ const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.preventDefault();
                     setIsUserMenuOpen(false);
@@ -346,6 +404,8 @@ const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       </div>
+      </>
+      )}
     </header>
   );
 };
