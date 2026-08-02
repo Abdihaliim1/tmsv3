@@ -113,6 +113,8 @@ export interface Load {
   // Trip Linking
   tripId?: string;
   tripNumber?: string;
+  /** Source planned-load document ID (set on dispatch for cascade cleanup). */
+  plannedLoadId?: string;
 
   // Metadata
   createdAt?: string;

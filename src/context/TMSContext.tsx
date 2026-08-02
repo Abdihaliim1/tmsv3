@@ -68,6 +68,10 @@ import {
   deletePlannedLoadPersisted,
   updatePlannedLoadPersisted,
 } from '../services/plannedLoadPersistence';
+import {
+  resolveLinkedPlannedLoads,
+  resolvePlannedLoadsForTripCascade,
+} from '../services/plannedLoadLifecycle';
 
 /** In-flight guards against double-click / concurrent creates (client-side). */
 const inFlightInvoiceKeys = new Set<string>();
@@ -1316,10 +1320,20 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
     const remainingTripLoads = tripId
       ? loads.filter(l => l.id !== id && l.tripId === tripId)
       : [];
+    const tid = tenantId || 'default';
+    const linkedPlannedForLoad = resolveLinkedPlannedLoads(load, plannedLoads, linkedTrip);
+    const plannedToDelete = linkedTrip && remainingTripLoads.length === 0
+      ? resolvePlannedLoadsForTripCascade(linkedTrip, plannedLoads, remainingTripLoads)
+      : linkedPlannedForLoad;
+    const plannedDeleteIds = new Set(plannedToDelete.map(pl => pl.id));
     const originalTrips = [...trips];
     const originalLoads = [...loads];
+    const originalPlannedLoads = [...plannedLoads];
 
     setLoads(prev => prev.filter(l => l.id !== id));
+    if (plannedDeleteIds.size > 0) {
+      setPlannedLoads(prev => prev.filter(pl => !plannedDeleteIds.has(pl.id)));
+    }
 
     // Optimistically prune / recalculate trip shell
     if (linkedTrip) {
@@ -1336,12 +1350,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
                 revenue,
                 totalMiles,
                 driverPay,
-                plannedLoadIds: (t.plannedLoadIds || []).filter(plId => {
-                  // Keep planned ids that still have a live load or unmatched planned load
-                  return remainingTripLoads.some(l =>
-                    l.loadNumber === plId || l.id === plId
-                  ) || plannedLoads.some(pl => pl.id === plId && pl.tripId === t.id);
-                }),
+                plannedLoadIds: (t.plannedLoadIds || []).filter(plId => !plannedDeleteIds.has(plId)),
                 updatedAt: new Date().toISOString(),
               }
             : t
@@ -1351,15 +1360,27 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
 
     try {
       await deleteLoadWithUnlink({
-        tenantId: tenantId || 'default',
+        tenantId: tid,
         loadId: id,
         invoices: [],
         settlements: [],
       });
 
+      await Promise.all(
+        plannedToDelete.map(async (pl) => {
+          await firestoreDeletePlannedLoad(tid, pl.id);
+          await releaseUniqueKey({
+            tenantId: tid,
+            kind: 'plannedDispatch',
+            value: pl.id,
+            entityId: pl.tripId || tripId || id,
+          }).catch(() => {});
+        })
+      );
+
       if (linkedTrip) {
         if (remainingTripLoads.length === 0) {
-          await firestoreDeleteTrip(tenantId || 'default', linkedTrip.id);
+          await firestoreDeleteTrip(tid, linkedTrip.id);
         } else {
           const revenue = remainingTripLoads.reduce((sum, l) => sum + getLoadRevenue(l), 0);
           const totalMiles = remainingTripLoads.reduce((sum, l) => sum + (Number(l.miles) || 0), 0);
@@ -1369,15 +1390,16 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
             revenue,
             totalMiles,
             driverPay,
+            plannedLoadIds: (linkedTrip.plannedLoadIds || []).filter(plId => !plannedDeleteIds.has(plId)),
             updatedAt: new Date().toISOString(),
           };
-          await saveTrip(tenantId || 'default', updatedTrip);
+          await saveTrip(tid, updatedTrip);
         }
       }
 
       if (load.loadNumber) {
         await releaseUniqueKey({
-          tenantId: tenantId || 'default',
+          tenantId: tid,
           kind: 'loadNumber',
           value: load.loadNumber,
           entityId: id,
@@ -1389,10 +1411,12 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
         loadId: id,
         loadNumber: load.loadNumber,
         tripId: tripId || undefined,
+        cascadedPlannedLoadIds: [...plannedDeleteIds],
       });
     } catch (error) {
       setLoads(originalLoads);
       setTrips(originalTrips);
+      setPlannedLoads(originalPlannedLoads);
 
       errorHandler.handle(
         error,
@@ -3426,6 +3450,7 @@ const TMSProviderInner: React.FC<{ children: ReactNode; tenantId: string }> = ({
           customerName: plannedLoad.customer?.name || '',
           customerId: plannedLoad.customerId,
           brokerName: plannedLoad.customer?.name || '',
+          plannedLoadId: plannedLoad.id,
           driverId: tripData.driverId,
           driverName: tripData.driverName,
           dispatcherId: dispatcherFields.dispatcherId || undefined,

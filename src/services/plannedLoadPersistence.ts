@@ -38,8 +38,27 @@ export function buildNewPlannedLoad(
   const id = opts.id || generateShortId();
   const systemLoadNumber = input.systemLoadNumber || generatePlannedLoadNumber();
 
+  // Drop optional undefined customer fields so nested writes never hit Firestore.
+  const customer = input.customer
+    ? Object.fromEntries(
+        Object.entries({
+          id: input.customer.id,
+          name: input.customer.name,
+          address: input.customer.address,
+          city: input.customer.city,
+          state: input.customer.state,
+          zipCode: input.customer.zipCode,
+          phone: input.customer.phone,
+          email: input.customer.email,
+          contactName: input.customer.contactName,
+          rateConAttached: input.customer.rateConAttached,
+        }).filter(([, v]) => v !== undefined)
+      ) as PlannedLoad['customer']
+    : undefined;
+
   return {
     ...input,
+    customer,
     id,
     systemLoadNumber,
     status: 'planned',

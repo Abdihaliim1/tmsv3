@@ -91,16 +91,33 @@ export async function loadCollection<T>(tenantId: string, collectionName: Collec
 }
 
 /**
- * Remove undefined values from an object (Firestore doesn't accept undefined)
+ * Recursively remove undefined values (Firestore rejects undefined at any depth).
+ * Leaves Date / class instances (FieldValue, Timestamp, DocumentReference) intact.
  */
-function removeUndefinedValues<T extends Record<string, unknown>>(obj: T): T {
-  const cleaned = { ...obj };
-  Object.keys(cleaned).forEach((key) => {
-    if (cleaned[key] === undefined) {
-      delete cleaned[key];
-    }
-  });
-  return cleaned;
+export function removeUndefinedValues<T>(value: T): T {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => removeUndefinedValues(item)) as T;
+  }
+  if (typeof value !== 'object') {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value;
+  }
+  const ctor = (value as object).constructor;
+  if (ctor && ctor !== Object) {
+    return value;
+  }
+
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (nested === undefined) continue;
+    cleaned[key] = removeUndefinedValues(nested);
+  }
+  return cleaned as T;
 }
 
 /**

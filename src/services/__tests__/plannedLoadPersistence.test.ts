@@ -32,6 +32,24 @@ const baseInput = (): NewPlannedLoadInput => ({
 });
 
 describe('plannedLoadPersistence', () => {
+  it('create omits undefined optional customer fields (BUG-017)', async () => {
+    const save = vi.fn(async (_t: string, pl: PlannedLoad) => {
+      expect(pl.customer).toEqual({ id: 'amazon', name: 'Amazon Freight' });
+      expect(pl.customer && 'address' in pl.customer).toBe(false);
+    });
+    const input = baseInput();
+    input.customer = {
+      id: 'amazon',
+      name: 'Amazon Freight',
+      address: undefined,
+      city: undefined,
+      state: undefined,
+    };
+
+    await createPlannedLoadPersisted({ tenantId: 'ats-freight', input, save });
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   it('create awaits Firestore save before returning persisted ID', async () => {
     const order: string[] = [];
     const save = vi.fn(async (_tenantId: string, pl: PlannedLoad) => {
